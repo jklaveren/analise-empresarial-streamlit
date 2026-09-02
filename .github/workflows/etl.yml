@@ -1,0 +1,13 @@
+# =============================================================================
+# LEGACY - Desativado. O stack WhoDados esta em whodados/.github/workflows/etl.yml
+# =============================================================================
+name: "[DESATIVADO] Pipeline ETL legacy - use whodados/"
+on: {}
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Workflow desativado
+        run: |
+          echo "Este workflow legacy foi desativado. Use whodados/.github/workflows/etl.yml"

@@ -1,0 +1,89 @@
+"""DB Config - WhoDados."""
+from __future__ import annotations
+import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
+from contextlib import contextmanager
+try:
+    from ..config import settings
+except ImportError:
+    import os as _os
+    class _S:
+        DATABASE_URL = _os.getenv("DATABASE_URL", "")
+        DB_POOL_SIZE = int(_os.getenv("DB_POOL_SIZE", "5"))
+        DB_POOL_TIMEOUT = int(_os.getenv("DB_POOL_TIMEOUT", "30"))
+    settings = _S()
+try:
+    from ..logger import get_logger
+except ImportError:
+    import logging
+    get_logger = lambda x: logging.getLogger(x)
+log = get_logger(__name__)
+_pool = None
+
+def init_pool():
+    global _pool
+    if _pool: return _pool
+    if not settings.DATABASE_URL: return None
+    try:
+        _pool = pool.ThreadedConnectionPool(1, settings.DB_POOL_SIZE, dsn=settings.DATABASE_URL, connect_timeout=settings.DB_POOL_TIMEOUT)
+        return _pool
+    except Exception as e: raise
+
+@contextmanager
+def get_conn():
+    if _pool is None: init_pool()
+    if _pool is None: raise RuntimeError("DB unavailable")
+    c = _pool.getconn()
+    try:
+        yield c; c.commit()
+    except:
+        c.rollback(); raise
+    finally:
+        _pool.putconn(c)
+
+@contextmanager
+def get_cur(d=True):
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor if d else None)
+        try: yield cur
+        finally: cur.close()
+
+def ensure_tables():
+    if not settings.DATABASE_URL: return
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS app_users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, email VARCHAR(255), is_admin BOOLEAN DEFAULT FALSE, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        cur.execute("CREATE TABLE IF NOT EXISTS password_reset_tokens (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, token_hash VARCHAR(255) NOT NULL, expires_at TIMESTAMP WITH TIME ZONE NOT NULL, used BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash)")
+        cur.execute("CREATE TABLE IF NOT EXISTS crm (id SERIAL PRIMARY KEY, cnpj VARCHAR(18) UNIQUE NOT NULL, status VARCHAR(50), notas TEXT, data_atualizacao TIMESTAMP WITH TIME ZONE DEFAULT NOW(), criado_por VARCHAR(50))")
+        cur.execute("CREATE TABLE IF NOT EXISTS email_templates (id SERIAL PRIMARY KEY, nome VARCHAR(100) NOT NULL, assunto VARCHAR(200) NOT NULL, corpo_html TEXT NOT NULL, corpo_texto TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), criado_por VARCHAR(50))")
+        # Adiciona coluna categoria_cnae se nao existir (suporte a templates por CNAE)
+        cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS categoria_cnae VARCHAR(50) DEFAULT 'todos'")
+        # Card/imagem do template (enviada no corpo do email via {{imagem}})
+        cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS imagem_data BYTEA")
+        cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS imagem_mime VARCHAR(50)")
+        cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS tem_imagem BOOLEAN DEFAULT FALSE")
+        cur.execute("CREATE TABLE IF NOT EXISTS campanhas (id SERIAL PRIMARY KEY, nome VARCHAR(200) NOT NULL, template_id INTEGER, filtros JSONB, status VARCHAR(50) DEFAULT 'rascunho', total_destinatarios INTEGER DEFAULT 0, enviados INTEGER DEFAULT 0, erros INTEGER DEFAULT 0, eh_sequencia BOOLEAN DEFAULT FALSE, dias_sequencia JSONB, agendada_para TIMESTAMP WITH TIME ZONE, iniciada_em TIMESTAMP WITH TIME ZONE, concluida_em TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), created_by VARCHAR(50))")
+        cur.execute("CREATE TABLE IF NOT EXISTS emails_enviados (id SERIAL PRIMARY KEY, campaign_id INTEGER, cnpj VARCHAR(18) NOT NULL, email_destino VARCHAR(255) NOT NULL, assunto VARCHAR(200), status VARCHAR(50) DEFAULT 'pendente', erro TEXT, sequencia_passo INTEGER DEFAULT 0, enviado_em TIMESTAMP WITH TIME ZONE, aberto_em TIMESTAMP WITH TIME ZONE, criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        cur.execute("CREATE TABLE IF NOT EXISTS notificacoes (id SERIAL PRIMARY KEY, tipo VARCHAR(50) NOT NULL, titulo VARCHAR(200) NOT NULL, mensagem TEXT, cnpj VARCHAR(18), user_id VARCHAR(50), lida BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")        
+        cur.execute("CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, action VARCHAR(100) NOT NULL, user_id VARCHAR(50), ip_address INET, user_agent TEXT, resource_type VARCHAR(50), resource_id VARCHAR(100), details JSONB DEFAULT '{}'::jsonb, success BOOLEAN DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)")
+        cur.execute("CREATE TABLE IF NOT EXISTS login_attempts (id BIGSERIAL PRIMARY KEY, username VARCHAR(50) NOT NULL, ip_address INET, success BOOLEAN DEFAULT FALSE, attempted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempted_at DESC)")
+        conn.commit(); cur.close()
+
+def check_health():
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor(); cur.execute("SELECT 1"); cur.close(); return True
+    except: return False
+
+ensure_tables_exist = ensure_tables
+check_database_health = check_health
+get_db_cursor = get_cur

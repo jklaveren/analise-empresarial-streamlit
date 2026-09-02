@@ -1,0 +1,9 @@
+# =================================================================
+# Dependencias do pipeline de extracao (ETL) - WhoDados
+# LOCAL: whodados/pipeline/requirements-dev.txt
+# Instalar com: pip install -r whodados/pipeline/requirements-dev.txt
+# =================================================================
+pandas>=2.0.0
+requests>=2.31.0
+# psycopg2-binary necessario para o pipeline escrever no Supabase
+psycopg2-binary>=2.9.9

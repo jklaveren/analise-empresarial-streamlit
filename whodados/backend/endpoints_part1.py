@@ -1,0 +1,123 @@
+"""WhoDados API Endpoints v2.0 - Part 1: Auth, Empresas, CRM, Dashboard."""
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordRequestForm
+from typing import Dict, Optional
+from .auth import (
+    autenticar_usuario, criar_access_token, get_current_user,
+    gerar_token_reset, validar_token_reset, redefinir_senha,
+)
+try:
+    from .security import log_login, log_access, AuditAction
+    HAS_AUDIT = True
+except ImportError:
+    HAS_AUDIT = False
+from .db import (
+    create_or_update_crm, get_crm_by_cnpj, get_crm_all,
+    create_notificacao
+)
+from .data import carregar_empresas, carregar_empresa_detalhe, filtrar_empresas, get_metricas
+from .logger import get_logger
+logger = get_logger(__name__)
+router = APIRouter(prefix="/api/v1")
+
+@router.post("/auth/login")
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
+    if HAS_AUDIT:
+        log_login(request, form.username, False, "attempt")
+    user = autenticar_usuario(form.username, form.password)
+    if not user:
+        if HAS_AUDIT:
+            log_login(request, form.username, False, "invalid_credentials")
+        raise HTTPException(status_code=401, detail="Credenciais invalidas", headers={"WWW-Authenticate": "Bearer"})
+    token = criar_access_token(user)
+    if HAS_AUDIT:
+        log_login(request, form.username, True)
+    return {"access_token": token, "token_type": "bearer", "expires_in": 8*3600}
+
+@router.post("/auth/forgot-password")
+async def forgot_password(request: Request, data: Dict):
+    """Solicita recuperacao de senha. Envia e-mail com link de reset."""
+    username_or_email = (data.get("username") or data.get("email") or "").strip()
+    if not username_or_email:
+        raise HTTPException(status_code=400, detail="Username ou email obrigatorio")
+    result = gerar_token_reset(username_or_email)
+    # Sempre retorna sucesso para nao enumerar usuarios
+    response = {"message": result.get("message", "")}
+    if result.get("_dev_token"):
+        response["_dev_token"] = result["_dev_token"]
+    return response
+
+@router.get("/auth/validate-reset-token/{token}")
+async def validate_reset_token(token: str):
+    """Valida se o token de reset e valido."""
+    if not token:
+        raise HTTPException(status_code=400, detail="Token obrigatorio")
+    valido = validar_token_reset(token)
+    if not valido:
+        raise HTTPException(status_code=400, detail="Token invalido ou expirado")
+    return {"valido": True}
+
+@router.post("/auth/reset-password")
+async def reset_password(data: Dict):
+    """Redefine a senha usando o token recebido por e-mail."""
+    token = (data.get("token") or "").strip()
+    nova_senha = (data.get("nova_senha") or "").strip()
+    if not token or not nova_senha:
+        raise HTTPException(status_code=400, detail="Token e nova senha obrigatorios")
+    result = redefinir_senha(token, nova_senha)
+    if not result.get("sucesso"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Erro"))
+    return {"message": result.get("message", "Senha redefinida")}
+
+@router.get("/auth/me")
+async def me(current_user: Dict = Depends(get_current_user)):
+    return {"username": current_user["sub"], "is_admin": current_user.get("is_admin", False), "email": current_user.get("email")}
+
+@router.get("/empresas")
+async def listar_empresas(cidade: Optional[str] = None, cnae: Optional[str] = None, busca: Optional[str] = None, limit: int = 100, offset: int = 0, current_user: Dict = Depends(get_current_user)):
+    df = carregar_empresas()
+    if df.empty:
+        return []
+    df_f = filtrar_empresas(df, cidade, cnae, busca)
+    cols = ["CNPJ_COMPLETO", "RAZAO_SOCIAL", "NOME_FANTASIA", "MUNIC_NOME", "CNAE_PRINCIPAL", "CAPITAL_SOCIAL", "DIVIDA_TOTAL", "PORTE_NOME"]
+    available = [c for c in cols if c in df_f.columns]
+    df_f = df_f[available].iloc[offset:offset+limit]
+    df_f.columns = [c.lower() for c in df_f.columns]
+    df_f = df_f.rename(columns={"cnpj_completo": "cnpj_completo", "munic_nome": "municipio"})
+    return df_f.fillna("").to_dict(orient="records")
+
+@router.get("/empresas/{cnpj}")
+async def get_empresa(request: Request, cnpj: str, current_user: Dict = Depends(get_current_user)):
+    empresa = carregar_empresa_detalhe(cnpj)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    crm = get_crm_by_cnpj(cnpj)
+    empresa["crm"] = crm
+    if HAS_AUDIT:
+        log_access(request, AuditAction.EMPRESA_VIEW, user=current_user.get("sub"), resource_type="empresa", resource_id=cnpj)
+    return empresa
+
+@router.put("/crm/{cnpj}")
+async def atualizar_crm(cnpj: str, data: Dict, current_user: Dict = Depends(get_current_user)):
+    crm = create_or_update_crm(cnpj, status=data.get("status"), notas=data.get("notas"), criado_por=current_user.get("sub"))
+    if data.get("status"):
+        create_notificacao("status_mudou", f"CRM {data.get('status')}", f"CNPJ {cnpj}", user_id=current_user.get("sub"), cnpj=cnpj)
+    return crm
+
+@router.get("/crm/{cnpj}")
+async def get_crm(cnpj: str, current_user: Dict = Depends(get_current_user)):
+    return get_crm_by_cnpj(cnpj)
+
+@router.get("/crm")
+async def listar_crm(current_user: Dict = Depends(get_current_user)):
+    registros = get_crm_all()
+    kanban = {"novo": [], "em_contato": [], "negociando": [], "convertido": [], "descartado": []}
+    for r in registros:
+        s = r.get("status") or "novo"
+        if s in kanban:
+            kanban[s].append(r)
+    return kanban
+
+@router.get("/dashboard/metricas")
+async def metricas(current_user: Dict = Depends(get_current_user)):
+    return get_metricas()
