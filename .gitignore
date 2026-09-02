@@ -1,0 +1,65 @@
+# =================================================================
+# .gitignore — NRA Strategist
+# =================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Dados locais (nunca commitar)
+*.db
+*.sqlite
+*.sqlite3
+nra_novo_persist.db
+
+# Dados de extracao (muito grandes)
+data_extraction/raw/
+data_extraction/out/
+!data_extraction/raw/.gitkeep
+!data_extraction/out/.gitkeep
+whodados/pipeline/raw/
+whodados/pipeline/out/
+!whodados/pipeline/raw/.gitkeep
+!whodados/pipeline/out/.gitkeep
+
+# Ambientes
+.env
+.env.local
+.env.*.local
+.env.production
+*.log
+
+# Node (frontend)
+web/node_modules/
+web/.next/
+web/out/
+whodados/frontend/node_modules/
+whodados/frontend/.next/
+whodados/frontend/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Supabase
+supabase/.branches/
+supabase/config.toml
+
+# Deploy
+.vercel
