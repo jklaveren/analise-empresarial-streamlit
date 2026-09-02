@@ -1,0 +1,5 @@
+# Dependências novas para as duas features de IA.
+# Adicionar ao whodados/backend/requirements.txt existente.
+scikit-learn>=1.5.0
+joblib>=1.4.0
+anthropic>=0.40.0
