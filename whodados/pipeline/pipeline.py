@@ -38,9 +38,17 @@ RAW.mkdir(parents=True, exist_ok=True)
 OUT.mkdir(parents=True, exist_ok=True)
 
 TOKEN_COMPARTILHAMENTO = os.environ.get("RF_SHARE_TOKEN", "gn672Ad4CF8N6TK")
+
+# Mes/ano de referencia dos dados da Receita Federal (pasta no servidor deles).
+# Configuravel por variavel de ambiente RF_MES_REFERENCIA (ex: "2026-06"), sem
+# precisar editar o codigo -- mesmo esquema do PGFN_TRIMESTRE abaixo.
+MES_REFERENCIA_RF = os.environ.get("RF_MES_REFERENCIA", "2026-05").strip().strip("/")
+if not MES_REFERENCIA_RF:
+    MES_REFERENCIA_RF = "2026-05"
+
 BASE_URL_RF = (
     f"https://arquivos.receitafederal.gov.br/public.php/webdav/"
-    f"Dados/Cadastros/CNPJ/2026-05/"
+    f"Dados/Cadastros/CNPJ/{MES_REFERENCIA_RF}/"
 )
 
 URL_BASE_PGFN_INDEX = "https://dadosabertos.pgfn.gov.br/"
