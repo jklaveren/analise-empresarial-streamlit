@@ -289,3 +289,19 @@ export async function listarNotificacoes(lidas?: boolean): Promise<Notificacao[]
 export async function marcarNotificacaoLida(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/notificacoes/${id}/ler`, { method: "POST" });
 }
+
+// Sobre / status do sistema (aba "Sobre" em Configuracoes)
+export interface SistemaStatus {
+  mes_referencia_rf: string | null;
+  trimestre_pgfn: string | null;
+  gerado_em: string | null;
+  ultima_sincronizacao: string | null;
+  total_matrizes: string | null;
+  total_empresas_sincronizadas: string | null;
+  total_socios_sincronizados: string | null;
+  pipeline_ja_rodou: boolean;
+}
+
+export async function getSistemaStatus(): Promise<SistemaStatus> {
+  return request<SistemaStatus>("/api/v1/admin/sistema/status");
+}

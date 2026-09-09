@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import re
+import json
 from pathlib import Path
 from datetime import datetime
 
@@ -384,7 +385,22 @@ def rodar_pipeline() -> None:
     df_emp = filtrar_empresas(cnpjs_rs)
     filtrar_socios(cnpjs_rs)
     df_dividas = consolidar_dividas_pgfn()
-    gerar_master(df_emp, df_dividas)
+    master = gerar_master(df_emp, df_dividas)
+
+    # Grava metadata da execucao (mes/trimestre usados, quantidade final) num
+    # JSON ao lado dos CSVs de saida. O script de sincronizacao
+    # (scripts/sync_data_to_db.py) le esse arquivo e registra no banco, pra
+    # a tela "Sobre" no frontend mostrar quando os dados foram atualizados
+    # por ultimo e com base em qual periodo de referencia.
+    metadata = {
+        "mes_referencia_rf": MES_REFERENCIA_RF,
+        "trimestre_pgfn": ultimo_trimestre.rstrip("/"),
+        "gerado_em": datetime.utcnow().isoformat() + "Z",
+        "total_matrizes": int(len(master)),
+    }
+    with open(OUT / "metadata_pipeline.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    print(f"\n📝 Metadata gravado: {metadata}")
 
     print("\n🏁 Pipeline concluído com sucesso!")
 

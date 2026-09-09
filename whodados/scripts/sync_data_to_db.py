@@ -25,8 +25,11 @@ from database_config import (
     ensure_app_tables,
     garantir_colunas_obrigatorias,
     get_data_table_names,
+    registrar_metadata_pipeline,
     TABELA_MUNICIPIOS,
 )
+import json
+from datetime import datetime, timezone
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "pipeline" / "out"
@@ -34,6 +37,7 @@ DATA_DIR = BASE_DIR / "pipeline" / "out"
 ARQ_EMPRESAS = DATA_DIR / "subset_rs_final_completo.csv"
 ARQ_SOCIOS = DATA_DIR / "socios_rs.csv"
 ARQ_MUNICIPIOS = DATA_DIR / "municipios.csv"
+ARQ_METADATA = DATA_DIR / "metadata_pipeline.json"
 
 
 def carregar_csvs():
@@ -97,6 +101,32 @@ def main():
 
     criar_indices_dados()
     print("OK Indices recriados.")
+
+    registrar_metadata_sincronizacao(len(empresas), len(socios))
+
+
+def registrar_metadata_sincronizacao(total_empresas: int, total_socios: int) -> None:
+    """Combina o metadata gravado pelo pipeline (mes RF, trimestre PGFN,
+    quando foi gerado) com o resultado desta sincronizacao e grava tudo na
+    tabela pipeline_metadata -- e o que a tela "Sobre" no frontend le."""
+    dados = {
+        "ultima_sincronizacao": datetime.now(timezone.utc).isoformat(),
+        "total_empresas_sincronizadas": total_empresas,
+        "total_socios_sincronizados": total_socios,
+    }
+    if ARQ_METADATA.exists():
+        try:
+            with open(ARQ_METADATA, "r", encoding="utf-8") as f:
+                meta_pipeline = json.load(f)
+            dados.update(meta_pipeline)
+        except Exception as e:
+            print(f"[AVISO] Nao foi possivel ler '{ARQ_METADATA.name}': {e}")
+    else:
+        print(f"[AVISO] '{ARQ_METADATA.name}' nao encontrado -- pipeline pode ter rodado "
+              f"antes dessa funcionalidade existir. Seguindo sem mes/trimestre de referencia.")
+
+    registrar_metadata_pipeline(dados)
+    print(f"OK Metadata da sincronizacao registrado: {dados}")
 
 
 if __name__ == "__main__":

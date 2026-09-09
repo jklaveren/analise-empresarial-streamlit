@@ -76,6 +76,11 @@ def ensure_tables():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempted_at DESC)")
+        # Metadata do pipeline de ETL (mes RF, trimestre PGFN, ultima sincronizacao,
+        # contagens) -- tambem criada por database_config.py::ensure_app_tables no
+        # lado do script de sincronizacao; criada aqui tambem pra API sempre
+        # conseguir ler (retornando vazio) mesmo que o pipeline nunca tenha rodado.
+        cur.execute("CREATE TABLE IF NOT EXISTS pipeline_metadata (chave VARCHAR(100) PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
 

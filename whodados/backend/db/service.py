@@ -654,6 +654,26 @@ def get_metricas_db() -> Dict[str, Any]:
         log.warning(f"get_metricas_db falhou, retornando zeros: {e}")
         return vazio
 
+def get_pipeline_metadata() -> Dict[str, Any]:
+    """Le a tabela pipeline_metadata (mes RF, trimestre PGFN, ultima
+    sincronizacao, contagens) gravada por scripts/sync_data_to_db.py apos
+    cada rodada do ETL. Usado pela aba "Sobre" em Configuracoes. Retorna
+    dict vazio (sem quebrar) se a tabela nao existir ou o ETL nunca rodou."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "pipeline_metadata"):
+                return {}
+            cur.execute("SELECT chave, valor, atualizado_em FROM pipeline_metadata")
+            linhas = cur.fetchall()
+            return {
+                r["chave"]: {"valor": r["valor"], "atualizado_em": r["atualizado_em"]}
+                for r in linhas
+            }
+    except Exception as e:
+        log.warning(f"get_pipeline_metadata falhou, retornando vazio: {e}")
+        return {}
+
+
 def seed_default_templates() -> int:
     """Popula a tabela email_templates com os modelos padrao (backend/mailer/templates.py::TEMPLATES_PADRAO),
     apenas se a tabela ainda estiver vazia. Idempotente -- seguro de chamar em todo startup."""
