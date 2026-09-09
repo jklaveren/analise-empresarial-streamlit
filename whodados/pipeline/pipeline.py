@@ -57,7 +57,6 @@ PGFN     = [
     "Dados_abertos_Previdenciario.zip",
 ]
 
-ultimo_trimestre = detectar_trimestre_pgfn()
 
 
 def baixar_rf(arquivo: str) -> Path:
@@ -82,7 +81,7 @@ def baixar_pgfn(arquivo: str) -> Path:
     if destino.exists():
         print(f"  [PULSO] {arquivo} ja existe — pulando.")
         return destino
-    url = BASE_URL_PGFN_INDEX + ultimo_trimestre + "/" + arquivo
+    url = URL_BASE_PGFN_INDEX + ultimo_trimestre + "/" + arquivo
     cmd = [
         "wget", "--no-check-certificate", "-c", url,
         "-P", str(RAW), "-q", "--show-progress",
@@ -100,6 +99,9 @@ def detectar_trimestre_pgfn() -> str:
     if not trimestre:
         trimestre = "2026_trimestre_01"
     return f"{trimestre}/"
+
+
+ultimo_trimestre = detectar_trimestre_pgfn()
 
 
 def filtrar_estabelecimentos() -> set:
@@ -212,7 +214,7 @@ def filtrar_socios(cnpjs_rs: set) -> None:
                         chunk[0] = chunk[0].str.zfill(8)
                         res = chunk[chunk[0].isin(cnpjs_rs)].copy()
                         if not res.empty:
-                            selecao = res[["0", "1", "2", "3", "4"]]
+                            selecao = res[[0, 1, 2, 3, 4]]
                             selecao.columns = [
                                 "CNPJ_BASICO", "IDENTIFICADOR_SOCIO",
                                 "NOME_SOCIO", "CPF_CNPJ_SOCIO", "QUALIF_SOCIO",
