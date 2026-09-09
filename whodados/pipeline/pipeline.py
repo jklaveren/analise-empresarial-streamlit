@@ -38,7 +38,12 @@ OUT  = BASE_DIR / "pipeline" / "out"
 RAW.mkdir(parents=True, exist_ok=True)
 OUT.mkdir(parents=True, exist_ok=True)
 
-TOKEN_COMPARTILHAMENTO = os.environ.get("RF_SHARE_TOKEN", "gn672Ad4CF8N6TK")
+# .get(..., default) so cai no default se a chave nao existir -- mas o workflow
+# SEMPRE define RF_SHARE_TOKEN (mesmo vazio, se o secret nao estiver configurado
+# no GitHub), entao um secret vazio silenciosamente vencia o token padrao valido
+# e quebrava o download com 401. Usar "or" garante que uma string vazia tambem
+# cai no padrao.
+TOKEN_COMPARTILHAMENTO = os.environ.get("RF_SHARE_TOKEN", "").strip() or "gn672Ad4CF8N6TK"
 
 
 def detectar_mes_rf() -> str:
