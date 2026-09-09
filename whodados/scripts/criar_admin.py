@@ -8,7 +8,7 @@ sys.path.insert(0, str(_RAIZ))
 
 from backend.config import settings
 from backend.logger import logger
-from backend.db.config import ensure_tables_exist, init_connection_pool
+from backend.db.config import ensure_tables, init_pool
 from backend.auth import criar_usuario
 
 def main():
@@ -21,8 +21,8 @@ def main():
         return
     
     try:
-        init_connection_pool()
-        ensure_tables_exist()
+        init_pool()
+        ensure_tables()
     except Exception as e:
         print(f"Erro ao conectar banco: {e}")
         return
