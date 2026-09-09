@@ -78,3 +78,5 @@ whodados/.next/
 
 # Legado (Streamlit) - nao versionar, mantido so localmente
 LegadoStream/
+CREDENCIAIS_LOGIN.txt
+whodados/CREDENCIAIS_LOGIN.txt
