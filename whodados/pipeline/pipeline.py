@@ -39,12 +39,60 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 TOKEN_COMPARTILHAMENTO = os.environ.get("RF_SHARE_TOKEN", "gn672Ad4CF8N6TK")
 
-# Mes/ano de referencia dos dados da Receita Federal (pasta no servidor deles).
-# Configuravel por variavel de ambiente RF_MES_REFERENCIA (ex: "2026-06"), sem
-# precisar editar o codigo -- mesmo esquema do PGFN_TRIMESTRE abaixo.
-MES_REFERENCIA_RF = os.environ.get("RF_MES_REFERENCIA", "2026-05").strip().strip("/")
-if not MES_REFERENCIA_RF:
-    MES_REFERENCIA_RF = "2026-05"
+
+def detectar_mes_rf() -> str:
+    """Detecta o mes/ano de referencia dos dados da Receita Federal.
+
+    Prioridade:
+    1. Variavel de ambiente RF_MES_REFERENCIA, se definida -- permite fixar
+       manualmente (ex: pra reprocessar um mes especifico), sem depender da
+       deteccao automatica.
+    2. Deteccao automatica: testa o mes atual e recua mes a mes (ate 6 meses)
+       verificando no servidor da Receita Federal qual pasta existe de fato
+       (a Receita costuma publicar com atraso, entao o mes corrente pode
+       ainda nao estar disponivel).
+    3. Se a deteccao falhar (sem rede, servidor fora do ar, etc.), cai no
+       padrao fixo abaixo para o pipeline nao quebrar.
+    """
+    override = os.environ.get("RF_MES_REFERENCIA", "").strip().strip("/")
+    if override:
+        print(f"  [INFO] Mes RF fixado manualmente via RF_MES_REFERENCIA: {override}")
+        return override
+
+    padrao_seguranca = "2026-05"
+    ano, mes = datetime.utcnow().year, datetime.utcnow().month
+    for _ in range(6):
+        candidato = f"{ano:04d}-{mes:02d}"
+        url_teste = (
+            f"https://arquivos.receitafederal.gov.br/public.php/webdav/"
+            f"Dados/Cadastros/CNPJ/{candidato}/Empresas0.zip"
+        )
+        try:
+            resultado = subprocess.run(
+                [
+                    "curl", "-u", f"{TOKEN_COMPARTILHAMENTO}:", "-s", "-o", "/dev/null",
+                    "-w", "%{http_code}", "-I", "-L", "--max-time", "15", url_teste,
+                ],
+                capture_output=True, text=True,
+            )
+            codigo = resultado.stdout.strip()
+        except Exception as e:
+            print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}")
+            codigo = ""
+
+        if codigo == "200":
+            print(f"  [OK] Mes RF detectado automaticamente: {candidato}")
+            return candidato
+
+        mes -= 1
+        if mes == 0:
+            mes, ano = 12, ano - 1
+
+    print(f"  [WARN] Nao foi possivel detectar o mes RF automaticamente; usando padrao {padrao_seguranca}.")
+    return padrao_seguranca
+
+
+MES_REFERENCIA_RF = detectar_mes_rf()
 
 BASE_URL_RF = (
     f"https://arquivos.receitafederal.gov.br/public.php/webdav/"
