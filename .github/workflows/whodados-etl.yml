@@ -1,9 +1,9 @@
 name: Atualizar Dados (Pipeline ETL) — WhoDados
 
 on:
-  # Executa todo dia 1 de cada mes as 02h UTC (~23h BRT)
+  # Executa toda segunda-feira as 02h UTC (~23h de domingo, horario de Brasilia)
   schedule:
-    - cron: "0 2 1 * *"
+    - cron: "0 2 * * 1"
 
   # Permite executar manualmente pelo GitHub (aba "Actions")
   workflow_dispatch:
