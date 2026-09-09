@@ -23,6 +23,55 @@ def create_user_record(username: str, password_hash: str, email: Optional[str] =
         cur.execute("INSERT INTO app_users (username, password_hash, email, is_admin) VALUES (%s, %s, %s, %s) RETURNING *", (username, password_hash, email, is_admin))
         return cur.fetchone()
 
+
+def salvar_enriquecimento(cnpj: str, itens: List[Dict[str, Any]], coletado_por: str) -> List[Dict[str, Any]]:
+    """Grava os itens encontrados pelo agente de enriquecimento. Cada item
+    precisa ter fonte_url -- nao gravamos nada sem proveniencia registrada."""
+    salvos: List[Dict[str, Any]] = []
+    with get_db_cursor() as cur:
+        for item in itens:
+            if not item.get("fonte_url"):
+                continue
+            cur.execute(
+                """INSERT INTO enriquecimento_contatos
+                   (cnpj, tipo_alvo, nome_alvo, campo, valor, fonte_url, fonte_titulo, coletado_por)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                (
+                    cnpj,
+                    item.get("tipo_alvo", "empresa"),
+                    item.get("nome_alvo"),
+                    item.get("campo"),
+                    item.get("valor"),
+                    item.get("fonte_url"),
+                    item.get("fonte_titulo"),
+                    coletado_por,
+                ),
+            )
+            salvos.append(cur.fetchone())
+    return salvos
+
+def listar_enriquecimento(cnpj: str) -> List[Dict[str, Any]]:
+    """So retorna itens ainda nao removidos (removido_em IS NULL)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM enriquecimento_contatos WHERE cnpj = %s AND removido_em IS NULL ORDER BY coletado_em DESC",
+            (cnpj,),
+        )
+        return cur.fetchall()
+
+def remover_enriquecimento(cnpj: str) -> int:
+    """Direito de exclusao (LGPD): apaga o dado pessoal coletado (valor,
+    fonte) mas mantem a linha com removido_em preenchido, como registro de
+    auditoria de que a remocao aconteceu -- sem guardar o dado em si."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE enriquecimento_contatos
+               SET valor = NULL, fonte_url = NULL, fonte_titulo = NULL, removido_em = NOW()
+               WHERE cnpj = %s AND removido_em IS NULL RETURNING id""",
+            (cnpj,),
+        )
+        return len(cur.fetchall())
+
 def get_crm_by_cnpj(cnpj: str) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
         cur.execute("SELECT * FROM crm WHERE cnpj = %s", (cnpj,))

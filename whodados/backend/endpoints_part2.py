@@ -138,7 +138,7 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
                 dados_empresas[cnpj] = {
                     "razao_social": row.get("RAZAO_SOCIAL", ""),
                     "nome_fantasia": row.get("NOME_FANTASIA", ""),
-                    "municipio": row.get("MUNICIPIO", ""),
+                    "municipio": row.get("MUNIC_NOME") or row.get("MUNICIPIO", ""),
                     "cnae_principal": row.get("CNAE_PRINCIPAL", ""),
                     "porte_nome": row.get("PORTE_NOME", ""),
                 }
