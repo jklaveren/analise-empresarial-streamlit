@@ -1,7 +1,17 @@
 """Config module - WhoDados 2.0."""
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List
+
+# Carrega variaveis de um .env local (desenvolvimento). Em produção (Render/Vercel)
+# as variaveis ja vem setadas de verdade pela plataforma, entao isso e um no-op seguro:
+# se nao houver .env, load_dotenv simplesmente nao encontra nada e segue.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
 
 class Settings:
     APP_NAME = os.getenv("APP_NAME", "WhoDados API")
