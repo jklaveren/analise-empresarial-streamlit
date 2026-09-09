@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .logger import logger
 from .db.config import ensure_tables_exist, check_database_health
+from .db import seed_default_templates
 from .endpoints import router as api_router
 
 
@@ -17,6 +18,12 @@ async def lifespan(app: FastAPI):
         try:
             ensure_tables_exist()
             logger.info("Tabelas verificadas")
+            try:
+                criados = seed_default_templates()
+                if criados:
+                    logger.info(f"{criados} templates padrao inseridos")
+            except Exception as e:
+                logger.error(f"Falha ao popular templates padrao: {e}")
         except Exception as e:
             logger.error(f"Falha ao inicializar banco: {e}")
     yield

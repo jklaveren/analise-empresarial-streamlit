@@ -653,3 +653,24 @@ def get_metricas_db() -> Dict[str, Any]:
     except Exception as e:
         log.warning(f"get_metricas_db falhou, retornando zeros: {e}")
         return vazio
+
+def seed_default_templates() -> int:
+    """Popula a tabela email_templates com os modelos padrao (backend/mailer/templates.py::TEMPLATES_PADRAO),
+    apenas se a tabela ainda estiver vazia. Idempotente -- seguro de chamar em todo startup."""
+    try:
+        from ..mailer.templates import TEMPLATES_PADRAO
+    except ImportError:
+        from mailer.templates import TEMPLATES_PADRAO
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) as cnt FROM email_templates")
+        row = cur.fetchone()
+        if row and row.get("cnt", 0) > 0:
+            return 0
+        criados = 0
+        for dados in TEMPLATES_PADRAO.values():
+            cur.execute(
+                f"INSERT INTO email_templates (nome, assunto, corpo_html, corpo_texto, criado_por, categoria_cnae) VALUES (%s, %s, %s, %s, %s, %s)",
+                (dados["nome"], dados["assunto"], dados["corpo_html"], dados["corpo_texto"], "sistema", "todos"),
+            )
+            criados += 1
+        return criados
