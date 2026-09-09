@@ -128,6 +128,25 @@ export async function atualizarCrm(cnpj: string, data: { status?: string; notas?
   });
 }
 
+// ==================== CRM (KANBAN) ====================
+
+export type CrmStatus = "novo" | "em_contato" | "negociando" | "convertido" | "descartado";
+
+export interface CrmKanbanRecord {
+  id: number;
+  cnpj: string;
+  status: CrmStatus;
+  notas: string | null;
+  criado_por?: string | null;
+  data_atualizacao?: string | null;
+}
+
+export type CrmKanban = Record<CrmStatus, CrmKanbanRecord[]>;
+
+export async function listarCrmKanban(): Promise<CrmKanban> {
+  return request("/api/v1/crm");
+}
+
 export async function getMetricas() {
   return request("/api/v1/dashboard/metricas");
 }
