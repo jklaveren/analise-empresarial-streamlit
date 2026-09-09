@@ -11,7 +11,7 @@ const NAV_LINKS = [
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },
-  { href: "/dashboard/configuracoes/email", label: "Configurações", icon: "⚙️" },
+  { href: "/dashboard/configuracoes", label: "Configurações", icon: "⚙️" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

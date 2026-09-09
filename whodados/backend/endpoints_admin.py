@@ -6,6 +6,7 @@ from .mailer import (
     get_smtp_config, test_smtp_connection, test_email_send,
     get_smtp_presets
 )
+from .db import get_pipeline_metadata
 from .logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/admin")
@@ -54,3 +55,27 @@ async def send_test_email(data: Dict, current_user: Dict = Depends(require_admin
 
     logger.info(f"Enviando e-mail de teste para {para}")
     return test_email_send(para)
+
+
+@router.get("/sistema/status")
+async def get_sistema_status(current_user: Dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """Informacoes sobre a ultima atualizacao dos dados (Receita Federal /
+    PGFN), pra tela "Sobre" em Configuracoes. Qualquer usuario logado pode
+    ver -- nao e informacao sensivel, so status. Retorna tudo vazio/None se
+    o pipeline de ETL nunca rodou ainda."""
+    meta = get_pipeline_metadata()
+
+    def valor(chave: str):
+        item = meta.get(chave)
+        return item["valor"] if item else None
+
+    return {
+        "mes_referencia_rf": valor("mes_referencia_rf"),
+        "trimestre_pgfn": valor("trimestre_pgfn"),
+        "gerado_em": valor("gerado_em"),
+        "ultima_sincronizacao": valor("ultima_sincronizacao"),
+        "total_matrizes": valor("total_matrizes"),
+        "total_empresas_sincronizadas": valor("total_empresas_sincronizadas"),
+        "total_socios_sincronizados": valor("total_socios_sincronizados"),
+        "pipeline_ja_rodou": bool(meta),
+    }

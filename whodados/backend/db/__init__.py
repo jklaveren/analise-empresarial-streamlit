@@ -15,7 +15,7 @@ from .service import (
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup, marcar_email_aberto,
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
-    seed_default_templates,
+    seed_default_templates, get_pipeline_metadata,
 )
 __all__ = [
     "create_user_record", "get_user_by_username", "get_user_by_email", "get_user_by_username_or_email",
@@ -32,5 +32,5 @@ __all__ = [
     "get_emails_for_monitor", "get_monitor_stats", "get_emails_vermelhos_para_followup", "marcar_email_aberto",
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
-    "seed_default_templates",
+    "seed_default_templates", "get_pipeline_metadata",
 ]

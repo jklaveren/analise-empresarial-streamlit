@@ -18,6 +18,7 @@ import os
 TABELA_EMPRESAS = "dados_empresas"
 TABELA_SOCIOS = "dados_socios"
 TABELA_MUNICIPIOS = "municipios"
+TABELA_METADATA = "pipeline_metadata"
 
 
 def get_data_table_names() -> dict:
@@ -70,9 +71,10 @@ def create_db_engine():
 
 
 def ensure_app_tables() -> None:
-    """Garante que a tabela de lookup de municipios exista antes da
-    sincronizacao. Nao falha se DATABASE_URL nao estiver configurada --
-    quem chama (sync_data_to_db.py) ja trata essa ausencia."""
+    """Garante que a tabela de lookup de municipios (e a de metadata do
+    pipeline) existam antes da sincronizacao. Nao falha se DATABASE_URL
+    nao estiver configurada -- quem chama (sync_data_to_db.py) ja trata
+    essa ausencia."""
     database_url = os.environ.get("DATABASE_URL", "")
     if not database_url:
         return
@@ -89,10 +91,50 @@ def ensure_app_tables() -> None:
                 )
                 """
             )
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {TABELA_METADATA} (
+                    chave VARCHAR(100) PRIMARY KEY,
+                    valor TEXT,
+                    atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+                """
+            )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def registrar_metadata_pipeline(dados: dict) -> None:
+    """Grava/atualiza pares chave-valor na tabela de metadata do pipeline
+    (mes RF, trimestre PGFN, data da ultima sincronizacao, contagens, etc.)
+    -- usado pela tela "Sobre" no frontend. Nao falha o processo de
+    sincronizacao caso a gravacao de metadata de algum problema; so avisa."""
+    database_url = os.environ.get("DATABASE_URL", "")
+    if not database_url:
+        return
+    import psycopg2
+
+    conn = psycopg2.connect(database_url)
+    try:
+        with conn.cursor() as cur:
+            for chave, valor in dados.items():
+                cur.execute(
+                    f"""
+                    INSERT INTO {TABELA_METADATA} (chave, valor, atualizado_em)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (chave) DO UPDATE
+                        SET valor = EXCLUDED.valor, atualizado_em = NOW()
+                    """,
+                    (chave, str(valor) if valor is not None else None),
+                )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[AVISO] Falha ao gravar metadata do pipeline: {e}")
     finally:
         conn.close()
 
