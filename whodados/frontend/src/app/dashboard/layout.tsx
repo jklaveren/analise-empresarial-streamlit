@@ -6,11 +6,13 @@ import { useRequireAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { href: "/dashboard", label: "Empresas", icon: "📊" },
+  { href: "/dashboard/crm", label: "CRM", icon: "🗂️" },
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
-  { href: "/dashboard/monitor", label: "Monitor", icon: "🚦" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
+  { href: "/dashboard/monitor", label: "Monitor", icon: "🚦" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },
+  { href: "/dashboard/configuracoes/email", label: "Configurações", icon: "⚙️" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
