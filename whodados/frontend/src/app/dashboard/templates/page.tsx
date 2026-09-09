@@ -11,10 +11,27 @@ export default function TemplatesPage() {
   const [form, setForm] = useState({ nome: "", assunto: "", corpo_html: "" });
   const [saving, setSaving] = useState(false);
 
+  async function load() {
+    try { setTemplates(await listarTemplates()); } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try { await criarTemplate(form); setShowModal(false); setForm({ nome: "", assunto: "", corpo_html: "" }); load(); }
+    catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Excluir este template?")) return;
+    try { await deletarTemplate(id); load(); } catch (e: any) { alert(e.message); }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <div><h1 className="text-2xl font-bold text-slate-800">Templates de Email</h1><p className="text-sm text-slate-500 mt-1">Gerencie seus modelos de comunicação</p></div>
+        <div><h1 className="text-2xl font-bold text-slate-800">Templates de Email</h1><p className="text-sm text-slate-500 mt-1">Gerencie seus modelos de comunicacao</p></div>
         <button onClick={() => setShowModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">+ Novo Template</button>
       </div>
       {loading && <div className="text-center py-12 text-slate-500">Carregando...</div>}
@@ -46,7 +63,7 @@ export default function TemplatesPage() {
             <form onSubmit={handleCreate} className="p-6 space-y-4">
               <div><label className="block text-sm font-medium text-slate-700 mb-1">Nome</label><input required value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} placeholder="Ex: Primeiro contato" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none" /></div>
               <div><label className="block text-sm font-medium text-slate-700 mb-1">Assunto</label><input required value={form.assunto} onChange={e => setForm({...form, assunto: e.target.value})} placeholder="Ex: Oportunidade de parceria" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Corpo (HTML)</label><textarea required rows={8} value={form.corpo_html} onChange={e => setForm({...form, corpo_html: e.target.value})} placeholder="<p>Olá, {nome}!</p>" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-y" /><p className="text-xs text-slate-400 mt-1">Use {"{nome}"}, {"{empresa}"} como variáveis</p></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Corpo (HTML)</label><textarea required rows={8} value={form.corpo_html} onChange={e => setForm({...form, corpo_html: e.target.value})} placeholder="<p>Ola, {nome}!</p>" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-y" /><p className="text-xs text-slate-400 mt-1">Use {"{nome}"}, {"{empresa}"} como variaveis</p></div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancelar</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium">{saving ? "Salvando..." : "Salvar Template"}</button>
@@ -58,21 +75,3 @@ export default function TemplatesPage() {
     </div>
   );
 }
-
-  async function load() {
-    try { setTemplates(await listarTemplates()); } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    try { await criarTemplate(form); setShowModal(false); setForm({ nome: "", assunto: "", corpo_html: "" }); load(); }
-    catch (e: any) { alert(e.message); } finally { setSaving(false); }
-  }
-
-  async function handleDelete(id: number) {
-    if (!confirm("Excluir este template?")) return;
-    try { await deletarTemplate(id); load(); } catch (e: any) { alert(e.message); }
-  }
-

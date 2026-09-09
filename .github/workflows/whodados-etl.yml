@@ -1,0 +1,72 @@
+name: Atualizar Dados (Pipeline ETL) — WhoDados
+
+on:
+  # Executa todo dia 1 de cada mes as 02h UTC (~23h BRT)
+  schedule:
+    - cron: "0 2 1 * *"
+
+  # Permite executar manualmente pelo GitHub (aba "Actions")
+  workflow_dispatch:
+    inputs:
+      mes_referencia:
+        description: "Mes/Ano de referencia (ex: 2026-05)"
+        required: false
+        default: ""
+
+jobs:
+  etl-pipeline:
+    name: "Executar Pipeline de Extracao"
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: whodados/pipeline/requirements-dev.txt
+
+      - name: Instalar dependencias do pipeline
+        run: pip install -r whodados/pipeline/requirements-dev.txt
+
+      - name: Instalar ferramentas de rede
+        run: sudo apt-get update && sudo apt-get install -y curl wget
+
+      - name: Executar Pipeline de Extracao
+        run: python whodados/pipeline/pipeline.py
+        env:
+          RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
+          WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
+
+      - name: Verificar arquivos gerados
+        run: |
+          echo "=== Arquivos em whodados/pipeline/out/ ==="
+          ls -lh whodados/pipeline/out/
+          echo ""
+          echo "=== Contagem de linhas ==="
+          wc -l whodados/pipeline/out/*.csv 2>/dev/null || echo "Nenhum CSV encontrado"
+
+      - name: Sincronizar dados com Supabase
+        if: vars.SUPABASE_CONNECTION_STRING != ''
+        run: python whodados/scripts/sync_data_to_db.py
+        env:
+          DATABASE_URL: ${{ vars.SUPABASE_CONNECTION_STRING }}
+          DATA_SOURCE: files
+          WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
+
+      - name: Limpar arquivos temporarios (zips)
+        if: always()
+        run: |
+          echo "Limpando zips antigos..."
+          find whodados/pipeline/raw -name "*.zip" -mtime +7 -delete 2>/dev/null || true
+          echo "Limpando CSVs intermediarios..."
+          rm -f whodados/pipeline/out/aux_*.csv 2>/dev/null || true
+
+      - name: Registrar data da ultima execucao
+        run: |
+          echo "Ultima execucao: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "${{ github.run_id }}" > whodados/.last_run
