@@ -224,6 +224,25 @@ def filtrar_socios(cnpjs_rs: set) -> None:
     print("✅ Sócios extraídos.")
 
 
+def processar_municipios() -> None:
+    """Extrai a tabela de codigo->nome de municipios (baixada em Municipios.zip)
+    para out/municipios.csv. Usada para resolver COD_MUNICIPIO em nome da cidade."""
+    print("\n\U0001F3D9  Etapa: Processando tabela de Municipios...")
+    destino = OUT / "municipios.csv"
+    zip_path = RAW / "Municipios.zip"
+    if not zip_path.exists():
+        print("  [AVISO] Municipios.zip nao encontrado, pulando esta etapa.")
+        return
+    with zipfile.ZipFile(zip_path) as z:
+        f_name = z.namelist()[0]
+        with z.open(f_name) as f:
+            df_mun = pd.read_csv(f, sep=";", encoding="latin1", header=None, dtype=str)
+    df_mun = df_mun.iloc[:, :2]
+    df_mun.columns = ["COD_MUNICIPIO", "NOME_MUNICIPIO"]
+    df_mun.to_csv(destino, sep=";", index=False, encoding="utf-8")
+    print(f"\u2705 Municipios processados: {len(df_mun)}")
+
+
 def consolidar_dividas_pgfn() -> pd.DataFrame:
     """Consolida dividas ativas da PGFN."""
     print("\n💰 Etapa: Consolidando Dívida Ativa (PGFN)...")
@@ -302,6 +321,7 @@ def rodar_pipeline() -> None:
     for arq in PGFN:
         baixar_pgfn(arq)
 
+    processar_municipios()
     cnpjs_rs = filtrar_estabelecimentos()
     df_emp = filtrar_empresas(cnpjs_rs)
     filtrar_socios(cnpjs_rs)

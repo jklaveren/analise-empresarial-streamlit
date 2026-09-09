@@ -13,6 +13,8 @@ from .service import (
     create_password_reset_token, get_password_reset_token, mark_password_reset_token_used, update_user_password,
     # Monitor de emails (follow-up com semaforo)
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup, marcar_email_aberto,
+    # Empresas (dados da Receita Federal, via pipeline de ETL)
+    listar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
 )
 __all__ = [
     "create_user_record", "get_user_by_username", "get_user_by_email", "get_user_by_username_or_email",
@@ -27,4 +29,6 @@ __all__ = [
     "create_password_reset_token", "get_password_reset_token", "mark_password_reset_token_used", "update_user_password",
     # Monitor de emails (follow-up com semaforo)
     "get_emails_for_monitor", "get_monitor_stats", "get_emails_vermelhos_para_followup", "marcar_email_aberto",
+    # Empresas (dados da Receita Federal, via pipeline de ETL)
+    "listar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
 ]

@@ -13,9 +13,9 @@ except ImportError:
     HAS_AUDIT = False
 from .db import (
     create_or_update_crm, get_crm_by_cnpj, get_crm_all,
-    create_notificacao
+    create_notificacao,
+    listar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
 )
-from .data import carregar_empresas, carregar_empresa_detalhe, filtrar_empresas, get_metricas
 from .logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -75,20 +75,11 @@ async def me(current_user: Dict = Depends(get_current_user)):
 
 @router.get("/empresas")
 async def listar_empresas(cidade: Optional[str] = None, cnae: Optional[str] = None, busca: Optional[str] = None, limit: int = 100, offset: int = 0, current_user: Dict = Depends(get_current_user)):
-    df = carregar_empresas()
-    if df.empty:
-        return []
-    df_f = filtrar_empresas(df, cidade, cnae, busca)
-    cols = ["CNPJ_COMPLETO", "RAZAO_SOCIAL", "NOME_FANTASIA", "MUNIC_NOME", "CNAE_PRINCIPAL", "CAPITAL_SOCIAL", "DIVIDA_TOTAL", "PORTE_NOME"]
-    available = [c for c in cols if c in df_f.columns]
-    df_f = df_f[available].iloc[offset:offset+limit]
-    df_f.columns = [c.lower() for c in df_f.columns]
-    df_f = df_f.rename(columns={"cnpj_completo": "cnpj_completo", "munic_nome": "municipio"})
-    return df_f.fillna("").to_dict(orient="records")
+    return listar_empresas_db(cidade=cidade, cnae=cnae, busca=busca, limit=limit, offset=offset)
 
 @router.get("/empresas/{cnpj}")
 async def get_empresa(request: Request, cnpj: str, current_user: Dict = Depends(get_current_user)):
-    empresa = carregar_empresa_detalhe(cnpj)
+    empresa = get_empresa_by_cnpj_db(cnpj)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
     crm = get_crm_by_cnpj(cnpj)
@@ -120,4 +111,4 @@ async def listar_crm(current_user: Dict = Depends(get_current_user)):
 
 @router.get("/dashboard/metricas")
 async def metricas(current_user: Dict = Depends(get_current_user)):
-    return get_metricas()
+    return get_metricas_db()

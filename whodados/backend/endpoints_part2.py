@@ -13,8 +13,9 @@ from .db import (
     update_template, delete_template, get_templates_by_categoria,
     # Card/imagem do template
     set_template_imagem, get_template_imagem, clear_template_imagem,
+    # Empresas (dados da Receita Federal, via pipeline de ETL)
+    listar_empresas_db,
 )
-from .data import carregar_empresas, filtrar_empresas
 from .mailer import enviar_campanha
 from .logger import get_logger
 logger = get_logger(__name__)
@@ -125,23 +126,23 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         raise HTTPException(status_code=400, detail="Campanha ja executada")
     template = get_template(campanha["template_id"])
     filtros = campanha.get("filtros") or {}
-    df = carregar_empresas()
-    empresas = filtrar_empresas(df, filtros.get("cidade"), filtros.get("cnae"), filtros.get("busca"))
-    cnpjs = empresas["CNPJ_COMPLETO"].dropna().unique().tolist() if not empresas.empty else []
+    empresas = listar_empresas_db(
+        cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), busca=filtros.get("busca"),
+        limit=100000, offset=0,
+    )
+    cnpjs = [e["cnpj_completo"] for e in empresas if e.get("cnpj_completo")]
     emails_por_cnpj = {cnpj: f"contato@{cnpj[:8]}.com" for cnpj in cnpjs}
     # Monta mapa CNPJ -> dados da empresa (para o template por CNAE)
-    dados_empresas = {}
-    if not empresas.empty:
-        for _, row in empresas.iterrows():
-            cnpj = row.get("CNPJ_COMPLETO")
-            if cnpj and cnpj in cnpjs:
-                dados_empresas[cnpj] = {
-                    "razao_social": row.get("RAZAO_SOCIAL", ""),
-                    "nome_fantasia": row.get("NOME_FANTASIA", ""),
-                    "municipio": row.get("MUNIC_NOME") or row.get("MUNICIPIO", ""),
-                    "cnae_principal": row.get("CNAE_PRINCIPAL", ""),
-                    "porte_nome": row.get("PORTE_NOME", ""),
-                }
+    dados_empresas = {
+        e["cnpj_completo"]: {
+            "razao_social": e.get("razao_social", ""),
+            "nome_fantasia": e.get("nome_fantasia", ""),
+            "municipio": e.get("municipio", ""),
+            "cnae_principal": e.get("cnae_principal", ""),
+            "porte_nome": e.get("porte_nome", ""),
+        }
+        for e in empresas if e.get("cnpj_completo")
+    }
     resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas)
     create_notificacao(
         "campanha_concluida", f"Campanha {campanha['nome']} concluida",
