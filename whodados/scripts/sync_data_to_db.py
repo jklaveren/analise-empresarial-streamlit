@@ -46,7 +46,7 @@ def carregar_csvs():
         )
 
     empresas = pd.read_csv(ARQ_EMPRESAS, sep=";", encoding="latin-1", dtype=str)
-    socios = pd.read_csv(ARQ_SOCIOS, sep=";", encoding="latin-1", dtype=str)
+    socios = pd.read_csv(ARQ_SOCIOS, sep=";", encoding="utf-8", dtype=str)
 
     if empresas.empty:
         raise ValueError(f"'{ARQ_EMPRESAS.name}' esta vazio. Abortando.")
