@@ -41,6 +41,8 @@ jobs:
         env:
           RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
           WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
+          # Prioridade: input manual (workflow_dispatch) > variavel do repositorio > padrao no codigo.
+          RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia || vars.RF_MES_REFERENCIA }}
 
       - name: Verificar arquivos gerados
         run: |
