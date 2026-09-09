@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from typing import List, Dict, Optional, Any
 try:
-    from backend.db.config import get_db_cursor
+    from .config import get_db_cursor
 except ImportError:
-    from db.config import get_db_cursor
+    from backend.db.config import get_db_cursor
 try:
-    from backend.logger import get_logger
+    from ..logger import get_logger
 except ImportError:
     import logging
     get_logger = lambda x: logging.getLogger(x)
