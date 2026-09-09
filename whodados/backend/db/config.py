@@ -77,6 +77,28 @@ def ensure_tables():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempted_at DESC)")
         conn.commit(); cur.close()
+    _ensure_enriquecimento_table()
+
+
+def _ensure_enriquecimento_table():
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS enriquecimento_contatos (
+            id SERIAL PRIMARY KEY,
+            cnpj VARCHAR(18) NOT NULL,
+            tipo_alvo VARCHAR(20) NOT NULL,
+            nome_alvo VARCHAR(255),
+            campo VARCHAR(30) NOT NULL,
+            valor TEXT,
+            fonte_url TEXT,
+            fonte_titulo TEXT,
+            base_legal VARCHAR(50) NOT NULL DEFAULT \'legitimo_interesse_dados_publicos\',
+            coletado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            coletado_por VARCHAR(100),
+            removido_em TIMESTAMP WITH TIME ZONE
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_enriquecimento_cnpj ON enriquecimento_contatos(cnpj)")
+        conn.commit(); cur.close()
 
 def check_health():
     try:
