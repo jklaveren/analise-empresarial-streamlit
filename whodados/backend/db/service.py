@@ -1,6 +1,7 @@
 """DB Service - WhoDados 2.0."""
 from __future__ import annotations
 import json
+import re
 from typing import List, Dict, Optional, Any
 try:
     from .config import get_db_cursor
@@ -487,3 +488,168 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
             (password_hash, user_id)
         )
         return cur.rowcount > 0
+
+
+# ==================== EMPRESAS (DADOS DA RECEITA FEDERAL) ====================
+# As tabelas dados_empresas / dados_socios / municipios sao populadas pelo
+# pipeline de ETL (whodados/pipeline/pipeline.py + scripts/sync_data_to_db.py,
+# rodado pelo GitHub Action .github/workflows/whodados-etl.yml). Enquanto o
+# pipeline nao tiver rodado ainda, essas tabelas nao existem -- as funcoes
+# abaixo detectam isso e retornam vazio/zero em vez de lancar erro, para o
+# resto da aplicacao nunca quebrar por falta desses dados.
+
+def _tabela_existe(cur, nome_tabela: str) -> bool:
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s) AS existe",
+        (nome_tabela,),
+    )
+    row = cur.fetchone()
+    return bool(row and row.get("existe"))
+
+
+def listar_empresas_db(
+    cidade: Optional[str] = None,
+    cnae: Optional[str] = None,
+    busca: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Lista empresas a partir de dados_empresas. Retorna [] se a tabela
+    ainda nao existir (pipeline de ETL nunca rodou) ou em caso de erro."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "dados_empresas"):
+                return []
+            sql = """
+                SELECT
+                    e."CNPJ_COMPLETO" AS cnpj_completo,
+                    e."RAZAO_SOCIAL" AS razao_social,
+                    e."NOME_FANTASIA" AS nome_fantasia,
+                    COALESCE(m.nome_municipio, '') AS municipio,
+                    e."CNAE_PRINCIPAL" AS cnae_principal,
+                    COALESCE(e."CAPITAL_SOCIAL"::numeric, 0) AS capital_social,
+                    COALESCE(e."DIVIDA_TOTAL"::numeric, 0) AS divida_total,
+                    e."PORTE_NOME" AS porte_nome
+                FROM dados_empresas e
+                LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                WHERE 1=1
+            """
+            params: List[Any] = []
+            if cidade:
+                sql += " AND m.nome_municipio ILIKE %s"
+                params.append(f"%{cidade}%")
+            if cnae:
+                sql += ' AND e."CNAE_PRINCIPAL" ILIKE %s'
+                params.append(f"%{cnae}%")
+            if busca:
+                sql += ' AND (e."RAZAO_SOCIAL" ILIKE %s OR e."NOME_FANTASIA" ILIKE %s)'
+                params.extend([f"%{busca}%", f"%{busca}%"])
+            sql += ' ORDER BY e."RAZAO_SOCIAL" LIMIT %s OFFSET %s'
+            params.extend([limit, offset])
+            cur.execute(sql, params)
+            return cur.fetchall()
+    except Exception as e:
+        log.warning(f"listar_empresas_db falhou, retornando lista vazia: {e}")
+        return []
+
+
+def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
+    """Busca uma empresa por CNPJ em dados_empresas, com municipio e socios
+    resolvidos. Retorna {} se nao encontrada, tabela ausente, ou erro."""
+    cnpj_limpo = re.sub(r"\D", "", cnpj or "")
+    if not cnpj_limpo:
+        return {}
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "dados_empresas"):
+                return {}
+            cur.execute(
+                """
+                SELECT
+                    e."CNPJ_COMPLETO" AS cnpj_completo,
+                    e."CNPJ_BASICO" AS cnpj_basico,
+                    e."RAZAO_SOCIAL" AS razao_social,
+                    e."NOME_FANTASIA" AS nome_fantasia,
+                    COALESCE(m.nome_municipio, '') AS municipio,
+                    e."CNAE_PRINCIPAL" AS cnae_principal,
+                    COALESCE(e."CAPITAL_SOCIAL"::numeric, 0) AS capital_social,
+                    COALESCE(e."DIVIDA_TOTAL"::numeric, 0) AS divida_total,
+                    e."PORTE_NOME" AS porte_nome,
+                    e."DATA_FUNDACAO" AS data_fundacao,
+                    e."CONTATO_FONE" AS contato_fone
+                FROM dados_empresas e
+                LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                WHERE e."CNPJ_COMPLETO" = %s
+                LIMIT 1
+                """,
+                (cnpj_limpo,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            socios: List[Dict[str, Any]] = []
+            if _tabela_existe(cur, "dados_socios"):
+                cur.execute(
+                    """
+                    SELECT
+                        "NOME_SOCIO" AS nome_socio,
+                        "CPF_CNPJ_SOCIO" AS cpf_cnpj_socio,
+                        "QUALIF_SOCIO" AS qualif_socio
+                    FROM dados_socios
+                    WHERE "CNPJ_BASICO" = %s
+                    """,
+                    (row.get("cnpj_basico"),),
+                )
+                socios = cur.fetchall()
+            resultado = dict(row)
+            resultado["socios"] = socios
+            return resultado
+    except Exception as e:
+        log.warning(f"get_empresa_by_cnpj_db falhou, retornando vazio: {e}")
+        return {}
+
+
+def get_metricas_db() -> Dict[str, Any]:
+    """Estatisticas agregadas de dados_empresas. Retorna zeros se a tabela
+    ainda nao existir ou em caso de erro."""
+    vazio = {
+        "total_empresas": 0, "por_cidade": {}, "por_porte": {},
+        "capital_total": 0.0, "divida_total": 0.0, "top_cnaes": {},
+    }
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "dados_empresas"):
+                return vazio
+            cur.execute('SELECT COUNT(*) AS total FROM dados_empresas')
+            total = cur.fetchone()["total"]
+
+            cur.execute("""
+                SELECT COALESCE(m.nome_municipio, 'Sem municipio') AS cidade, COUNT(*) AS qtd
+                FROM dados_empresas e
+                LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                GROUP BY cidade ORDER BY qtd DESC LIMIT 10
+            """)
+            por_cidade = {r["cidade"]: r["qtd"] for r in cur.fetchall()}
+
+            cur.execute('SELECT "PORTE_NOME" AS porte, COUNT(*) AS qtd FROM dados_empresas GROUP BY porte')
+            por_porte = {(r["porte"] or "Nao informado"): r["qtd"] for r in cur.fetchall()}
+
+            cur.execute('SELECT COALESCE(SUM("CAPITAL_SOCIAL"::numeric), 0) AS total FROM dados_empresas')
+            capital_total = float(cur.fetchone()["total"])
+
+            cur.execute('SELECT COALESCE(SUM("DIVIDA_TOTAL"::numeric), 0) AS total FROM dados_empresas')
+            divida_total = float(cur.fetchone()["total"])
+
+            cur.execute("""
+                SELECT "CNAE_PRINCIPAL" AS cnae, COUNT(*) AS qtd
+                FROM dados_empresas GROUP BY cnae ORDER BY qtd DESC LIMIT 10
+            """)
+            top_cnaes = {r["cnae"]: r["qtd"] for r in cur.fetchall()}
+
+            return {
+                "total_empresas": total, "por_cidade": por_cidade, "por_porte": por_porte,
+                "capital_total": capital_total, "divida_total": divida_total, "top_cnaes": top_cnaes,
+            }
+    except Exception as e:
+        log.warning(f"get_metricas_db falhou, retornando zeros: {e}")
+        return vazio

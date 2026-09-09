@@ -7,3 +7,5 @@ pandas>=2.0.0
 requests>=2.31.0
 # psycopg2-binary necessario para o pipeline escrever no Supabase
 psycopg2-binary>=2.9.9
+# sqlalchemy necessario para o pandas.DataFrame.to_sql() em sync_data_to_db.py
+SQLAlchemy>=2.0.0
