@@ -7,16 +7,16 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("token");
 }
 
-function setToken(token: string): void {
+export function setToken(token: string): void {
   localStorage.setItem("token", token);
 }
 
-function removeToken(): void {
+export function removeToken(): void {
   localStorage.removeItem("token");
 }
 
@@ -265,4 +265,27 @@ export async function executarCampanha(id: number): Promise<{ sucessos: number; 
 export async function deletarCampanha(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/campanhas/${id}`, { method: "DELETE" });
 }
--NoNewline
+
+// ==================== NOTIFICACOES ====================
+
+export interface Notificacao {
+  id: number;
+  tipo: string;
+  titulo: string;
+  mensagem: string | null;
+  cnpj: string | null;
+  user_id: string | null;
+  lida: boolean;
+  created_at: string;
+}
+
+export async function listarNotificacoes(lidas?: boolean): Promise<Notificacao[]> {
+  const params = new URLSearchParams();
+  if (lidas !== undefined) params.append("lidas", String(lidas));
+  const qs = params.toString();
+  return request(`/api/v1/notificacoes${qs ? "?" + qs : ""}`);
+}
+
+export async function marcarNotificacaoLida(id: number): Promise<{ ok: boolean }> {
+  return request(`/api/v1/notificacoes/${id}/ler`, { method: "POST" });
+}

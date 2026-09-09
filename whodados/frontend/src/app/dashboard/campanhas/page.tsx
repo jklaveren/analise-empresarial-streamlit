@@ -69,6 +69,15 @@ export default function CampanhasPage() {
       </div>
       {templates.length === 0 && !loading && <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 text-sm text-amber-800">Aviso: crie um <a href="/dashboard/templates" className="font-bold underline">template</a> antes.</div>}
       {loading && <div className="text-center py-12 text-slate-500">Carregando...</div>}
+      {!loading && campanhas.length === 0 && (
+        <div className="text-center py-12 text-slate-400 text-sm">Nenhuma campanha criada ainda.</div>
+      )}
+      {!loading && campanhas.length > 0 && (
+        <div className="space-y-3">
+          {campanhas.map(c => (
+            <div key={c.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1"><h3 className="font-semibold text-slate-800">{c.nome}</h3><span className={"text-xs px-2 py-0.5 rounded-full " + (statusColors[c.status || "rascunho"] || "bg-slate-100")}>{c.status || "rascunho"}</span></div>
                   <p className="text-xs text-slate-500">Template #{c.template_id}{c.created_at && " em " + new Date(c.created_at).toLocaleString("pt-BR")}</p>
                   {c.filtros && Object.keys(c.filtros).length > 0 && <div className="mt-2 flex gap-1 flex-wrap">{Object.entries(c.filtros).map(([k, v]) => v && <span key={k} className="text-xs bg-slate-100 px-2 py-0.5 rounded">{k}: {v}</span>)}</div>}
