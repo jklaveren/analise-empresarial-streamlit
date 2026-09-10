@@ -20,6 +20,22 @@ export function removeToken(): void {
   localStorage.removeItem("token");
 }
 
+// Empresa (organizacao) ativa -- enviada no header X-Org-Id em toda chamada, e' o
+// que isola CRM/campanhas/templates/monitor por empresa (NRA / SYVP).
+export function getActiveOrgId(): number | null {
+  if (typeof window === "undefined") return null;
+  const v = localStorage.getItem("org_id");
+  return v ? Number(v) : null;
+}
+
+export function setActiveOrgId(id: number): void {
+  localStorage.setItem("org_id", String(id));
+}
+
+export function clearActiveOrgId(): void {
+  localStorage.removeItem("org_id");
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -27,6 +43,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...(options?.headers as Record<string, string> || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgId = getActiveOrgId();
+  if (orgId) headers["X-Org-Id"] = String(orgId);
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "Erro desconhecido" }));
@@ -61,6 +79,20 @@ export async function login(username: string, password: string, rememberMe = fal
 
 export async function getMe() {
   return request("/api/v1/auth/me");
+}
+
+// ==================== ORGANIZACOES (MULTI-EMPRESA) ====================
+
+export interface Organizacao {
+  id: number;
+  nome: string;
+  slug: string;
+  ativo: boolean;
+}
+
+/** Empresas que o usuario logado pode operar (para o seletor de empresa ativa). */
+export async function listarOrganizacoes(): Promise<Organizacao[]> {
+  return request("/api/v1/organizacoes");
 }
 
 // Password Reset
@@ -350,17 +382,73 @@ export interface UsuarioAdmin {
   is_admin: boolean;
   is_active: boolean;
   created_at: string | null;
+  organizacao_ids: number[];
 }
 
 export async function listarUsuarios(): Promise<UsuarioAdmin[]> {
   return request("/api/v1/admin/usuarios");
 }
 
-export async function criarUsuarioAdmin(data: { username: string; password: string; email?: string; is_admin?: boolean }): Promise<{ username: string }> {
+export async function criarUsuarioAdmin(data: { username: string; password: string; email?: string; is_admin?: boolean; organizacao_ids?: number[] }): Promise<{ username: string }> {
   return request("/api/v1/admin/usuarios", {
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+export async function definirEmpresasUsuario(userId: number, organizacaoIds: number[]): Promise<{ sucesso: boolean; organizacao_ids: number[] }> {
+  return request(`/api/v1/admin/usuarios/${userId}/organizacoes`, {
+    method: "PUT",
+    body: JSON.stringify({ organizacao_ids: organizacaoIds }),
+  });
+}
+
+// ==================== ADMIN: EMPRESAS (config de e-mail por empresa) ====================
+
+export interface OrgEmailConfig {
+  organizacao_id?: number;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_username?: string | null;
+  smtp_use_tls?: boolean;
+  email_from?: string | null;
+  email_from_name?: string | null;
+  assinatura_html?: string | null;
+  configurado: boolean;
+  tem_logo: boolean;
+}
+
+export async function listarOrganizacoesAdmin(): Promise<Organizacao[]> {
+  return request("/api/v1/admin/organizacoes");
+}
+
+export async function getOrgEmailConfig(orgId: number): Promise<OrgEmailConfig> {
+  return request(`/api/v1/admin/organizacoes/${orgId}/smtp`);
+}
+
+export async function setOrgEmailConfig(orgId: number, data: Partial<OrgEmailConfig> & { smtp_password?: string }): Promise<OrgEmailConfig> {
+  return request(`/api/v1/admin/organizacoes/${orgId}/smtp`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function uploadOrgLogo(orgId: number, file: File): Promise<{ sucesso: boolean; tem_logo: boolean }> {
+  const form = new FormData();
+  form.append("arquivo", file);
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgActive = getActiveOrgId();
+  if (orgActive) headers["X-Org-Id"] = String(orgActive);
+  const res = await fetch(`${API_URL}/api/v1/admin/organizacoes/${orgId}/logo`, {
+    method: "POST", headers, body: form,
+  });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({ detail: "Erro" }));
+    throw new ApiError(res.status, b.detail || "Erro ao enviar logo");
+  }
+  return res.json();
 }
 
 export async function atualizarUsuarioAdmin(userId: number, data: { is_admin?: boolean; is_active?: boolean }): Promise<UsuarioAdmin> {

@@ -80,29 +80,77 @@ def _obter_template_para_cnpj(template_base_id: int, cnae: Optional[str]) -> Dic
         return dict(base)
     return templates_categoria[0] if templates_categoria else {}
 
-def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None) -> Dict[str, Any]:
-    if not settings.SMTP_HOST:
+def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
+    """Config SMTP efetiva: a da empresa (se configurada) ou a global (.env)."""
+    if organizacao_id is not None:
+        try:
+            from ..db.service import get_org_smtp_config
+            cfg = get_org_smtp_config(organizacao_id, incluir_password=True)
+        except Exception as e:
+            log.warning(f"Falha lendo SMTP da empresa {organizacao_id}, usando global: {e}")
+            cfg = None
+        if cfg and cfg.get("configurado"):
+            return {
+                "host": cfg.get("smtp_host"),
+                "port": cfg.get("smtp_port") or 587,
+                "username": cfg.get("smtp_username"),
+                "password": cfg.get("smtp_password"),
+                "use_tls": cfg.get("smtp_use_tls", True),
+                "email_from": cfg.get("email_from") or settings.EMAIL_FROM,
+                "email_from_name": cfg.get("email_from_name") or settings.EMAIL_FROM_NAME,
+            }
+    return {
+        "host": settings.SMTP_HOST, "port": settings.SMTP_PORT,
+        "username": settings.SMTP_USERNAME, "password": settings.SMTP_PASSWORD,
+        "use_tls": settings.SMTP_USE_TLS,
+        "email_from": settings.EMAIL_FROM, "email_from_name": settings.EMAIL_FROM_NAME,
+    }
+
+
+def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, smtp: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = smtp or _smtp_da_org(None)
+    if not cfg.get("host"):
         log.warning(f"SMTP nao configurado. Email simulado para {para}")
         return {"sucesso": True, "simulado": True, "para": para, "assunto": assunto}
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = assunto
-        msg["From"] = f"{settings.EMAIL_FROM_NAME} <{settings.EMAIL_FROM}>"
+        msg["From"] = f"{cfg.get('email_from_name')} <{cfg.get('email_from')}>"
         msg["To"] = para
         if corpo_texto:
             msg.attach(MIMEText(corpo_texto, "plain", "utf-8"))
         msg.attach(MIMEText(corpo_html, "html", "utf-8"))
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            if settings.SMTP_USE_TLS:
+        with smtplib.SMTP(cfg.get("host"), cfg.get("port") or 587) as server:
+            if cfg.get("use_tls"):
                 server.starttls()
-            if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
-                server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            server.sendmail(settings.EMAIL_FROM, [para], msg.as_string())
+            if cfg.get("username") and cfg.get("password"):
+                server.login(cfg.get("username"), cfg.get("password"))
+            server.sendmail(cfg.get("email_from"), [para], msg.as_string())
         log.info(f"Email enviado para {para}: {assunto}")
         return {"sucesso": True, "para": para, "assunto": assunto}
     except Exception as e:
         log.error(f"Erro ao enviar email para {para}: {e}")
         return {"sucesso": False, "para": para, "erro": str(e)}
+
+def _assinatura_da_org(organizacao_id: Optional[int]) -> str:
+    """HTML da assinatura da empresa, com {{logo}} resolvido para a URL publica
+    do logo. Vazio se a empresa nao tiver assinatura."""
+    if organizacao_id is None:
+        return ""
+    try:
+        from ..db.service import get_org_smtp_config
+        cfg = get_org_smtp_config(organizacao_id)
+        assinatura = (cfg or {}).get("assinatura_html") or ""
+    except Exception:
+        return ""
+    if not assinatura:
+        return ""
+    try:
+        base = getattr(settings, "API_PUBLIC_URL", "") or ""
+    except Exception:
+        base = ""
+    return assinatura.replace("{{logo}}", f"{base}/api/v1/organizacoes/{organizacao_id}/logo")
+
 
 def enviar_template_para_cnpjs(
     campanha_id: Optional[int],
@@ -110,9 +158,13 @@ def enviar_template_para_cnpjs(
     cnpjs: List[str],
     emails_por_cnpj: Dict[str, str],
     dados_empresas: Optional[Dict[str, Dict[str, str]]] = None,
+    organizacao_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Envia template para CNPJs, escolhendo o template correto por CNAE."""
+    """Envia template para CNPJs, escolhendo o template correto por CNAE.
+    Usa o SMTP e a assinatura da empresa (organizacao_id)."""
     resultados = {"sucessos": 0, "erros": 0, "enviados": [], "erros_list": []}
+    smtp_cfg = _smtp_da_org(organizacao_id)
+    assinatura = _assinatura_da_org(organizacao_id)
     if campanha_id:
         try:
             update_campanha_status(campanha_id, "em_andamento", total_destinatarios=len(cnpjs))
@@ -157,7 +209,8 @@ def enviar_template_para_cnpjs(
 
         result = enviar_email(
             email_dest, rendered.get("assunto", ""),
-            rendered.get("corpo_html", ""), rendered.get("corpo_texto"),
+            rendered.get("corpo_html", "") + assinatura, rendered.get("corpo_texto"),
+            smtp=smtp_cfg,
         )
         if result.get("sucesso"):
             resultados["sucessos"] += 1
@@ -199,5 +252,6 @@ def enviar_campanha(
     cnpjs: List[str],
     emails_por_cnpj: Dict[str, str],
     dados_empresas: Optional[Dict[str, Dict[str, str]]] = None,
+    organizacao_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    return enviar_template_para_cnpjs(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas)
+    return enviar_template_para_cnpjs(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=organizacao_id)

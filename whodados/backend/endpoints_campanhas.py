@@ -12,21 +12,21 @@ router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/campanhas")
-async def listar_campanhas(current_user: Dict = Depends(get_current_user)):
-    return get_all_campanhas()
+async def listar_campanhas(current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    return get_all_campanhas(organizacao_id=org_id)
 
 
 @router.post("/campanhas")
-async def criar_campanha(data: Dict, current_user: Dict = Depends(get_current_user)):
-    t = get_template(data.get("template_id"))
+async def criar_campanha(data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    t = get_template(data.get("template_id"), organizacao_id=org_id)
     if not t:
         raise HTTPException(status_code=400, detail="Template nao encontrado")
-    return create_campanha(data.get("nome"), data.get("template_id"), data.get("filtros", {}), created_by=current_user.get("sub"), eh_sequencia=data.get("eh_sequencia", False), agendada_para=data.get("agendada_para"))
+    return create_campanha(data.get("nome"), data.get("template_id"), data.get("filtros", {}), created_by=current_user.get("sub"), eh_sequencia=data.get("eh_sequencia", False), agendada_para=data.get("agendada_para"), organizacao_id=org_id)
 
 
 @router.get("/campanhas/{campanha_id}")
-async def get_campanha_by_id(campanha_id: int, current_user: Dict = Depends(get_current_user)):
-    c = get_campanha(campanha_id)
+async def get_campanha_by_id(campanha_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    c = get_campanha(campanha_id, organizacao_id=org_id)
     if not c:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
     return c
@@ -34,12 +34,12 @@ async def get_campanha_by_id(campanha_id: int, current_user: Dict = Depends(get_
 
 @router.post("/campanhas/{campanha_id}/executar")
 async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
-    campanha = get_campanha(campanha_id)
+    campanha = get_campanha(campanha_id, organizacao_id=org_id)
     if not campanha:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
     if campanha.get("status") not in ["rascunho", "agendada"]:
         raise HTTPException(status_code=400, detail="Campanha ja executada")
-    template = get_template(campanha["template_id"])
+    template = get_template(campanha["template_id"], organizacao_id=org_id)
     filtros = campanha.get("filtros") or {}
     empresas = listar_empresas_db(
         cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), busca=filtros.get("busca"),
@@ -58,7 +58,7 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         }
         for e in empresas if e.get("cnpj_completo")
     }
-    resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas)
+    resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=org_id)
     create_notificacao(
         "campanha_concluida", f"Campanha {campanha['nome']} concluida",
         f"Enviados: {resultado.get('sucessos', 0)} | Erros: {resultado.get('erros', 0)}",

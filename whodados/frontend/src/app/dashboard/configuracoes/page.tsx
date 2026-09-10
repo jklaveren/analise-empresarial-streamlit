@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 async function get<T>(p: string) {
@@ -234,6 +236,7 @@ function RegrasTab() {
 function UsuariosTab() {
   const { username: meuUsername } = useAuth();
   const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
+  const [orgs, setOrgs] = useState<Organizacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
   const [mostrarNovo, setMostrarNovo] = useState(false);
@@ -241,11 +244,14 @@ function UsuariosTab() {
   const [novoEmail, setNovoEmail] = useState("");
   const [novaSenha, setNovaSenha] = useState("");
   const [novoAdmin, setNovoAdmin] = useState(false);
+  const [novoOrgs, setNovoOrgs] = useState<number[]>([]);
   const [criando, setCriando] = useState(false);
 
   const carregar = async () => {
     try {
-      setUsuarios(await listarUsuarios());
+      const [us, os] = await Promise.all([listarUsuarios(), listarOrganizacoesAdmin()]);
+      setUsuarios(us);
+      setOrgs(os);
     } catch (err) {
       setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao carregar usuarios." });
     } finally {
@@ -254,6 +260,18 @@ function UsuariosTab() {
   };
 
   useEffect(() => { carregar(); }, []);
+
+  const toggleOrgUsuario = async (u: UsuarioAdmin, orgId: number) => {
+    setFb(null);
+    const atual = u.organizacao_ids || [];
+    const novos = atual.includes(orgId) ? atual.filter(id => id !== orgId) : [...atual, orgId];
+    try {
+      await definirEmpresasUsuario(u.id, novos);
+      await carregar();
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao definir empresas." });
+    }
+  };
 
   const toggle = async (u: UsuarioAdmin, campo: "is_admin" | "is_active") => {
     setFb(null);
@@ -281,9 +299,9 @@ function UsuariosTab() {
     setFb(null);
     setCriando(true);
     try {
-      await criarUsuarioAdmin({ username: novoUser, password: novaSenha, email: novoEmail || undefined, is_admin: novoAdmin });
+      await criarUsuarioAdmin({ username: novoUser, password: novaSenha, email: novoEmail || undefined, is_admin: novoAdmin, organizacao_ids: novoOrgs });
       setFb({ t: "s", m: `Usuario '${novoUser}' criado.` });
-      setNovoUser(""); setNovoEmail(""); setNovaSenha(""); setNovoAdmin(false); setMostrarNovo(false);
+      setNovoUser(""); setNovoEmail(""); setNovaSenha(""); setNovoAdmin(false); setNovoOrgs([]); setMostrarNovo(false);
       await carregar();
     } catch (err) {
       setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao criar usuario." });
@@ -305,7 +323,18 @@ function UsuariosTab() {
               <div className="font-medium text-slate-800">{u.username} {u.username === meuUsername && <span className="text-xs text-slate-400">(você)</span>}</div>
               <div className="text-xs text-slate-500">{u.email || "sem e-mail"}</div>
             </div>
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-3 text-sm flex-wrap">
+              {orgs.length > 0 && (
+                <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
+                  <span className="text-xs text-slate-400">Empresas:</span>
+                  {orgs.map(o => (
+                    <label key={o.id} className="flex items-center gap-1 text-slate-600">
+                      <input type="checkbox" checked={(u.organizacao_ids || []).includes(o.id)} onChange={() => toggleOrgUsuario(u, o.id)} />
+                      {o.nome}
+                    </label>
+                  ))}
+                </div>
+              )}
               <label className="flex items-center gap-1 text-slate-600">
                 <input type="checkbox" checked={u.is_admin} onChange={() => toggle(u, "is_admin")} />
                 Admin
@@ -332,6 +361,17 @@ function UsuariosTab() {
               Administrador
             </label>
           </div>
+          {orgs.length > 0 && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-sm text-slate-500">Empresas que pode acessar:</span>
+              {orgs.map(o => (
+                <label key={o.id} className="flex items-center gap-1 text-sm text-slate-600">
+                  <input type="checkbox" checked={novoOrgs.includes(o.id)} onChange={e => setNovoOrgs(v => e.target.checked ? [...v, o.id] : v.filter(id => id !== o.id))} />
+                  {o.nome}
+                </label>
+              ))}
+            </div>
+          )}
           <div className="flex gap-2">
             <button type="submit" disabled={criando} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{criando ? "Criando..." : "Criar usuario"}</button>
             <button type="button" onClick={() => setMostrarNovo(false)} className="px-4 py-2 rounded text-slate-600 hover:bg-slate-100">Cancelar</button>
@@ -344,7 +384,149 @@ function UsuariosTab() {
   );
 }
 
-type Aba = "perfil" | "regras" | "usuarios" | "email" | "sobre";
+function EmpresasTab() {
+  const [orgs, setOrgs] = useState<Organizacao[]>([]);
+  const [orgId, setOrgId] = useState<number | null>(null);
+  const [cfg, setCfg] = useState<OrgEmailConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [salvando, setSalvando] = useState(false);
+  const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+  const [logoV, setLogoV] = useState(0); // cache-buster do preview do logo
+
+  // Form
+  const [emailFrom, setEmailFrom] = useState("");
+  const [emailFromName, setEmailFromName] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState(587);
+  const [user, setUser] = useState("");
+  const [pw, setPw] = useState("");
+  const [tls, setTls] = useState(true);
+  const [assinatura, setAssinatura] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const os = await listarOrganizacoesAdmin();
+        setOrgs(os);
+        if (os[0]) setOrgId(os[0].id);
+      } catch (err) {
+        setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao carregar empresas." });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (orgId == null) return;
+    (async () => {
+      setFb(null);
+      try {
+        const c = await getOrgEmailConfig(orgId);
+        setCfg(c);
+        setEmailFrom(c.email_from || "");
+        setEmailFromName(c.email_from_name || "");
+        setHost(c.smtp_host || "");
+        setPort(c.smtp_port || 587);
+        setUser(c.smtp_username || "");
+        setPw("");
+        setTls(c.smtp_use_tls ?? true);
+        setAssinatura(c.assinatura_html || "");
+        setLogoV(v => v + 1);
+      } catch (err) {
+        setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao carregar config." });
+      }
+    })();
+  }, [orgId]);
+
+  const salvar = async () => {
+    if (orgId == null) return;
+    setFb(null);
+    setSalvando(true);
+    try {
+      const c = await setOrgEmailConfig(orgId, {
+        email_from: emailFrom, email_from_name: emailFromName,
+        smtp_host: host, smtp_port: port, smtp_username: user,
+        smtp_use_tls: tls, assinatura_html: assinatura,
+        ...(pw ? { smtp_password: pw } : {}),
+      });
+      setCfg(c);
+      setPw("");
+      setFb({ t: "s", m: "Configuração da empresa salva." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao salvar." });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const enviarLogo = async (file: File | null) => {
+    if (!file || orgId == null) return;
+    setFb(null);
+    try {
+      await uploadOrgLogo(orgId, file);
+      setLogoV(v => v + 1);
+      setCfg(c => c ? { ...c, tem_logo: true } : c);
+      setFb({ t: "s", m: "Logo atualizado." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao enviar logo." });
+    }
+  };
+
+  if (loading) return <div className="p-8 text-slate-500">Carregando...</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-medium text-slate-600">Empresa:</span>
+        <select value={orgId ?? ""} onChange={e => setOrgId(Number(e.target.value))} className="border rounded px-3 py-2 text-sm font-semibold">
+          {orgs.map(o => <option key={o.id} value={o.id}>{o.nome}</option>)}
+        </select>
+        {cfg && <span className={`text-xs px-2 py-1 rounded ${cfg.configurado ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{cfg.configurado ? "SMTP configurado" : "SMTP não configurado"}</span>}
+      </div>
+
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Remetente</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <input placeholder="Nome do remetente (ex: NRA Consultoria)" value={emailFromName} onChange={e => setEmailFromName(e.target.value)} className="border rounded px-3 py-2" />
+          <input type="email" placeholder="E-mail do remetente" value={emailFrom} onChange={e => setEmailFrom(e.target.value)} className="border rounded px-3 py-2" />
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Servidor SMTP</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <input placeholder="Host (ex: smtp.gmail.com)" value={host} onChange={e => setHost(e.target.value)} className="border rounded px-3 py-2" />
+          <input type="number" placeholder="Porta" value={port} onChange={e => setPort(Number(e.target.value))} className="border rounded px-3 py-2" />
+          <input placeholder="Usuário SMTP" value={user} onChange={e => setUser(e.target.value)} className="border rounded px-3 py-2" />
+          <input type="password" placeholder="Senha (deixe em branco p/ manter)" value={pw} onChange={e => setPw(e.target.value)} className="border rounded px-3 py-2" />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={tls} onChange={e => setTls(e.target.checked)} /> Usar TLS</label>
+      </div>
+
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Assinatura de e-mail</h3>
+        <p className="text-xs text-slate-500">HTML livre. Use <code>{"{{logo}}"}</code> onde quiser o logo da empresa. Ex: <code>{'<img src="{{logo}}" height="48"> NRA Consultoria — (51) 9999-9999'}</code></p>
+        <textarea value={assinatura} onChange={e => setAssinatura(e.target.value)} rows={5} className="w-full border rounded px-3 py-2 font-mono text-sm" placeholder="<img src='{{logo}}' height='48'><br>Sua assinatura aqui" />
+      </div>
+
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Logo</h3>
+        <div className="flex items-center gap-4">
+          {orgId != null && cfg?.tem_logo && (
+            <img src={`${API_BASE}/api/v1/organizacoes/${orgId}/logo?v=${logoV}`} alt="Logo" className="h-14 border rounded bg-slate-50 p-1" />
+          )}
+          <input type="file" accept="image/*" onChange={e => enviarLogo(e.target.files?.[0] ?? null)} className="text-sm" />
+        </div>
+      </div>
+
+      {fb && <div className={`p-3 rounded text-sm ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{fb.m}</div>}
+      <button onClick={salvar} disabled={salvando} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{salvando ? "Salvando..." : "Salvar configuração"}</button>
+    </div>
+  );
+}
+
+type Aba = "perfil" | "regras" | "usuarios" | "empresas" | "email" | "sobre";
 
 export default function ConfiguracoesPage() {
   const { isAdmin } = useAuth();
@@ -354,7 +536,8 @@ export default function ConfiguracoesPage() {
     { id: "perfil", label: "Perfil", icone: "👤" },
     { id: "regras", label: "Regras do CRM/Monitor", icone: "🎯" },
     { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
-    { id: "email", label: "Email", icone: "✉️" },
+    { id: "empresas", label: "Empresas", icone: "🏢", somenteAdmin: true },
+    { id: "email", label: "Email (global)", icone: "✉️", somenteAdmin: true },
     { id: "sobre", label: "Sobre", icone: "ℹ️" },
   ];
 
@@ -382,7 +565,8 @@ export default function ConfiguracoesPage() {
       {aba === "perfil" && <PerfilTab />}
       {aba === "regras" && <RegrasTab />}
       {aba === "usuarios" && isAdmin && <UsuariosTab />}
-      {aba === "email" && <EmailTab />}
+      {aba === "empresas" && isAdmin && <EmpresasTab />}
+      {aba === "email" && isAdmin && <EmailTab />}
       {aba === "sobre" && <SobreTab />}
     </div>
   );

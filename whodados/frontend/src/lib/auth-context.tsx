@@ -3,16 +3,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "./api";
+import type { Organizacao } from "./api";
 
 interface AuthState {
   username: string | null;
   isAdmin: boolean;
   isLoading: boolean;
+  orgs: Organizacao[];
+  activeOrgId: number | null;
 }
 
 interface AuthContextValue extends AuthState {
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   logout: () => void;
+  switchOrg: (orgId: number) => void;
+  activeOrg: Organizacao | null;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -27,31 +32,65 @@ function decodeUsernameFromToken(token: string): { username: string | null; isAd
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>({ username: null, isAdmin: false, isLoading: true });
+  const [state, setState] = useState<AuthState>({
+    username: null, isAdmin: false, isLoading: true, orgs: [], activeOrgId: null,
+  });
+
+  // Carrega as empresas do usuario e escolhe a ativa (a salva, se ainda valida,
+  // senao a primeira). Precisa do token ja setado.
+  const carregarOrgs = useCallback(async () => {
+    try {
+      const orgs = await api.listarOrganizacoes();
+      const salva = api.getActiveOrgId();
+      const ativa = orgs.find(o => o.id === salva)?.id ?? orgs[0]?.id ?? null;
+      if (ativa) api.setActiveOrgId(ativa);
+      setState(s => ({ ...s, orgs, activeOrgId: ativa }));
+    } catch {
+      setState(s => ({ ...s, orgs: [], activeOrgId: null }));
+    }
+  }, []);
 
   useEffect(() => {
     const token = api.getToken();
     if (token) {
       const { username, isAdmin } = decodeUsernameFromToken(token);
-      setState({ username, isAdmin, isLoading: false });
+      setState(s => ({ ...s, username, isAdmin, isLoading: false }));
+      carregarOrgs();
     } else {
       setState(s => ({ ...s, isLoading: false }));
     }
-  }, []);
+  }, [carregarOrgs]);
 
   const login = useCallback(async (username: string, password: string, rememberMe = false) => {
     const res = await api.login(username, password, rememberMe);
     api.setToken(res.access_token);
     const { isAdmin } = decodeUsernameFromToken(res.access_token);
-    setState({ username, isAdmin, isLoading: false });
-  }, []);
+    setState(s => ({ ...s, username, isAdmin, isLoading: false }));
+    await carregarOrgs();
+  }, [carregarOrgs]);
 
   const logout = useCallback(() => {
     api.removeToken();
-    setState({ username: null, isAdmin: false, isLoading: false });
+    api.clearActiveOrgId();
+    setState({ username: null, isAdmin: false, isLoading: false, orgs: [], activeOrgId: null });
   }, []);
 
-  const value = useMemo(() => ({ ...state, login, logout }), [state, login, logout]);
+  const switchOrg = useCallback((orgId: number) => {
+    api.setActiveOrgId(orgId);
+    setState(s => ({ ...s, activeOrgId: orgId }));
+    // Recarrega para que todas as telas rebusquem os dados sob a nova empresa.
+    if (typeof window !== "undefined") window.location.reload();
+  }, []);
+
+  const activeOrg = useMemo(
+    () => state.orgs.find(o => o.id === state.activeOrgId) ?? null,
+    [state.orgs, state.activeOrgId],
+  );
+
+  const value = useMemo(
+    () => ({ ...state, login, logout, switchOrg, activeOrg }),
+    [state, login, logout, switchOrg, activeOrg],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

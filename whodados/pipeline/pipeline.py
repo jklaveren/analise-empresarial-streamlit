@@ -514,9 +514,12 @@ def stage_detect() -> None:
     print(f"PGFN_TRIMESTRE={ultimo_trimestre.rstrip('/')}")
 
 
-def stage_download_rf() -> None:
-    _cabecalho("DOWNLOAD RF")
-    arquivos = AUX + EMPRESAS + ESTABS + SOCIOS
+def _baixar_lista(titulo: str, arquivos: list) -> None:
+    """Baixa uma lista de arquivos RF em paralelo (RF_DOWNLOAD_WORKERS conexoes)
+    e falha o estagio se algum zip ficar invalido apos as retentativas -- assim
+    o cache guarda so o que presta e o 'Re-run failed jobs' retoma so o que
+    faltou. Usado pelos sub-estagios de download (empresas/estab/socios)."""
+    _cabecalho(f"DOWNLOAD {titulo}")
     workers = max(1, int(os.environ.get("RF_DOWNLOAD_WORKERS", "5")))
     print(f"Baixando {len(arquivos)} arquivos com ate {workers} conexoes paralelas...")
 
@@ -529,13 +532,34 @@ def stage_download_rf() -> None:
             except Exception as e:  # baixar_rf nao levanta, mas por seguranca
                 print(f"  [ERRO] Excecao inesperada ao baixar {arq}: {e}")
 
-    # Checagem final: se algum zip ficou invalido apos as retentativas, falha o
-    # estagio. Assim o cache guarda so os arquivos integros e o "Re-run failed
-    # jobs" retoma baixando apenas o que faltou (o resto ja esta em cache).
     invalidos = [a for a in arquivos if not _zip_valido(RAW / a)]
     if invalidos:
-        raise SystemExit(f"Download RF incompleto — zips invalidos: {invalidos}")
-    print("\n🏁 Download RF concluido (todos os zips integros).")
+        raise SystemExit(f"Download {titulo} incompleto — zips invalidos: {invalidos}")
+    print(f"\n🏁 Download {titulo} concluido (todos os zips integros).")
+
+
+def stage_download_rf_empresas() -> None:
+    """Empresas0-9 + auxiliares (Cnaes, Municipios)."""
+    _baixar_lista("RF EMPRESAS (+ aux)", AUX + EMPRESAS)
+
+
+def stage_download_rf_estab() -> None:
+    """Estabelecimentos0-9 (o mais pesado do download)."""
+    _baixar_lista("RF ESTABELECIMENTOS", ESTABS)
+
+
+def stage_download_rf_socios() -> None:
+    """Socios0-9."""
+    _baixar_lista("RF SOCIOS", SOCIOS)
+
+
+def stage_download_rf() -> None:
+    """Baixa todos os arquivos RF -- wrapper dos 3 sub-estagios (modo 'all'
+    local). No GitHub Actions cada sub-estagio roda separado, com timeout
+    proprio e re-executavel isolado."""
+    stage_download_rf_empresas()
+    stage_download_rf_estab()
+    stage_download_rf_socios()
 
 
 def stage_download_pgfn() -> None:
@@ -626,7 +650,11 @@ def rodar_pipeline() -> None:
 _STAGES = {
     "all": rodar_pipeline,
     "detect": stage_detect,
+    # download-rf roda os 3 abaixo em sequencia; no CI cada um roda separado.
     "download-rf": stage_download_rf,
+    "download-rf-empresas": stage_download_rf_empresas,
+    "download-rf-estab": stage_download_rf_estab,
+    "download-rf-socios": stage_download_rf_socios,
     "download-pgfn": stage_download_pgfn,
     # process-rf roda os 4 abaixo em sequencia; no CI cada um roda separado.
     "process-rf": stage_process_rf,

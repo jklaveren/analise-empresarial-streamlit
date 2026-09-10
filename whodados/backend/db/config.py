@@ -144,6 +144,10 @@ def _run_ensure_multiempresa(os):
             email_from_name VARCHAR(120),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )""")
+        # Assinatura de e-mail por empresa: HTML livre (com {{logo}}) + logo.
+        cur.execute("ALTER TABLE org_smtp_config ADD COLUMN IF NOT EXISTS assinatura_html TEXT")
+        cur.execute("ALTER TABLE org_smtp_config ADD COLUMN IF NOT EXISTS logo_data BYTEA")
+        cur.execute("ALTER TABLE org_smtp_config ADD COLUMN IF NOT EXISTS logo_mime VARCHAR(50)")
 
         # --- Seed das empresas (idempotente por slug) ---
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")

@@ -1,5 +1,5 @@
 """Admin Endpoints - WhoDados."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import Dict, Any
 from .auth import get_current_user
 from .mailer import (
@@ -10,6 +10,8 @@ from typing import List, Optional
 from .db import (
     get_pipeline_metadata, get_sla_config, set_sla_config,
     list_all_users, update_user_flags,
+    listar_todas_organizacoes, get_orgs_do_user_id, definir_acesso_usuario_orgs,
+    get_org_smtp_config, set_org_smtp_config, set_org_logo,
 )
 from .auth import criar_usuario, hash_senha
 from .db.service import update_user_password
@@ -110,6 +112,56 @@ async def update_sla(data: Dict, current_user: Dict = Depends(require_admin)) ->
     return get_sla_config()
 
 
+# ==================== EMPRESAS (ORGANIZACOES) ====================
+
+@router.get("/organizacoes")
+async def admin_listar_organizacoes(current_user: Dict = Depends(require_admin)) -> List[Dict[str, Any]]:
+    """Lista todas as empresas (para gestao de acesso e config de e-mail)."""
+    return listar_todas_organizacoes()
+
+
+@router.get("/organizacoes/{organizacao_id}/smtp")
+async def admin_get_org_smtp(organizacao_id: int, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Config de e-mail (SMTP + assinatura) da empresa, sem a senha."""
+    cfg = get_org_smtp_config(organizacao_id)
+    return cfg or {"organizacao_id": organizacao_id, "configurado": False, "tem_logo": False}
+
+
+@router.put("/organizacoes/{organizacao_id}/smtp")
+async def admin_set_org_smtp(organizacao_id: int, data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Cria/atualiza a config de e-mail da empresa (remetente, SMTP, assinatura).
+    Senha vazia mantem a atual."""
+    cfg = set_org_smtp_config(
+        organizacao_id,
+        smtp_host=(data.get("smtp_host") or "").strip() or None,
+        smtp_port=data.get("smtp_port"),
+        smtp_username=(data.get("smtp_username") or "").strip() or None,
+        smtp_password=data.get("smtp_password") or None,
+        smtp_use_tls=data.get("smtp_use_tls"),
+        email_from=(data.get("email_from") or "").strip() or None,
+        email_from_name=(data.get("email_from_name") or "").strip() or None,
+        assinatura_html=data.get("assinatura_html"),
+    )
+    logger.info(f"Config de e-mail da empresa {organizacao_id} atualizada por {current_user.get('sub')}")
+    return cfg
+
+
+_LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
+_LOGO_TIPOS_OK = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
+
+
+@router.post("/organizacoes/{organizacao_id}/logo")
+async def admin_upload_org_logo(organizacao_id: int, arquivo: UploadFile = File(...), current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Envia/substitui o logo da empresa (usado na assinatura de e-mail via {{logo}})."""
+    if arquivo.content_type not in _LOGO_TIPOS_OK:
+        raise HTTPException(status_code=400, detail="Formato invalido (use PNG, JPG, WEBP ou GIF)")
+    conteudo = await arquivo.read()
+    if len(conteudo) > _LOGO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Logo muito grande (limite de 2 MB)")
+    set_org_logo(organizacao_id, conteudo, arquivo.content_type)
+    return {"sucesso": True, "tem_logo": True}
+
+
 def _serializar_usuario(u: Dict) -> Dict[str, Any]:
     return {
         "id": u["id"],
@@ -118,30 +170,46 @@ def _serializar_usuario(u: Dict) -> Dict[str, Any]:
         "is_admin": bool(u.get("is_admin")),
         "is_active": bool(u.get("is_active", True)),
         "created_at": u["created_at"].isoformat() if u.get("created_at") else None,
+        "organizacao_ids": get_orgs_do_user_id(u["id"]),
     }
 
 
 @router.get("/usuarios")
 async def listar_usuarios(current_user: Dict = Depends(require_admin)) -> List[Dict[str, Any]]:
-    """Lista todos os usuarios do sistema. So admin."""
+    """Lista todos os usuarios do sistema, com as empresas de cada um. So admin."""
     return [_serializar_usuario(u) for u in list_all_users()]
 
 
 @router.post("/usuarios")
 async def criar_novo_usuario(data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
-    """Cria um novo usuario. So admin."""
+    """Cria um novo usuario e ja define suas empresas. So admin."""
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
     email = (data.get("email") or "").strip() or None
     is_admin = bool(data.get("is_admin", False))
+    organizacao_ids = data.get("organizacao_ids") or []
     if not username or len(password) < 8:
         raise HTTPException(status_code=400, detail="Usuario obrigatorio e senha precisa ter ao menos 8 caracteres")
     try:
         user = criar_usuario(username, password, email, is_admin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    logger.info(f"Usuario '{username}' criado por {current_user.get('sub')}")
+    if user and user.get("id") and organizacao_ids:
+        definir_acesso_usuario_orgs(user["id"], [int(o) for o in organizacao_ids])
+    logger.info(f"Usuario '{username}' criado por {current_user.get('sub')} (empresas: {organizacao_ids})")
     return user
+
+
+@router.put("/usuarios/{user_id}/organizacoes")
+async def definir_empresas_usuario(user_id: int, data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Define a quais empresas um usuario tem acesso (substitui as anteriores)."""
+    alvo = next((u for u in list_all_users() if u["id"] == user_id), None)
+    if not alvo:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    ids = [int(o) for o in (data.get("organizacao_ids") or [])]
+    definir_acesso_usuario_orgs(user_id, ids)
+    logger.info(f"Empresas do usuario '{alvo['username']}' definidas por {current_user.get('sub')}: {ids}")
+    return {"sucesso": True, "organizacao_ids": get_orgs_do_user_id(user_id)}
 
 
 @router.patch("/usuarios/{user_id}")
