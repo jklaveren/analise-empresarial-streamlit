@@ -1,7 +1,7 @@
 """WhoDados API Endpoints - Campanhas de e-mail (criacao e execucao)."""
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict
-from .auth import get_current_user
+from .auth import get_current_user, get_active_org
 from .db import (
     create_campanha, get_campanha, get_all_campanhas,
     get_template, create_notificacao, listar_empresas_db,
@@ -33,7 +33,7 @@ async def get_campanha_by_id(campanha_id: int, current_user: Dict = Depends(get_
 
 
 @router.post("/campanhas/{campanha_id}/executar")
-async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user)):
+async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
     campanha = get_campanha(campanha_id)
     if not campanha:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
@@ -62,6 +62,6 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
     create_notificacao(
         "campanha_concluida", f"Campanha {campanha['nome']} concluida",
         f"Enviados: {resultado.get('sucessos', 0)} | Erros: {resultado.get('erros', 0)}",
-        user_id=current_user.get("sub"),
+        user_id=current_user.get("sub"), organizacao_id=org_id,
     )
     return resultado

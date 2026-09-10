@@ -168,6 +168,13 @@ def _run_ensure_multiempresa(os):
                 f"WHERE organizacao_id IS NULL"
             )
 
+        # --- CRM: troca o UNIQUE(cnpj) global pelo UNIQUE(empresa, cnpj) ---
+        # O antigo impedia as duas empresas terem CRM do mesmo CNPJ. Rodado
+        # depois do backfill (coluna ja preenchida). Idempotente. O ON CONFLICT
+        # em create_or_update_crm depende deste indice composto.
+        cur.execute("ALTER TABLE crm DROP CONSTRAINT IF EXISTS crm_cnpj_key")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_org_cnpj ON crm(organizacao_id, cnpj)")
+
         # --- Migra o SMTP global (.env) para a NRA como valor inicial ---
         smtp_host = os.getenv("SMTP_HOST", "").strip()
         if smtp_host:
