@@ -606,6 +606,73 @@ def update_user_flags(user_id: int, is_admin: Optional[bool] = None, is_active: 
         return cur.rowcount > 0
 
 
+# ==================== MULTI-EMPRESA (ORGANIZACOES) ====================
+# Ver plano/memoria: whodados-multiempresa-nra-syvp. Base de leads e
+# compartilhada; o CONTROLE (crm, campanhas, templates, monitor, notificacoes,
+# remetente) e isolado por organizacao. O acesso e por usuario.
+
+def listar_organizacoes_do_usuario(username: str) -> List[Dict[str, Any]]:
+    """Empresas que o usuario pode operar (para o seletor de empresa ativa)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.id, o.nome, o.slug, o.ativo
+            FROM organizacoes o
+            JOIN usuario_organizacoes uo ON uo.organizacao_id = o.id
+            JOIN app_users u ON u.id = uo.user_id
+            WHERE u.username = %s AND o.ativo = TRUE
+            ORDER BY o.id
+            """,
+            (username,),
+        )
+        return cur.fetchall()
+
+
+def usuario_tem_acesso_org(username: str, organizacao_id: int) -> bool:
+    """True se o usuario esta vinculado aquela empresa."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM usuario_organizacoes uo
+            JOIN app_users u ON u.id = uo.user_id
+            WHERE u.username = %s AND uo.organizacao_id = %s
+            """,
+            (username, organizacao_id),
+        )
+        return cur.fetchone() is not None
+
+
+def listar_todas_organizacoes() -> List[Dict[str, Any]]:
+    """Todas as empresas (uso administrativo)."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id, nome, slug, ativo FROM organizacoes ORDER BY id")
+        return cur.fetchall()
+
+
+def definir_acesso_usuario_orgs(user_id: int, organizacao_ids: List[int]) -> None:
+    """Define exatamente a quais empresas um usuario tem acesso (substitui as
+    anteriores). Lista vazia = sem acesso a nenhuma."""
+    with get_db_cursor() as cur:
+        cur.execute("DELETE FROM usuario_organizacoes WHERE user_id = %s", (user_id,))
+        for org_id in organizacao_ids or []:
+            cur.execute(
+                "INSERT INTO usuario_organizacoes (user_id, organizacao_id) "
+                "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, org_id),
+            )
+
+
+def get_orgs_do_user_id(user_id: int) -> List[int]:
+    """IDs das empresas de um usuario (por id) -- usado ao listar usuarios."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT organizacao_id FROM usuario_organizacoes WHERE user_id = %s ORDER BY organizacao_id",
+            (user_id,),
+        )
+        return [r["organizacao_id"] for r in cur.fetchall()]
+
+
 def _tabela_existe(cur, nome_tabela: str) -> bool:
     cur.execute(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s) AS existe",
