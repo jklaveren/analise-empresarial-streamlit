@@ -103,15 +103,31 @@ jobs:
         timeout-minutes: 45
         run: python whodados/pipeline/pipeline.py download-pgfn
 
-      - name: "Estagio 3/5 — Processar RF (estab + empresas + socios + municipios + cnaes)"
-        timeout-minutes: 150
-        run: python whodados/pipeline/pipeline.py process-rf
+      # Processamento RF fracionado em 4 sub-estagios: o pesado (estab,
+      # empresas, socios -- cada um le 10 zips) ganha timeout proprio e pode
+      # ser re-executado isolado. Um set completo ja levou +6h; assim uma
+      # etapa que estoure nao obriga a refazer as outras (os CSVs ficam em out/).
+      - name: "Estagio 3/8 — Processar aux (municipios + CNAE)"
+        timeout-minutes: 15
+        run: python whodados/pipeline/pipeline.py process-aux
 
-      - name: "Estagio 4/5 — Processar PGFN (consolida divida por CNPJ)"
+      - name: "Estagio 4/8 — Processar estabelecimentos (matrizes ativas RS)"
+        timeout-minutes: 120
+        run: python whodados/pipeline/pipeline.py process-estab
+
+      - name: "Estagio 5/8 — Processar empresas (nomes + capital social)"
+        timeout-minutes: 120
+        run: python whodados/pipeline/pipeline.py process-empresas
+
+      - name: "Estagio 6/8 — Processar socios"
+        timeout-minutes: 120
+        run: python whodados/pipeline/pipeline.py process-socios
+
+      - name: "Estagio 7/8 — Processar PGFN (consolida divida por CNPJ)"
         timeout-minutes: 60
         run: python whodados/pipeline/pipeline.py process-pgfn
 
-      - name: "Estagio 5/5 — Merge (gera subset master + metadata)"
+      - name: "Estagio 8/8 — Merge (gera subset master + metadata)"
         timeout-minutes: 30
         run: python whodados/pipeline/pipeline.py merge
 
