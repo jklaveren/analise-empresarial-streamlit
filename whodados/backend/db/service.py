@@ -115,12 +115,13 @@ def _com_imagem_url(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         row["imagem_url"] = None
     return row
 
-def create_template(nome: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, criado_por: Optional[str] = None, categoria_cnae: Optional[str] = "todos") -> Dict[str, Any]:
+def create_template(nome: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, criado_por: Optional[str] = None, categoria_cnae: Optional[str] = "todos", organizacao_id: Optional[int] = None) -> Dict[str, Any]:
     with get_db_cursor() as cur:
-        cur.execute(f"INSERT INTO email_templates (nome, assunto, corpo_html, corpo_texto, criado_por, categoria_cnae) VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_TEMPLATE_COLS}", (nome, assunto, corpo_html, corpo_texto, criado_por, categoria_cnae or "todos"))
+        cur.execute(f"INSERT INTO email_templates (nome, assunto, corpo_html, corpo_texto, criado_por, categoria_cnae, organizacao_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_TEMPLATE_COLS}", (nome, assunto, corpo_html, corpo_texto, criado_por, categoria_cnae or "todos", organizacao_id))
         return _com_imagem_url(cur.fetchone())
 
-def update_template(template_id: int, nome: Optional[str] = None, assunto: Optional[str] = None, corpo_html: Optional[str] = None, corpo_texto: Optional[str] = None, categoria_cnae: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def update_template(template_id: int, nome: Optional[str] = None, assunto: Optional[str] = None, corpo_html: Optional[str] = None, corpo_texto: Optional[str] = None, categoria_cnae: Optional[str] = None, organizacao_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    org_sql = " AND organizacao_id = %s" if organizacao_id is not None else ""
     with get_db_cursor() as cur:
         fields = []
         params = []
@@ -130,45 +131,63 @@ def update_template(template_id: int, nome: Optional[str] = None, assunto: Optio
         if corpo_texto is not None: fields.append("corpo_texto = %s"); params.append(corpo_texto)
         if categoria_cnae is not None: fields.append("categoria_cnae = %s"); params.append(categoria_cnae)
         if not fields:
-            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE id = %s", (template_id,))
+            sel_params = [template_id] + ([organizacao_id] if organizacao_id is not None else [])
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE id = %s{org_sql}", sel_params)
             return _com_imagem_url(cur.fetchone())
         fields.append("updated_at = NOW()")
         params.append(template_id)
-        sql = "UPDATE email_templates SET " + ", ".join(fields) + f" WHERE id = %s RETURNING {_TEMPLATE_COLS}"
+        if organizacao_id is not None:
+            params.append(organizacao_id)
+        sql = "UPDATE email_templates SET " + ", ".join(fields) + f" WHERE id = %s{org_sql} RETURNING {_TEMPLATE_COLS}"
         cur.execute(sql, params)
         return _com_imagem_url(cur.fetchone())
 
-def get_template(template_id: int) -> Optional[Dict[str, Any]]:
+def get_template(template_id: int, organizacao_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE id = %s", (template_id,))
+        if organizacao_id is not None:
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE id = %s AND organizacao_id = %s", (template_id, organizacao_id))
+        else:
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE id = %s", (template_id,))
         return _com_imagem_url(cur.fetchone())
 
-def get_all_templates() -> List[Dict[str, Any]]:
+def get_all_templates(organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates ORDER BY created_at DESC")
+        if organizacao_id is not None:
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE organizacao_id = %s ORDER BY created_at DESC", (organizacao_id,))
+        else:
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates ORDER BY created_at DESC")
         return [_com_imagem_url(r) for r in cur.fetchall()]
 
-def delete_template(template_id: int) -> bool:
+def delete_template(template_id: int, organizacao_id: Optional[int] = None) -> bool:
     with get_db_cursor() as cur:
-        cur.execute("DELETE FROM email_templates WHERE id = %s", (template_id,))
+        if organizacao_id is not None:
+            cur.execute("DELETE FROM email_templates WHERE id = %s AND organizacao_id = %s", (template_id, organizacao_id))
+        else:
+            cur.execute("DELETE FROM email_templates WHERE id = %s", (template_id,))
         return cur.rowcount > 0
 
-def get_templates_by_categoria(categoria_cnae: str) -> List[Dict[str, Any]]:
-    """Retorna templates filtrados por categoria. Se categoria = 'todos', traz todos."""
+def get_templates_by_categoria(categoria_cnae: str, organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Retorna templates filtrados por categoria (e por empresa, se informada).
+    Se categoria = 'todos', traz todos (da empresa)."""
+    org_sql = " AND organizacao_id = %s" if organizacao_id is not None else ""
     with get_db_cursor() as cur:
         if categoria_cnae == "todos":
-            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE categoria_cnae = 'todos' ORDER BY created_at DESC")
+            params = [organizacao_id] if organizacao_id is not None else []
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE categoria_cnae = 'todos'{org_sql} ORDER BY created_at DESC", params)
         else:
             # Pega templates da categoria especifica + templates 'todos' (fallback)
-            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE categoria_cnae IN (%s, 'todos') ORDER BY categoria_cnae DESC, created_at DESC", (categoria_cnae,))
+            params = [categoria_cnae] + ([organizacao_id] if organizacao_id is not None else [])
+            cur.execute(f"SELECT {_TEMPLATE_COLS} FROM email_templates WHERE categoria_cnae IN (%s, 'todos'){org_sql} ORDER BY categoria_cnae DESC, created_at DESC", params)
         return [_com_imagem_url(r) for r in cur.fetchall()]
 
-def set_template_imagem(template_id: int, imagem_bytes: bytes, mime: str) -> Optional[Dict[str, Any]]:
+def set_template_imagem(template_id: int, imagem_bytes: bytes, mime: str, organizacao_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Salva/substitui o card (imagem) de um template. Facilmente re-chamavel para trocar a imagem."""
+    org_sql = " AND organizacao_id = %s" if organizacao_id is not None else ""
+    params = [imagem_bytes, mime, template_id] + ([organizacao_id] if organizacao_id is not None else [])
     with get_db_cursor() as cur:
         cur.execute(
-            f"UPDATE email_templates SET imagem_data = %s, imagem_mime = %s, tem_imagem = TRUE, updated_at = NOW() WHERE id = %s RETURNING {_TEMPLATE_COLS}",
-            (imagem_bytes, mime, template_id),
+            f"UPDATE email_templates SET imagem_data = %s, imagem_mime = %s, tem_imagem = TRUE, updated_at = NOW() WHERE id = %s{org_sql} RETURNING {_TEMPLATE_COLS}",
+            params,
         )
         return _com_imagem_url(cur.fetchone())
 
@@ -178,35 +197,43 @@ def get_template_imagem(template_id: int) -> Optional[Dict[str, Any]]:
         cur.execute("SELECT imagem_data, imagem_mime FROM email_templates WHERE id = %s AND tem_imagem = TRUE", (template_id,))
         return cur.fetchone()
 
-def clear_template_imagem(template_id: int) -> Optional[Dict[str, Any]]:
+def clear_template_imagem(template_id: int, organizacao_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    org_sql = " AND organizacao_id = %s" if organizacao_id is not None else ""
+    params = [template_id] + ([organizacao_id] if organizacao_id is not None else [])
     with get_db_cursor() as cur:
         cur.execute(
-            f"UPDATE email_templates SET imagem_data = NULL, imagem_mime = NULL, tem_imagem = FALSE, updated_at = NOW() WHERE id = %s RETURNING {_TEMPLATE_COLS}",
-            (template_id,),
+            f"UPDATE email_templates SET imagem_data = NULL, imagem_mime = NULL, tem_imagem = FALSE, updated_at = NOW() WHERE id = %s{org_sql} RETURNING {_TEMPLATE_COLS}",
+            params,
         )
         return _com_imagem_url(cur.fetchone())
-def create_campanha(nome: str, template_id: int, filtros: Dict, created_by: Optional[str] = None, eh_sequencia: bool = False, agendada_para: Optional[str] = None) -> Dict[str, Any]:
+def create_campanha(nome: str, template_id: int, filtros: Dict, created_by: Optional[str] = None, eh_sequencia: bool = False, agendada_para: Optional[str] = None, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
     status = "agendada" if agendada_para else "rascunho"
     with get_db_cursor() as cur:
-        cur.execute("INSERT INTO campanhas (nome, template_id, filtros, status, created_by, eh_sequencia, agendada_para) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *", (nome, template_id, json.dumps(filtros or {}), status, created_by, eh_sequencia, agendada_para))
+        cur.execute("INSERT INTO campanhas (nome, template_id, filtros, status, created_by, eh_sequencia, agendada_para, organizacao_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *", (nome, template_id, json.dumps(filtros or {}), status, created_by, eh_sequencia, agendada_para, organizacao_id))
         row = cur.fetchone()
         if row and row.get("filtros") and isinstance(row["filtros"], str):
             try: row["filtros"] = json.loads(row["filtros"])
             except: pass
         return row
 
-def get_campanha(campanha_id: int) -> Optional[Dict[str, Any]]:
+def get_campanha(campanha_id: int, organizacao_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute("SELECT * FROM campanhas WHERE id = %s", (campanha_id,))
+        if organizacao_id is not None:
+            cur.execute("SELECT * FROM campanhas WHERE id = %s AND organizacao_id = %s", (campanha_id, organizacao_id))
+        else:
+            cur.execute("SELECT * FROM campanhas WHERE id = %s", (campanha_id,))
         row = cur.fetchone()
         if row and row.get("filtros") and isinstance(row["filtros"], str):
             try: row["filtros"] = json.loads(row["filtros"])
             except: pass
         return row
 
-def get_all_campanhas() -> List[Dict[str, Any]]:
+def get_all_campanhas(organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute("SELECT * FROM campanhas ORDER BY created_at DESC")
+        if organizacao_id is not None:
+            cur.execute("SELECT * FROM campanhas WHERE organizacao_id = %s ORDER BY created_at DESC", (organizacao_id,))
+        else:
+            cur.execute("SELECT * FROM campanhas ORDER BY created_at DESC")
         rows = cur.fetchall()
         for r in rows:
             if r and r.get("filtros") and isinstance(r["filtros"], str):
@@ -227,8 +254,17 @@ def update_campanha_status(campanha_id: int, status: str, **kwargs) -> Optional[
         return row
 
 def create_email_enviado(campaign_id: Optional[int], cnpj: str, email_destino: str, assunto: Optional[str] = None, sequencia_passo: int = 0) -> Dict[str, Any]:
+    # A empresa (organizacao_id) e' herdada da campanha via subquery, entao o
+    # motor de envio (mailer) nao precisa saber a empresa -- fica sempre
+    # consistente com a campanha a que o email pertence.
     with get_db_cursor() as cur:
-        cur.execute("INSERT INTO emails_enviados (campaign_id, cnpj, email_destino, assunto, sequencia_passo) VALUES (%s, %s, %s, %s, %s) RETURNING *", (campaign_id, cnpj, email_destino, assunto, sequencia_passo))
+        cur.execute(
+            """INSERT INTO emails_enviados
+                 (campaign_id, cnpj, email_destino, assunto, sequencia_passo, organizacao_id)
+               VALUES (%s, %s, %s, %s, %s, (SELECT organizacao_id FROM campanhas WHERE id = %s))
+               RETURNING *""",
+            (campaign_id, cnpj, email_destino, assunto, sequencia_passo, campaign_id),
+        )
         return cur.fetchone()
 
 def update_email_enviado(email_id: int, status: str, erro: Optional[str] = None) -> None:
@@ -280,6 +316,7 @@ def get_emails_for_monitor(
     sla_amarelo_dias: Optional[int] = None,
     limit: int = 200,
     offset: int = 0,
+    organizacao_id: Optional[int] = None,
 ):
     """
     Retorna e-mails enviados com cálculo de status de semáforo para follow-up.
@@ -300,6 +337,7 @@ def get_emails_for_monitor(
 
     with get_db_cursor() as cur:
         params: List[Any] = [sla_verde_dias, sla_amarelo_dias]
+        where_org = "AND e.organizacao_id = %s" if organizacao_id is not None else ""
         where_campaign = ""
         if campaign_id:
             where_campaign = "AND e.campaign_id = %s"
@@ -335,10 +373,13 @@ def get_emails_for_monitor(
             LEFT JOIN campanhas c ON c.id = e.campaign_id
             LEFT JOIN dados_empresas emp ON emp.cnpj_completo = e.cnpj
             WHERE e.enviado_em IS NOT NULL
+            {where_org}
             {where_campaign}
             ORDER BY e.enviado_em DESC
             LIMIT %s OFFSET %s
         """
+        if organizacao_id is not None:
+            params.append(organizacao_id)
         if campaign_id:
             params.append(campaign_id)
         params.extend([limit, offset])
@@ -347,7 +388,7 @@ def get_emails_for_monitor(
         return rows
 
 
-def get_monitor_stats(dias_sla: int = 7, sla_verde_dias: Optional[int] = None, sla_amarelo_dias: Optional[int] = None):
+def get_monitor_stats(dias_sla: int = 7, sla_verde_dias: Optional[int] = None, sla_amarelo_dias: Optional[int] = None, organizacao_id: Optional[int] = None):
     """Retorna estatísticas agregadas para o dashboard de monitoramento.
     Prazos configuraveis -- ver get_sla_config/set_sla_config."""
     if sla_verde_dias is None or sla_amarelo_dias is None:
@@ -355,8 +396,9 @@ def get_monitor_stats(dias_sla: int = 7, sla_verde_dias: Optional[int] = None, s
         sla_verde_dias = sla_verde_dias if sla_verde_dias is not None else sla["sla_verde_dias"]
         sla_amarelo_dias = sla_amarelo_dias if sla_amarelo_dias is not None else sla["sla_amarelo_dias"]
 
+    where_org = "WHERE organizacao_id = %(org)s" if organizacao_id is not None else ""
     with get_db_cursor() as cur:
-        sql = """
+        sql = f"""
             SELECT
                 COUNT(*) FILTER (WHERE status = 'enviado') as total_enviados,
                 COUNT(*) FILTER (
@@ -376,16 +418,19 @@ def get_monitor_stats(dias_sla: int = 7, sla_verde_dias: Optional[int] = None, s
                 ) as vermelho,
                 COUNT(*) FILTER (WHERE status != 'enviado') as cinza
             FROM emails_enviados
+            {where_org}
         """
-        cur.execute(sql, {"verde": sla_verde_dias, "amarelo": sla_amarelo_dias})
+        cur.execute(sql, {"verde": sla_verde_dias, "amarelo": sla_amarelo_dias, "org": organizacao_id})
         row = cur.fetchone()
         return dict(row) if row else {"total_enviados": 0, "verde": 0, "amarelo": 0, "vermelho": 0, "cinza": 0}
 
 
-def get_emails_vermelhos_para_followup(limite: int = 50):
+def get_emails_vermelhos_para_followup(limite: int = 50, organizacao_id: Optional[int] = None):
     """Retorna os e-mails mais críticos (vermelho) para disparo de follow-up."""
+    where_org = "AND e.organizacao_id = %s" if organizacao_id is not None else ""
+    params = ([organizacao_id] if organizacao_id is not None else []) + [limite]
     with get_db_cursor() as cur:
-        sql = """
+        sql = f"""
             SELECT
                 e.*,
                 c.nome as campanha_nome,
@@ -398,10 +443,11 @@ def get_emails_vermelhos_para_followup(limite: int = 50):
             WHERE e.enviado_em IS NOT NULL
               AND e.aberto_em IS NULL
               AND GREATEST(EXTRACT(EPOCH FROM (NOW() - e.enviado_em)) / 86400.0, 0) > 5
+              {where_org}
             ORDER BY e.enviado_em ASC
             LIMIT %s
         """
-        cur.execute(sql, (limite,))
+        cur.execute(sql, params)
         return cur.fetchall()
 
 
@@ -683,6 +729,63 @@ def get_orgs_do_user_id(user_id: int) -> List[int]:
             (user_id,),
         )
         return [r["organizacao_id"] for r in cur.fetchall()]
+
+
+# ---- Config de e-mail (SMTP + assinatura) por empresa ----
+
+def get_org_smtp_config(organizacao_id: int, incluir_password: bool = False) -> Optional[Dict[str, Any]]:
+    """Config de e-mail da empresa. Por padrao NAO retorna a senha (write-only);
+    o mailer chama com incluir_password=True para poder enviar. Retorna None se
+    a empresa nao tiver config."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT * FROM org_smtp_config WHERE organizacao_id = %s", (organizacao_id,))
+        row = cur.fetchone()
+    if not row:
+        return None
+    dados = dict(row)
+    dados["configurado"] = bool(dados.get("smtp_host") and dados.get("smtp_username"))
+    dados["tem_logo"] = bool(dados.get("logo_data"))
+    dados.pop("logo_data", None)  # bytes crus nunca vao no JSON
+    if not incluir_password:
+        dados.pop("smtp_password", None)
+    return dados
+
+
+def set_org_smtp_config(organizacao_id: int, smtp_host=None, smtp_port=None, smtp_username=None,
+                        smtp_password=None, smtp_use_tls=None, email_from=None,
+                        email_from_name=None, assinatura_html=None) -> Dict[str, Any]:
+    """Cria/atualiza a config de e-mail da empresa. So altera os campos passados
+    (None = mantem). Senha vazia/None nao sobrescreve a existente."""
+    with get_db_cursor() as cur:
+        cur.execute("INSERT INTO org_smtp_config (organizacao_id) VALUES (%s) ON CONFLICT (organizacao_id) DO NOTHING", (organizacao_id,))
+        campos, valores = [], []
+        for col, val in [
+            ("smtp_host", smtp_host), ("smtp_port", smtp_port), ("smtp_username", smtp_username),
+            ("smtp_use_tls", smtp_use_tls), ("email_from", email_from),
+            ("email_from_name", email_from_name), ("assinatura_html", assinatura_html),
+        ]:
+            if val is not None:
+                campos.append(f"{col} = %s"); valores.append(val)
+        if smtp_password:  # so troca a senha se veio uma nova nao-vazia
+            campos.append("smtp_password = %s"); valores.append(smtp_password)
+        if campos:
+            campos.append("updated_at = NOW()")
+            valores.append(organizacao_id)
+            cur.execute(f"UPDATE org_smtp_config SET {', '.join(campos)} WHERE organizacao_id = %s", valores)
+    return get_org_smtp_config(organizacao_id)
+
+
+def set_org_logo(organizacao_id: int, logo_bytes: bytes, mime: str) -> None:
+    with get_db_cursor() as cur:
+        cur.execute("INSERT INTO org_smtp_config (organizacao_id) VALUES (%s) ON CONFLICT (organizacao_id) DO NOTHING", (organizacao_id,))
+        cur.execute("UPDATE org_smtp_config SET logo_data = %s, logo_mime = %s, updated_at = NOW() WHERE organizacao_id = %s", (logo_bytes, mime, organizacao_id))
+
+
+def get_org_logo(organizacao_id: int) -> Optional[Dict[str, Any]]:
+    """Bytes crus do logo -- usado pelo endpoint publico que serve o logo no e-mail."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT logo_data, logo_mime FROM org_smtp_config WHERE organizacao_id = %s", (organizacao_id,))
+        return cur.fetchone()
 
 
 def _tabela_existe(cur, nome_tabela: str) -> bool:

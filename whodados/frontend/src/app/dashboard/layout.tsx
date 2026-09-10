@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRequireAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
+import OrgSwitcher from "@/components/OrgSwitcher";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Empresas", icon: "📊" },
@@ -66,6 +67,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       <div className="flex-1 flex flex-col">
+        <header className="flex items-center justify-end gap-4 border-b border-slate-200 bg-white px-6 py-3">
+          <OrgSwitcher />
+        </header>
         <main className="flex-1 p-6 overflow-auto">{children}</main>
       </div>
     </div>

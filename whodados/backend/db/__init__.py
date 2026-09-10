@@ -21,6 +21,7 @@ from .service import (
     # Multi-empresa (organizacoes)
     listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
     definir_acesso_usuario_orgs, get_orgs_do_user_id,
+    get_org_smtp_config, set_org_smtp_config, set_org_logo, get_org_logo,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
@@ -48,6 +49,7 @@ __all__ = [
     # Multi-empresa (organizacoes)
     "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
     "definir_acesso_usuario_orgs", "get_orgs_do_user_id",
+    "get_org_smtp_config", "set_org_smtp_config", "set_org_logo", "get_org_logo",
     # Analytics (agregacoes sobre dados_empresas / dados_socios)
     "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
     "analytics_top_empresas", "analytics_socios_ranking", "analytics_socio_detalhe",

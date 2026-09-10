@@ -1,7 +1,7 @@
 """WhoDados API Endpoints - Monitor de e-mails (follow-up com semaforo / SLA)."""
 from fastapi import APIRouter, Depends
 from typing import Dict, Optional
-from .auth import get_current_user
+from .auth import get_current_user, get_active_org
 from .db import (
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup,
 )
@@ -17,6 +17,7 @@ async def monitor_emails(
     limit: int = 200,
     offset: int = 0,
     current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
 ):
     """
     Lista e-mails enviados para acompanhamento de follow-up com semaforo.
@@ -30,6 +31,7 @@ async def monitor_emails(
         dias_sla=dias_sla,
         limit=limit,
         offset=offset,
+        organizacao_id=org_id,
     )
     if semaforo:
         items = [i for i in items if i.get("semaforo_status") == semaforo]
@@ -55,9 +57,10 @@ async def monitor_emails(
 async def monitor_stats(
     dias_sla: int = 7,
     current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
 ):
     """Resumo agregado (verde/amarelo/vermelho/cinza) para o dashboard."""
-    stats = get_monitor_stats(dias_sla=dias_sla)
+    stats = get_monitor_stats(dias_sla=dias_sla, organizacao_id=org_id)
     # normaliza tipos para JSON
     for k in ("total_enviados", "verde", "amarelo", "vermelho", "cinza"):
         if k in stats and stats[k] is not None:
@@ -73,9 +76,10 @@ async def monitor_stats(
 async def monitor_vermelhos(
     limite: int = 50,
     current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
 ):
     """Lista e-mails no estado vermelho (>5 dias sem abertura) para disparo de follow-up."""
-    rows = get_emails_vermelhos_para_followup(limite=limite)
+    rows = get_emails_vermelhos_para_followup(limite=limite, organizacao_id=org_id)
     out = []
     for item in rows:
         row = dict(item)
