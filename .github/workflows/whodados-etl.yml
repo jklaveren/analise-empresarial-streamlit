@@ -37,6 +37,11 @@ jobs:
     env:
       WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
       RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
+      # Conexoes paralelas no download da Receita (~4 GB) -- paraleliza pra
+      # caber na janela do estagio. Cada download ainda retoma sozinho
+      # (curl -C -) e retenta ate RF_DOWNLOAD_RETRIES vezes em erro transitorio.
+      RF_DOWNLOAD_WORKERS: "5"
+      RF_DOWNLOAD_RETRIES: "4"
 
     steps:
       - name: Checkout do repositorio
@@ -146,3 +151,20 @@ jobs:
           rm -f whodados/pipeline/out/aux_*.csv 2>/dev/null || true
           echo "Removendo zips com mais de 14 dias do cache..."
           find whodados/pipeline/raw -name "*.zip" -mtime +14 -delete 2>/dev/null || true
+
+      # Se qualquer estagio acima falhar, deixa um aviso visivel no resumo da
+      # run. O GitHub tambem manda e-mail automatico ao dono do repo quando uma
+      # run agendada (cron) falha -- entao voce fica sabendo sem precisar olhar.
+      - name: Avisar em caso de falha
+        if: failure()
+        run: |
+          echo "::error title=ETL falhou::Um estagio do pipeline nao concluiu. Use 'Re-run failed jobs' -- o cache retoma os downloads ja baixados."
+          {
+            echo "## ❌ ETL falhou"
+            echo ""
+            echo "Um estagio do pipeline nao concluiu."
+            echo ""
+            echo "Os zips ja baixados com sucesso estao no **cache**. Clique em"
+            echo "**Re-run failed jobs** que ele retoma de onde parou, baixando"
+            echo "apenas o que faltou."
+          } >> "$GITHUB_STEP_SUMMARY"

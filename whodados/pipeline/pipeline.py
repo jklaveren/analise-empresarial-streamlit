@@ -8,8 +8,10 @@ import argparse
 import os
 import sys
 import subprocess
+import time
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 
@@ -137,22 +139,51 @@ def _zip_valido(caminho: Path) -> bool:
 
 
 def baixar_rf(arquivo: str) -> Path:
+    """Baixa um arquivo da Receita com retomada e retentativas.
+
+    - curl -C - retoma de onde parou (nao rebaixa o que ja veio).
+    - --retry cobre erros transitorios de rede/HTTP do proprio curl.
+    - Um laco externo revalida o zip: se o download terminou corrompido,
+      apaga e rebaixa; se foi interrompido, mantem o parcial e retoma.
+    - --no-progress-meter em vez de --progress-bar: com downloads paralelos
+      as barras se misturavam e geravam dezenas de milhares de linhas de log.
+
+    Nao levanta excecao: quem chama (stage_download_rf) faz a checagem final
+    de integridade e decide se o estagio falhou."""
     destino = RAW / arquivo
     if _zip_valido(destino):
-        print(f"  [PULSO] {arquivo} ja existe e esta integro — pulando.")
+        print(f"  [PULO] {arquivo} ja existe e esta integro.")
         return destino
-    if destino.exists():
-        print(f"  [REBAIXA] {arquivo} existe mas esta corrompido/truncado — rebaixando.")
-        destino.unlink()
+
     url = BASE_URL_RF + arquivo
-    cmd = [
-        "curl", "-u", f"{TOKEN_COMPARTILHAMENTO}:", "-L", "-C", "-",
-        url, "-o", str(destino), "--progress-bar", "--fail",
-    ]
-    print(f"  Baixando RF: {arquivo}")
-    resultado = subprocess.run(cmd)
-    if resultado.returncode != 0:
-        print(f"  [WARN] Falha ao baixar {arquivo} (exit {resultado.returncode}).")
+    tentativas = max(1, int(os.environ.get("RF_DOWNLOAD_RETRIES", "4")))
+    for tentativa in range(1, tentativas + 1):
+        cmd = [
+            "curl", "-u", f"{TOKEN_COMPARTILHAMENTO}:", "-L", "-C", "-",
+            "--retry", "3", "--retry-delay", "5", "--retry-all-errors",
+            "--no-progress-meter", "--fail", url, "-o", str(destino),
+        ]
+        inicio = time.time()
+        resultado = subprocess.run(cmd)
+        if resultado.returncode == 0 and _zip_valido(destino):
+            tam_mb = destino.stat().st_size / (1024 * 1024)
+            print(f"  [OK] {arquivo} — {tam_mb:.0f} MB em {time.time() - inicio:.0f}s "
+                  f"(tentativa {tentativa}/{tentativas}).")
+            return destino
+
+        if resultado.returncode == 0:
+            # Download "completo" mas zip corrompido: recomeca limpo.
+            print(f"  [RETRY] {arquivo}: baixou mas o zip esta corrompido "
+                  f"(tentativa {tentativa}/{tentativas}); rebaixando do zero.")
+            if destino.exists():
+                destino.unlink()
+        else:
+            # Interrompido: mantem o parcial, o -C - retoma na proxima volta.
+            print(f"  [RETRY] {arquivo}: interrompido (exit {resultado.returncode}, "
+                  f"tentativa {tentativa}/{tentativas}); vai retomar.")
+            time.sleep(3)
+
+    print(f"  [ERRO] {arquivo}: falhou apos {tentativas} tentativas.")
     return destino
 
 
@@ -485,9 +516,26 @@ def stage_detect() -> None:
 
 def stage_download_rf() -> None:
     _cabecalho("DOWNLOAD RF")
-    for arq in AUX + EMPRESAS + ESTABS + SOCIOS:
-        baixar_rf(arq)
-    print("\n🏁 Download RF concluido.")
+    arquivos = AUX + EMPRESAS + ESTABS + SOCIOS
+    workers = max(1, int(os.environ.get("RF_DOWNLOAD_WORKERS", "5")))
+    print(f"Baixando {len(arquivos)} arquivos com ate {workers} conexoes paralelas...")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futuros = {executor.submit(baixar_rf, arq): arq for arq in arquivos}
+        for fut in as_completed(futuros):
+            arq = futuros[fut]
+            try:
+                fut.result()
+            except Exception as e:  # baixar_rf nao levanta, mas por seguranca
+                print(f"  [ERRO] Excecao inesperada ao baixar {arq}: {e}")
+
+    # Checagem final: se algum zip ficou invalido apos as retentativas, falha o
+    # estagio. Assim o cache guarda so os arquivos integros e o "Re-run failed
+    # jobs" retoma baixando apenas o que faltou (o resto ja esta em cache).
+    invalidos = [a for a in arquivos if not _zip_valido(RAW / a)]
+    if invalidos:
+        raise SystemExit(f"Download RF incompleto — zips invalidos: {invalidos}")
+    print("\n🏁 Download RF concluido (todos os zips integros).")
 
 
 def stage_download_pgfn() -> None:
