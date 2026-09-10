@@ -18,8 +18,11 @@ services:
         from: supabase_connection_string
       - key: DATA_SOURCE
         value: database
+      # Lista separada por virgula (o backend faz split por ",").
+      # Inclui a URL de producao do Vercel (whodados-jet), a reservada
+      # (whodados) e o localhost para o frontend em desenvolvimento.
       - key: CORS_ORIGINS
-        value: "https://whodados.vercel.app"
+        value: "https://whodados-jet.vercel.app,https://whodados.vercel.app,http://localhost:3000"
       - key: API_CACHE_TTL_SECONDS
         value: "300"
 
