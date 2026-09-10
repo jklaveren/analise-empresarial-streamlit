@@ -9,7 +9,7 @@ from .mailer import (
 from typing import List, Optional
 from .db import (
     get_pipeline_metadata, get_sla_config, set_sla_config,
-    list_all_users, update_user_flags,
+    list_all_users, update_user_flags, delete_user, update_user_email,
     listar_todas_organizacoes, get_orgs_do_user_id, definir_acesso_usuario_orgs,
     get_org_smtp_config, set_org_smtp_config, set_org_logo,
 )
@@ -224,6 +224,7 @@ async def atualizar_usuario(user_id: int, data: Dict, current_user: Dict = Depen
 
     is_admin = data.get("is_admin")
     is_active = data.get("is_active")
+    email = data.get("email")  # pode vir para editar; None = nao mexe
 
     if alvo["username"] == current_user.get("sub"):
         if is_admin is False:
@@ -231,16 +232,34 @@ async def atualizar_usuario(user_id: int, data: Dict, current_user: Dict = Depen
         if is_active is False:
             raise HTTPException(status_code=400, detail="Voce nao pode desativar sua propria conta")
 
-    ok = update_user_flags(
-        user_id,
-        is_admin=bool(is_admin) if is_admin is not None else None,
-        is_active=bool(is_active) if is_active is not None else None,
-    )
-    if not ok:
+    mudou = False
+    if is_admin is not None or is_active is not None:
+        mudou = update_user_flags(
+            user_id,
+            is_admin=bool(is_admin) if is_admin is not None else None,
+            is_active=bool(is_active) if is_active is not None else None,
+        ) or mudou
+    if email is not None:
+        mudou = update_user_email(user_id, (email or "").strip() or None) or mudou
+    if not mudou:
         raise HTTPException(status_code=400, detail="Nada para atualizar")
     logger.info(f"Usuario '{alvo['username']}' atualizado por {current_user.get('sub')}: {data}")
     atualizado = next(u for u in list_all_users() if u["id"] == user_id)
     return _serializar_usuario(atualizado)
+
+
+@router.delete("/usuarios/{user_id}")
+async def excluir_usuario(user_id: int, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Exclui um usuario. Nao permite excluir a si mesmo (evita ficar sem admin)."""
+    alvo = next((u for u in list_all_users() if u["id"] == user_id), None)
+    if not alvo:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    if alvo["username"] == current_user.get("sub"):
+        raise HTTPException(status_code=400, detail="Voce nao pode excluir a propria conta")
+    if not delete_user(user_id):
+        raise HTTPException(status_code=400, detail="Falha ao excluir usuario")
+    logger.info(f"Usuario '{alvo['username']}' excluido por {current_user.get('sub')}")
+    return {"sucesso": True, "message": f"Usuario '{alvo['username']}' excluido."}
 
 
 @router.post("/usuarios/{user_id}/redefinir-senha")

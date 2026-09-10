@@ -255,3 +255,24 @@ def enviar_campanha(
     organizacao_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     return enviar_template_para_cnpjs(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=organizacao_id)
+
+
+def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
+    """Envia UM e-mail de teste com o template renderizado (valores de exemplo),
+    usando o SMTP e a assinatura da empresa -- para a pessoa conferir como o
+    e-mail vai chegar antes de disparar a campanha."""
+    smtp_cfg = _smtp_da_org(organizacao_id)
+    assinatura = _assinatura_da_org(organizacao_id)
+    vars_amostra = {
+        "empresa": "Empresa Exemplo LTDA", "cnpj": "00000000000000",
+        "cidade": "Porto Alegre", "cnae": "", "cnae_descricao": "",
+        "tema": CATEGORIA_TEMAS["todos"], "categoria": CATEGORIA_DESCRICOES["todos"],
+        "nome_fantasia": "Exemplo", "porte": "", "imagem": template.get("imagem_url") or "",
+    }
+    rendered = _render_template(template, vars_amostra)
+    assunto = "[TESTE] " + (rendered.get("assunto", "") or "Sem assunto")
+    return enviar_email(
+        para, assunto,
+        rendered.get("corpo_html", "") + assinatura, rendered.get("corpo_texto"),
+        smtp=smtp_cfg,
+    )

@@ -12,6 +12,7 @@ from .db import (
     update_template, delete_template, get_templates_by_categoria,
     set_template_imagem, get_template_imagem, clear_template_imagem,
 )
+from .mailer import enviar_email_teste
 
 router = APIRouter(prefix="/api/v1")
 
@@ -66,6 +67,19 @@ async def deletar_template(template_id: int, current_user: Dict = Depends(get_cu
     if not delete_template(template_id, organizacao_id=org_id):
         raise HTTPException(status_code=400, detail="Erro ao deletar template")
     return {"ok": True}
+
+
+@router.post("/templates/{template_id}/test-send")
+async def enviar_teste(template_id: int, data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Envia UM e-mail de teste deste template (valores de exemplo) para um
+    endereco, usando o remetente/assinatura da empresa ativa."""
+    para = (data.get("para") or "").strip()
+    if not para or "@" not in para:
+        raise HTTPException(status_code=400, detail="Informe um e-mail valido")
+    t = get_template(template_id, organizacao_id=org_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Template nao encontrado")
+    return enviar_email_teste(para, dict(t), organizacao_id=org_id)
 
 
 # ---- Card/imagem do template (usada no corpo do email via {{imagem}}) ----

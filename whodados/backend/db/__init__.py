@@ -17,7 +17,7 @@ from .service import (
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
     seed_default_templates, get_pipeline_metadata,
     get_app_config, set_app_config, get_sla_config, set_sla_config,
-    list_all_users, update_user_flags,
+    list_all_users, update_user_flags, delete_user, update_user_email,
     # Multi-empresa (organizacoes)
     listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
     definir_acesso_usuario_orgs, get_orgs_do_user_id,
@@ -45,7 +45,7 @@ __all__ = [
     "listar_empresas_db", "contar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
     "seed_default_templates", "get_pipeline_metadata",
     "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
-    "list_all_users", "update_user_flags",
+    "list_all_users", "update_user_flags", "delete_user", "update_user_email",
     # Multi-empresa (organizacoes)
     "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
     "definir_acesso_usuario_orgs", "get_orgs_do_user_id",
