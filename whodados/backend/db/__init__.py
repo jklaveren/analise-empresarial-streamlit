@@ -16,6 +16,13 @@ from .service import (
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
     seed_default_templates, get_pipeline_metadata,
+    get_app_config, set_app_config, get_sla_config, set_sla_config,
+    list_all_users, update_user_flags,
+)
+from .analytics import (
+    analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
+    analytics_top_empresas, analytics_socios_ranking, analytics_socio_detalhe,
+    analytics_opcoes_filtro,
 )
 __all__ = [
     "create_user_record", "get_user_by_username", "get_user_by_email", "get_user_by_username_or_email",
@@ -33,4 +40,10 @@ __all__ = [
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
     "seed_default_templates", "get_pipeline_metadata",
+    "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
+    "list_all_users", "update_user_flags",
+    # Analytics (agregacoes sobre dados_empresas / dados_socios)
+    "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
+    "analytics_top_empresas", "analytics_socios_ranking", "analytics_socio_detalhe",
+    "analytics_opcoes_filtro",
 ]

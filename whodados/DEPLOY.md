@@ -6,7 +6,7 @@ O resultado final é:
 - **Frontend** rodando na Vercel (`whodados/frontend/`)
 - **API** rodando na Render (`whodados/backend/`)
 - **Banco** rodando no Supabase
-- **Dados** atualizados automaticamente via GitHub Actions (`whodados/.github/workflows/etl.yml`)
+- **Dados** atualizados automaticamente via GitHub Actions (`.github/workflows/whodados-etl.yml` (raiz do repo))
 
 ---
 
@@ -36,7 +36,7 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 2. Settings → Secrets and variables → Actions → **Variables**:
    - `SUPABASE_CONNECTION_STRING` = connection string do Supabase
 
-> 💡 O workflow do ETL está em `whodados/.github/workflows/etl.yml`.
+> 💡 O workflow do ETL está em `.github/workflows/whodados-etl.yml` (raiz do repo).
 
 ---
 

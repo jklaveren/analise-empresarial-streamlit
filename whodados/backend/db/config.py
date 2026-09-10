@@ -81,6 +81,17 @@ def ensure_tables():
         # lado do script de sincronizacao; criada aqui tambem pra API sempre
         # conseguir ler (retornando vazio) mesmo que o pipeline nunca tenha rodado.
         cur.execute("CREATE TABLE IF NOT EXISTS pipeline_metadata (chave VARCHAR(100) PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        # Configuracoes gerais da aplicacao (regras do CRM/Monitor, etc.) --
+        # mesmo esquema de chave-valor do pipeline_metadata, mas para
+        # ajustes feitos pelo usuario pela tela de Configuracoes.
+        cur.execute("CREATE TABLE IF NOT EXISTS app_config (chave VARCHAR(100) PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        # Tabelas de lookup dos dados do ETL (municipios: cod->nome; cnaes:
+        # codigo->descricao da atividade). Criadas aqui (vazias) pra os JOINs
+        # dos endpoints de empresas/analytics nunca quebrarem, mesmo antes do
+        # primeiro sync. O scripts/sync_data_to_db.py recria com os dados
+        # reais (to_sql if_exists="replace") quando o pipeline roda.
+        cur.execute("CREATE TABLE IF NOT EXISTS municipios (cod_municipio VARCHAR(10) PRIMARY KEY, nome_municipio VARCHAR(200))")
+        cur.execute("CREATE TABLE IF NOT EXISTS cnaes (codigo_cnae VARCHAR(10) PRIMARY KEY, descricao_cnae VARCHAR(300))")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
 
