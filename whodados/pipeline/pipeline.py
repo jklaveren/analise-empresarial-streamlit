@@ -545,13 +545,57 @@ def stage_download_pgfn() -> None:
     print("\n🏁 Download PGFN concluido.")
 
 
-def stage_process_rf() -> None:
-    _cabecalho("PROCESS RF")
+def _carregar_cnpjs_rs() -> set:
+    """Le aux_estab_rs.csv (saida de filtrar_estabelecimentos) e devolve o
+    conjunto de CNPJ_BASICO. Usado pelos estagios de empresas/socios quando
+    rodam isolados, sem receber a lista de CNPJs em memoria."""
+    caminho = OUT / "aux_estab_rs.csv"
+    if not caminho.exists():
+        raise FileNotFoundError(
+            f"{caminho} nao encontrado. Rode antes o estagio 'process-estab'."
+        )
+    df = pd.read_csv(caminho, sep=";", encoding="latin1", dtype=str)
+    return set(df["CNPJ_BASICO"].unique())
+
+
+def stage_process_aux() -> None:
+    """Municipios + CNAEs -- lookups rapidos (extrai um zip pequeno cada)."""
+    _cabecalho("PROCESS AUX (municipios + cnaes)")
     processar_municipios()
     processar_cnaes()
-    cnpjs_rs = filtrar_estabelecimentos()
-    filtrar_empresas(cnpjs_rs)
-    filtrar_socios(cnpjs_rs)
+    print("\n🏁 Aux (municipios + cnaes) concluido.")
+
+
+def stage_process_estab() -> None:
+    """Filtra as matrizes ativas do RS (o mais pesado: le os 10 zips de
+    Estabelecimentos). Gera aux_estab_rs.csv, base dos estagios seguintes."""
+    _cabecalho("PROCESS ESTABELECIMENTOS")
+    filtrar_estabelecimentos()
+    print("\n🏁 Estabelecimentos concluido.")
+
+
+def stage_process_empresas() -> None:
+    """Nomes / capital social das matrizes RS (le os 10 zips de Empresas)."""
+    _cabecalho("PROCESS EMPRESAS")
+    filtrar_empresas(_carregar_cnpjs_rs())
+    print("\n🏁 Empresas concluido.")
+
+
+def stage_process_socios() -> None:
+    """Socios das matrizes RS (le os 10 zips de Socios)."""
+    _cabecalho("PROCESS SOCIOS")
+    filtrar_socios(_carregar_cnpjs_rs())
+    print("\n🏁 Socios concluido.")
+
+
+def stage_process_rf() -> None:
+    """Roda os 4 sub-estagios de processamento RF em sequencia. Util pro modo
+    'all' (local); no GitHub Actions cada sub-estagio roda separado, com
+    timeout proprio e re-executavel isolado."""
+    stage_process_aux()
+    stage_process_estab()
+    stage_process_empresas()
+    stage_process_socios()
     print("\n🏁 Processamento RF concluido.")
 
 
@@ -584,7 +628,12 @@ _STAGES = {
     "detect": stage_detect,
     "download-rf": stage_download_rf,
     "download-pgfn": stage_download_pgfn,
+    # process-rf roda os 4 abaixo em sequencia; no CI cada um roda separado.
     "process-rf": stage_process_rf,
+    "process-aux": stage_process_aux,
+    "process-estab": stage_process_estab,
+    "process-empresas": stage_process_empresas,
+    "process-socios": stage_process_socios,
     "process-pgfn": stage_process_pgfn,
     "merge": stage_merge,
 }
