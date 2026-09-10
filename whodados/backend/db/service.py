@@ -73,19 +73,28 @@ def remover_enriquecimento(cnpj: str) -> int:
         )
         return len(cur.fetchall())
 
-def get_crm_by_cnpj(cnpj: str) -> Optional[Dict[str, Any]]:
+def get_crm_by_cnpj(cnpj: str, organizacao_id: int) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute("SELECT * FROM crm WHERE cnpj = %s", (cnpj,))
+        cur.execute("SELECT * FROM crm WHERE cnpj = %s AND organizacao_id = %s", (cnpj, organizacao_id))
         return cur.fetchone()
 
-def get_crm_all() -> List[Dict[str, Any]]:
+def get_crm_all(organizacao_id: int) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
-        cur.execute("SELECT * FROM crm ORDER BY data_atualizacao DESC")
+        cur.execute("SELECT * FROM crm WHERE organizacao_id = %s ORDER BY data_atualizacao DESC", (organizacao_id,))
         return cur.fetchall()
 
-def create_or_update_crm(cnpj: str, status: Optional[str] = None, notas: Optional[str] = None, criado_por: Optional[str] = None) -> Dict[str, Any]:
+def create_or_update_crm(cnpj: str, organizacao_id: int, status: Optional[str] = None, notas: Optional[str] = None, criado_por: Optional[str] = None) -> Dict[str, Any]:
     with get_db_cursor() as cur:
-        cur.execute("""INSERT INTO crm (cnpj, status, notas, criado_por, data_atualizacao) VALUES (%s, %s, %s, %s, NOW()) ON CONFLICT (cnpj) DO UPDATE SET status = COALESCE(EXCLUDED.status, crm.status), notas = COALESCE(EXCLUDED.notas, crm.notas), data_atualizacao = NOW() RETURNING *""", (cnpj, status, notas, criado_por))
+        cur.execute(
+            """INSERT INTO crm (cnpj, organizacao_id, status, notas, criado_por, data_atualizacao)
+               VALUES (%s, %s, %s, %s, %s, NOW())
+               ON CONFLICT (organizacao_id, cnpj) DO UPDATE
+                   SET status = COALESCE(EXCLUDED.status, crm.status),
+                       notas = COALESCE(EXCLUDED.notas, crm.notas),
+                       data_atualizacao = NOW()
+               RETURNING *""",
+            (cnpj, organizacao_id, status, notas, criado_por),
+        )
         return cur.fetchone()
 
 # Colunas do template retornadas nas listagens (NUNCA inclui imagem_data -- ela e' pesada
@@ -233,15 +242,18 @@ def get_emails_enviados_by_campanha(campaign_id: int) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
         cur.execute("SELECT * FROM emails_enviados WHERE campaign_id = %s ORDER BY criado_em DESC", (campaign_id,))
         return cur.fetchall()
-def create_notificacao(tipo: str, titulo: str, mensagem: Optional[str] = None, cnpj: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
+def create_notificacao(tipo: str, titulo: str, mensagem: Optional[str] = None, cnpj: Optional[str] = None, user_id: Optional[str] = None, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
     with get_db_cursor() as cur:
-        cur.execute("INSERT INTO notificacoes (tipo, titulo, mensagem, cnpj, user_id) VALUES (%s, %s, %s, %s, %s) RETURNING *", (tipo, titulo, mensagem, cnpj, user_id))
+        cur.execute("INSERT INTO notificacoes (tipo, titulo, mensagem, cnpj, user_id, organizacao_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING *", (tipo, titulo, mensagem, cnpj, user_id, organizacao_id))
         return cur.fetchone()
 
-def get_notificacoes(user_id: Optional[str] = None, lidas: Optional[bool] = None, limit: int = 100) -> List[Dict[str, Any]]:
+def get_notificacoes(user_id: Optional[str] = None, lidas: Optional[bool] = None, limit: int = 100, organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
         sql = "SELECT * FROM notificacoes WHERE 1=1"
         params = []
+        if organizacao_id is not None:
+            sql += " AND organizacao_id = %s"
+            params.append(organizacao_id)
         if user_id:
             sql += " AND (user_id = %s OR user_id IS NULL)"
             params.append(user_id)

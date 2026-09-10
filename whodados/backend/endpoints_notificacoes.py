@@ -1,15 +1,15 @@
-"""WhoDados API Endpoints - Notificacoes do usuario."""
+"""WhoDados API Endpoints - Notificacoes do usuario (isoladas por empresa)."""
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Optional
-from .auth import get_current_user
+from .auth import get_current_user, get_active_org
 from .db import get_notificacoes, mark_notificacao_lida
 
 router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/notificacoes")
-async def listar_notificacoes(lidas: Optional[bool] = None, current_user: Dict = Depends(get_current_user)):
-    return get_notificacoes(user_id=current_user.get("sub"), lidas=lidas)
+async def listar_notificacoes(lidas: Optional[bool] = None, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    return get_notificacoes(user_id=current_user.get("sub"), lidas=lidas, organizacao_id=org_id)
 
 
 @router.post("/notificacoes/{notificacao_id}/ler")
