@@ -18,6 +18,9 @@ from .service import (
     seed_default_templates, get_pipeline_metadata,
     get_app_config, set_app_config, get_sla_config, set_sla_config,
     list_all_users, update_user_flags,
+    # Multi-empresa (organizacoes)
+    listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
+    definir_acesso_usuario_orgs, get_orgs_do_user_id,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
@@ -42,6 +45,9 @@ __all__ = [
     "seed_default_templates", "get_pipeline_metadata",
     "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
     "list_all_users", "update_user_flags",
+    # Multi-empresa (organizacoes)
+    "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
+    "definir_acesso_usuario_orgs", "get_orgs_do_user_id",
     # Analytics (agregacoes sobre dados_empresas / dados_socios)
     "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
     "analytics_top_empresas", "analytics_socios_ranking", "analytics_socio_detalhe",

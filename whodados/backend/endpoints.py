@@ -5,6 +5,7 @@ sao apenas montados na ordem. Todos usam o mesmo prefixo /api/v1 (exceto os
 que definem o proprio prefixo, como admin e analytics)."""
 from fastapi import APIRouter
 from .endpoints_auth import router as auth_router
+from .endpoints_organizacoes import router as organizacoes_router
 from .endpoints_empresas import router as empresas_router
 from .endpoints_crm import router as crm_router
 from .endpoints_templates import router as templates_router
@@ -18,6 +19,7 @@ from .endpoints_analytics import router as analytics_router
 
 router = APIRouter()
 router.include_router(auth_router)
+router.include_router(organizacoes_router)
 router.include_router(empresas_router)
 router.include_router(crm_router)
 router.include_router(templates_router)
