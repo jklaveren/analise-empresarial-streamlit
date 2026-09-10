@@ -1,0 +1,20 @@
+"""WhoDados API Endpoints - Notificacoes do usuario."""
+from fastapi import APIRouter, Depends, HTTPException
+from typing import Dict, Optional
+from .auth import get_current_user
+from .db import get_notificacoes, mark_notificacao_lida
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/notificacoes")
+async def listar_notificacoes(lidas: Optional[bool] = None, current_user: Dict = Depends(get_current_user)):
+    return get_notificacoes(user_id=current_user.get("sub"), lidas=lidas)
+
+
+@router.post("/notificacoes/{notificacao_id}/ler")
+async def marcar_lida(notificacao_id: int, current_user: Dict = Depends(get_current_user)):
+    success = mark_notificacao_lida(notificacao_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
+    return {"ok": True}
