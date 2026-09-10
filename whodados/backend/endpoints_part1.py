@@ -1,10 +1,12 @@
 """WhoDados API Endpoints v2.0 - Part 1: Auth, Empresas, CRM, Dashboard."""
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Dict, Optional
+from datetime import timedelta
 from .auth import (
     autenticar_usuario, criar_access_token, get_current_user,
     gerar_token_reset, validar_token_reset, redefinir_senha,
+    hash_senha, verificar_senha,
 )
 try:
     from .security import log_login, log_access, AuditAction
@@ -16,12 +18,13 @@ from .db import (
     create_notificacao,
     listar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
 )
+from .db.service import get_user_by_username, update_user_password
 from .logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 @router.post("/auth/login")
-async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), remember_me: bool = Form(False)):
     if HAS_AUDIT:
         log_login(request, form.username, False, "attempt")
     user = autenticar_usuario(form.username, form.password)
@@ -29,10 +32,12 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
         if HAS_AUDIT:
             log_login(request, form.username, False, "invalid_credentials")
         raise HTTPException(status_code=401, detail="Credenciais invalidas", headers={"WWW-Authenticate": "Bearer"})
-    token = criar_access_token(user)
+    expires_delta = timedelta(days=30) if remember_me else None
+    token = criar_access_token(user, expires_delta=expires_delta)
+    expires_in = int(expires_delta.total_seconds()) if expires_delta else 8 * 3600
     if HAS_AUDIT:
         log_login(request, form.username, True)
-    return {"access_token": token, "token_type": "bearer", "expires_in": 8*3600}
+    return {"access_token": token, "token_type": "bearer", "expires_in": expires_in}
 
 @router.post("/auth/forgot-password")
 async def forgot_password(request: Request, data: Dict):
@@ -72,6 +77,25 @@ async def reset_password(data: Dict):
 @router.get("/auth/me")
 async def me(current_user: Dict = Depends(get_current_user)):
     return {"username": current_user["sub"], "is_admin": current_user.get("is_admin", False), "email": current_user.get("email")}
+
+
+@router.put("/auth/me/senha")
+async def trocar_minha_senha(data: Dict, current_user: Dict = Depends(get_current_user)):
+    """Usuario logado troca a propria senha, informando a senha atual."""
+    senha_atual = data.get("senha_atual") or ""
+    nova_senha = data.get("nova_senha") or ""
+    if not senha_atual or not nova_senha:
+        raise HTTPException(status_code=400, detail="Senha atual e nova senha sao obrigatorias")
+    if len(nova_senha) < 8:
+        raise HTTPException(status_code=400, detail="A nova senha precisa ter ao menos 8 caracteres")
+
+    user = get_user_by_username(current_user["sub"])
+    if not user or not verificar_senha(senha_atual, user.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="Senha atual incorreta")
+
+    update_user_password(user["id"], hash_senha(nova_senha))
+    logger.info(f"Usuario '{current_user['sub']}' trocou a propria senha")
+    return {"sucesso": True, "message": "Senha atualizada com sucesso."}
 
 @router.get("/empresas")
 async def listar_empresas(cidade: Optional[str] = None, cnae: Optional[str] = None, busca: Optional[str] = None, limit: int = 100, offset: int = 0, current_user: Dict = Depends(get_current_user)):

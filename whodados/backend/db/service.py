@@ -264,25 +264,33 @@ def mark_notificacao_lida(notificacao_id: int) -> bool:
 def get_emails_for_monitor(
     campaign_id=None,
     dias_sla: int = 7,
+    sla_verde_dias: Optional[int] = None,
+    sla_amarelo_dias: Optional[int] = None,
     limit: int = 200,
     offset: int = 0,
 ):
     """
     Retorna e-mails enviados com cálculo de status de semáforo para follow-up.
 
-    Status do semáforo:
+    Status do semáforo (prazos configuraveis via app_config -- ver
+    get_sla_config/set_sla_config -- padrao 2/5 dias se nunca configurado):
       - verde:    aberto_em IS NOT NULL (há resposta/interação)
-                  OU enviado há <= 2 dias (ainda no início da janela)
-      - amarelo:  enviado há 3-5 dias E ainda sem aberto_em (atenção)
-      - vermelho: enviado há > 5 dias E ainda sem aberto_em (follow-up urgente)
+                  OU dentro do prazo "verde"
+      - amarelo:  passou do prazo "verde" mas ainda dentro do "amarelo",
+                  sem aberto_em (atenção)
+      - vermelho: passou do prazo "amarelo", sem aberto_em (follow-up urgente)
       - cinza:    status != 'enviado' (pendente, erro, etc.)
     """
+    if sla_verde_dias is None or sla_amarelo_dias is None:
+        sla = get_sla_config()
+        sla_verde_dias = sla_verde_dias if sla_verde_dias is not None else sla["sla_verde_dias"]
+        sla_amarelo_dias = sla_amarelo_dias if sla_amarelo_dias is not None else sla["sla_amarelo_dias"]
+
     with get_db_cursor() as cur:
-        params = []
+        params: List[Any] = [sla_verde_dias, sla_amarelo_dias]
         where_campaign = ""
         if campaign_id:
             where_campaign = "AND e.campaign_id = %s"
-            params.append(campaign_id)
 
         sql = f"""
             SELECT
@@ -305,8 +313,8 @@ def get_emails_for_monitor(
                 CASE
                     WHEN e.enviado_em IS NULL THEN 'cinza'
                     WHEN e.aberto_em IS NOT NULL THEN 'verde'
-                    WHEN GREATEST(EXTRACT(EPOCH FROM (NOW() - e.enviado_em)) / 86400.0, 0) <= 2 THEN 'verde'
-                    WHEN GREATEST(EXTRACT(EPOCH FROM (NOW() - e.enviado_em)) / 86400.0, 0) <= 5 THEN 'amarelo'
+                    WHEN GREATEST(EXTRACT(EPOCH FROM (NOW() - e.enviado_em)) / 86400.0, 0) <= %s THEN 'verde'
+                    WHEN GREATEST(EXTRACT(EPOCH FROM (NOW() - e.enviado_em)) / 86400.0, 0) <= %s THEN 'amarelo'
                     ELSE 'vermelho'
                 END as semaforo_status,
                 emp.razao_social,
@@ -319,37 +327,45 @@ def get_emails_for_monitor(
             ORDER BY e.enviado_em DESC
             LIMIT %s OFFSET %s
         """
+        if campaign_id:
+            params.append(campaign_id)
         params.extend([limit, offset])
         cur.execute(sql, params)
         rows = cur.fetchall()
         return rows
 
 
-def get_monitor_stats(dias_sla: int = 7):
-    """Retorna estatísticas agregadas para o dashboard de monitoramento."""
+def get_monitor_stats(dias_sla: int = 7, sla_verde_dias: Optional[int] = None, sla_amarelo_dias: Optional[int] = None):
+    """Retorna estatísticas agregadas para o dashboard de monitoramento.
+    Prazos configuraveis -- ver get_sla_config/set_sla_config."""
+    if sla_verde_dias is None or sla_amarelo_dias is None:
+        sla = get_sla_config()
+        sla_verde_dias = sla_verde_dias if sla_verde_dias is not None else sla["sla_verde_dias"]
+        sla_amarelo_dias = sla_amarelo_dias if sla_amarelo_dias is not None else sla["sla_amarelo_dias"]
+
     with get_db_cursor() as cur:
         sql = """
             SELECT
                 COUNT(*) FILTER (WHERE status = 'enviado') as total_enviados,
                 COUNT(*) FILTER (
                     WHERE (aberto_em IS NOT NULL)
-                       OR (enviado_em IS NOT NULL AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 <= 2)
+                       OR (enviado_em IS NOT NULL AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 <= %(verde)s)
                 ) as verde,
                 COUNT(*) FILTER (
                     WHERE enviado_em IS NOT NULL
                       AND aberto_em IS NULL
-                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 > 2
-                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 <= 5
+                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 > %(verde)s
+                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 <= %(amarelo)s
                 ) as amarelo,
                 COUNT(*) FILTER (
                     WHERE enviado_em IS NOT NULL
                       AND aberto_em IS NULL
-                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 > 5
+                      AND EXTRACT(EPOCH FROM (NOW() - enviado_em)) / 86400.0 > %(amarelo)s
                 ) as vermelho,
                 COUNT(*) FILTER (WHERE status != 'enviado') as cinza
             FROM emails_enviados
         """
-        cur.execute(sql)
+        cur.execute(sql, {"verde": sla_verde_dias, "amarelo": sla_amarelo_dias})
         row = cur.fetchone()
         return dict(row) if row else {"total_enviados": 0, "verde": 0, "amarelo": 0, "vermelho": 0, "cinza": 0}
 
@@ -498,6 +514,98 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
 # abaixo detectam isso e retornam vazio/zero em vez de lancar erro, para o
 # resto da aplicacao nunca quebrar por falta desses dados.
 
+# ==================== CONFIGURACOES DA APLICACAO (app_config) ====================
+
+_SLA_PADRAO = {"sla_verde_dias": 2, "sla_amarelo_dias": 5}
+
+
+def get_app_config() -> Dict[str, str]:
+    """Le todos os pares chave-valor de app_config. Retorna vazio (sem
+    quebrar) se a tabela ainda nao existir."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "app_config"):
+                return {}
+            cur.execute("SELECT chave, valor FROM app_config")
+            return {r["chave"]: r["valor"] for r in cur.fetchall()}
+    except Exception as e:
+        log.warning(f"get_app_config falhou, retornando vazio: {e}")
+        return {}
+
+
+def set_app_config(chave: str, valor: str) -> None:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO app_config (chave, valor, atualizado_em)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (chave) DO UPDATE
+                SET valor = EXCLUDED.valor, atualizado_em = NOW()
+            """,
+            (chave, valor),
+        )
+
+
+def get_sla_config() -> Dict[str, int]:
+    """Prazos (em dias) que definem o semaforo do Monitor de e-mails.
+    Le de app_config; usa os padroes (2/5 dias) se nao estiver configurado
+    ou se os valores gravados forem invalidos."""
+    cfg = get_app_config()
+    resultado = dict(_SLA_PADRAO)
+    for chave, padrao in _SLA_PADRAO.items():
+        valor = cfg.get(chave)
+        if valor is not None:
+            try:
+                resultado[chave] = int(valor)
+            except (TypeError, ValueError):
+                pass
+    return resultado
+
+
+def set_sla_config(sla_verde_dias: int, sla_amarelo_dias: int) -> None:
+    """Grava os prazos do semaforo. Validacao basica: verde tem que ser
+    menor que amarelo, os dois positivos -- senao o semaforo fica sem
+    sentido (ex: tudo cai direto em vermelho)."""
+    if sla_verde_dias < 1 or sla_amarelo_dias < 1:
+        raise ValueError("Os prazos precisam ser maiores que zero")
+    if sla_verde_dias >= sla_amarelo_dias:
+        raise ValueError("O prazo 'verde' precisa ser menor que o prazo 'amarelo'")
+    set_app_config("sla_verde_dias", str(sla_verde_dias))
+    set_app_config("sla_amarelo_dias", str(sla_amarelo_dias))
+
+
+# ==================== GESTAO DE USUARIOS ====================
+
+def list_all_users() -> List[Dict[str, Any]]:
+    """Lista todos os usuarios do sistema (sem o hash de senha)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT id, username, email, is_admin, is_active, created_at "
+            "FROM app_users ORDER BY created_at ASC"
+        )
+        return cur.fetchall()
+
+
+def update_user_flags(user_id: int, is_admin: Optional[bool] = None, is_active: Optional[bool] = None) -> bool:
+    """Atualiza is_admin e/ou is_active de um usuario. So altera os campos
+    passados (None = nao muda)."""
+    campos = []
+    valores: List[Any] = []
+    if is_admin is not None:
+        campos.append("is_admin = %s")
+        valores.append(is_admin)
+    if is_active is not None:
+        campos.append("is_active = %s")
+        valores.append(is_active)
+    if not campos:
+        return False
+    campos.append("updated_at = NOW()")
+    valores.append(user_id)
+    with get_db_cursor() as cur:
+        cur.execute(f"UPDATE app_users SET {', '.join(campos)} WHERE id = %s", valores)
+        return cur.rowcount > 0
+
+
 def _tabela_existe(cur, nome_tabela: str) -> bool:
     cur.execute(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s) AS existe",
@@ -527,11 +635,13 @@ def listar_empresas_db(
                     e."NOME_FANTASIA" AS nome_fantasia,
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
-                    COALESCE(e."CAPITAL_SOCIAL"::numeric, 0) AS capital_social,
-                    COALESCE(e."DIVIDA_TOTAL"::numeric, 0) AS divida_total,
+                    COALESCE(c.descricao_cnae, '') AS cnae_descricao,
+                    COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
+                    COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
                     e."PORTE_NOME" AS porte_nome
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
                 WHERE 1=1
             """
             params: List[Any] = []
@@ -572,13 +682,15 @@ def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
                     e."NOME_FANTASIA" AS nome_fantasia,
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
-                    COALESCE(e."CAPITAL_SOCIAL"::numeric, 0) AS capital_social,
-                    COALESCE(e."DIVIDA_TOTAL"::numeric, 0) AS divida_total,
+                    COALESCE(c.descricao_cnae, '') AS cnae_descricao,
+                    COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
+                    COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
                     e."PORTE_NOME" AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     e."CONTATO_FONE" AS contato_fone
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
                 WHERE e."CNPJ_COMPLETO" = %s
                 LIMIT 1
                 """,

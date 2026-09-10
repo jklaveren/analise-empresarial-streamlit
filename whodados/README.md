@@ -44,18 +44,15 @@ whodados/
 │   ├── next.config.ts
 │   └── .env.example
 │
-├── pipeline/                     # Pipeline ETL
-│   ├── pipeline.py               # baixa RF + PGFN, gera CSVs
+├── pipeline/                     # Pipeline ETL (fracionado em estágios)
+│   ├── pipeline.py               # subcomandos: download-rf/pgfn, process-rf/pgfn, merge, detect, all
 │   ├── raw/                      # zips baixados (.gitignored)
 │   ├── out/                      # CSVs gerados (.gitignored)
 │   └── requirements-dev.txt
 │
 ├── scripts/
-│   ├── sync_data_to_db.py        # CSVs → Supabase
+│   ├── sync_data_to_db.py        # CSVs → Supabase (empresas, socios, municipios, cnaes)
 │   └── criar_usuario.py          # CLI: cria usuário admin
-│
-├── .github/workflows/
-│   └── etl.yml                   # cron mensal + workflow_dispatch
 │
 ├── render.yaml                   # Render Blueprint
 ├── requirements.txt              # deps da API
@@ -138,7 +135,7 @@ DATABASE_URL="postgresql://..." python whodados/scripts/sync_data_to_db.py
 
 ### Automático (GitHub Actions)
 
-O workflow `whodados/.github/workflows/etl.yml` roda todo dia **1 do mês às 02h UTC** (cron `0 2 1 * *`). Configure `SUPABASE_CONNECTION_STRING` como variável do repositório no GitHub.
+O workflow `.github/workflows/whodados-etl.yml` (na **raiz** do repositório — o GitHub Actions só executa workflows de lá) roda toda **segunda-feira às 02h UTC** (cron `0 2 * * 1`). Ele é fracionado em estágios (`download-rf`, `download-pgfn`, `process-rf`, `process-pgfn`, `merge`), com cache dos downloads e artifact dos CSVs. Configure `SUPABASE_CONNECTION_STRING` como variável do repositório no GitHub.
 
 ---
 

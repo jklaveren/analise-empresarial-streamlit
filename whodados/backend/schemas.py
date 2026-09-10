@@ -26,6 +26,7 @@ class EmpresaSchema(BaseModel):
     nome_fantasia: Optional[str] = None
     municipio: Optional[str] = None
     cnae_principal: Optional[str] = None
+    cnae_descricao: Optional[str] = None
     capital_social: Optional[float] = None
     divida_total: Optional[float] = None
     porte_nome: Optional[str] = None

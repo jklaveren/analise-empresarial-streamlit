@@ -30,16 +30,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "Erro desconhecido" }));
+    if (res.status === 401 && typeof window !== "undefined") {
+      removeToken();
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login?expirado=1";
+      }
+    }
     throw new ApiError(res.status, body.detail || "Erro na API");
   }
   return res.json();
 }
 
 // Auth
-export async function login(username: string, password: string) {
+export async function login(username: string, password: string, rememberMe = false) {
   const form = new URLSearchParams();
   form.append("username", username);
   form.append("password", password);
+  form.append("remember_me", rememberMe ? "true" : "false");
   const res = await fetch(`${API_URL}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -82,6 +89,7 @@ export interface EmpresaItem {
   nome_fantasia: string | null;
   municipio: string | null;
   cnae_principal: string | null;
+  cnae_descricao?: string | null;
   capital_social: number;
   divida_total: number;
   porte_nome: string | null;
@@ -304,4 +312,201 @@ export interface SistemaStatus {
 
 export async function getSistemaStatus(): Promise<SistemaStatus> {
   return request<SistemaStatus>("/api/v1/admin/sistema/status");
+}
+
+// ==================== CONFIGURACOES: SLA (REGRAS DO MONITOR) ====================
+
+export interface SlaConfig {
+  sla_verde_dias: number;
+  sla_amarelo_dias: number;
+}
+
+export async function getSlaConfig(): Promise<SlaConfig> {
+  return request("/api/v1/admin/sla");
+}
+
+export async function updateSlaConfig(data: SlaConfig): Promise<SlaConfig> {
+  return request("/api/v1/admin/sla", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+// ==================== CONFIGURACOES: PERFIL/CONTA ====================
+
+export async function trocarMinhaSenha(senhaAtual: string, novaSenha: string): Promise<{ sucesso: boolean; message: string }> {
+  return request("/api/v1/auth/me/senha", {
+    method: "PUT",
+    body: JSON.stringify({ senha_atual: senhaAtual, nova_senha: novaSenha }),
+  });
+}
+
+// ==================== CONFIGURACOES: USUARIOS ====================
+
+export interface UsuarioAdmin {
+  id: number;
+  username: string;
+  email: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string | null;
+}
+
+export async function listarUsuarios(): Promise<UsuarioAdmin[]> {
+  return request("/api/v1/admin/usuarios");
+}
+
+export async function criarUsuarioAdmin(data: { username: string; password: string; email?: string; is_admin?: boolean }): Promise<{ username: string }> {
+  return request("/api/v1/admin/usuarios", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function atualizarUsuarioAdmin(userId: number, data: { is_admin?: boolean; is_active?: boolean }): Promise<UsuarioAdmin> {
+  return request(`/api/v1/admin/usuarios/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function redefinirSenhaUsuarioAdmin(userId: number, novaSenha: string): Promise<{ sucesso: boolean; message: string }> {
+  return request(`/api/v1/admin/usuarios/${userId}/redefinir-senha`, {
+    method: "POST",
+    body: JSON.stringify({ nova_senha: novaSenha }),
+  });
+}
+
+// ==================== ANALYTICS (telas de analise) ====================
+
+/** Filtros compartilhados por todos os endpoints de analytics. */
+export interface AnalyticsFiltros {
+  cidade?: string[];
+  cnae?: string[];
+  porte?: string[];
+  divida_min?: number;
+  divida_max?: number;
+  capital_min?: number;
+  capital_max?: number;
+  incluir_inativas?: boolean;
+}
+
+function filtrosToQuery(f: AnalyticsFiltros = {}): URLSearchParams {
+  const p = new URLSearchParams();
+  (f.cidade ?? []).forEach(v => p.append("cidade", v));
+  (f.cnae ?? []).forEach(v => p.append("cnae", v));
+  (f.porte ?? []).forEach(v => p.append("porte", v));
+  if (f.divida_min != null) p.append("divida_min", String(f.divida_min));
+  if (f.divida_max != null) p.append("divida_max", String(f.divida_max));
+  if (f.capital_min != null) p.append("capital_min", String(f.capital_min));
+  if (f.capital_max != null) p.append("capital_max", String(f.capital_max));
+  if (f.incluir_inativas) p.append("incluir_inativas", "true");
+  return p;
+}
+
+export interface AnalyticsResumo {
+  total_empresas: number;
+  divida_total: number;
+  capital_total: number;
+  divida_media: number;
+  capital_medio: number;
+  qtd_cidades: number;
+  qtd_setores: number;
+  qtd_com_divida: number;
+  qtd_inativas: number;
+}
+
+export interface CidadeAgg {
+  cidade: string;
+  qtd: number;
+  capital_total: number;
+  divida_total: number;
+}
+
+export interface SetorAgg {
+  cnae: string;
+  descricao: string;
+  qtd: number;
+  capital_total: number;
+  divida_total: number;
+  divida_media: number;
+}
+
+export interface PorteAgg {
+  porte: string;
+  qtd: number;
+}
+
+export interface TopEmpresa {
+  cnpj_completo: string;
+  razao_social: string;
+  municipio: string;
+  cnae_principal: string;
+  cnae_descricao: string;
+  porte_nome: string | null;
+  capital_social: number;
+  divida_total: number;
+}
+
+export interface SocioAgg {
+  nome_socio: string;
+  qtd_empresas: number;
+  divida_total: number;
+  capital_total: number;
+}
+
+export interface SocioEmpresa {
+  cnpj_completo: string;
+  razao_social: string;
+  municipio: string;
+  cnae_principal: string;
+  cnae_descricao: string;
+  capital_social: number;
+  divida_total: number;
+}
+
+export interface OpcoesFiltro {
+  cidades: string[];
+  portes: string[];
+  cnaes: { codigo: string; descricao: string; qtd: number }[];
+}
+
+export function getAnalyticsResumo(f?: AnalyticsFiltros): Promise<AnalyticsResumo> {
+  return request(`/api/v1/analytics/resumo?${filtrosToQuery(f)}`);
+}
+
+export function getAnalyticsPorCidade(f?: AnalyticsFiltros, limite = 20): Promise<CidadeAgg[]> {
+  const p = filtrosToQuery(f); p.append("limite", String(limite));
+  return request(`/api/v1/analytics/por-cidade?${p}`);
+}
+
+export function getAnalyticsPorSetor(f?: AnalyticsFiltros, limite = 20): Promise<SetorAgg[]> {
+  const p = filtrosToQuery(f); p.append("limite", String(limite));
+  return request(`/api/v1/analytics/por-setor?${p}`);
+}
+
+export function getAnalyticsPorPorte(f?: AnalyticsFiltros): Promise<PorteAgg[]> {
+  return request(`/api/v1/analytics/por-porte?${filtrosToQuery(f)}`);
+}
+
+export function getAnalyticsTopEmpresas(
+  ordenarPor: "divida" | "capital" = "divida", limite = 10, f?: AnalyticsFiltros,
+): Promise<TopEmpresa[]> {
+  const p = filtrosToQuery(f);
+  p.append("ordenar_por", ordenarPor);
+  p.append("limite", String(limite));
+  return request(`/api/v1/analytics/top-empresas?${p}`);
+}
+
+export function getSociosRanking(f?: AnalyticsFiltros, limite = 50): Promise<SocioAgg[]> {
+  const p = filtrosToQuery(f); p.append("limite", String(limite));
+  return request(`/api/v1/analytics/socios/ranking?${p}`);
+}
+
+export function getSocioDetalhe(nome: string): Promise<SocioEmpresa[]> {
+  return request(`/api/v1/analytics/socios/detalhe?nome=${encodeURIComponent(nome)}`);
+}
+
+export function getOpcoesFiltro(): Promise<OpcoesFiltro> {
+  return request("/api/v1/analytics/opcoes-filtro");
 }

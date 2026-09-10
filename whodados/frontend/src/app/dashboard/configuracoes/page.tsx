@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 async function get<T>(p: string) {
@@ -113,36 +114,276 @@ function SobreTab() {
   );
 }
 
+function PerfilTab() {
+  const { username } = useAuth();
+  const [senhaAtual, setSenhaAtual] = useState("");
+  const [novaSenha, setNovaSenha] = useState("");
+  const [confirmSenha, setConfirmSenha] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+
+  const salvar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFb(null);
+    if (novaSenha.length < 8) {
+      setFb({ t: "e", m: "A nova senha precisa ter ao menos 8 caracteres." });
+      return;
+    }
+    if (novaSenha !== confirmSenha) {
+      setFb({ t: "e", m: "As senhas nao coincidem." });
+      return;
+    }
+    setSalvando(true);
+    try {
+      const r = await trocarMinhaSenha(senhaAtual, novaSenha);
+      setFb({ t: "s", m: r.message || "Senha atualizada com sucesso." });
+      setSenhaAtual("");
+      setNovaSenha("");
+      setConfirmSenha("");
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao atualizar a senha." });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl bg-white border p-5">
+        <h3 className="font-semibold mb-1">Conta</h3>
+        <p className="text-sm text-slate-500">Usuario logado: <strong>{username}</strong></p>
+      </div>
+      <form onSubmit={salvar} className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold mb-1">Trocar senha</h3>
+        <input type="password" placeholder="Senha atual" value={senhaAtual} onChange={e => setSenhaAtual(e.target.value)} required className="w-full border rounded px-3 py-2" />
+        <input type="password" placeholder="Nova senha (min. 8 caracteres)" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} required className="w-full border rounded px-3 py-2" />
+        <input type="password" placeholder="Confirmar nova senha" value={confirmSenha} onChange={e => setConfirmSenha(e.target.value)} required className="w-full border rounded px-3 py-2" />
+        {fb && <div className={`p-3 rounded text-sm ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{fb.m}</div>}
+        <button type="submit" disabled={salvando} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{salvando ? "Salvando..." : "Salvar nova senha"}</button>
+      </form>
+    </div>
+  );
+}
+
+function RegrasTab() {
+  const { isAdmin } = useAuth();
+  const [cfg, setCfg] = useState<SlaConfig | null>(null);
+  const [verde, setVerde] = useState(2);
+  const [amarelo, setAmarelo] = useState(5);
+  const [loading, setLoading] = useState(true);
+  const [salvando, setSalvando] = useState(false);
+  const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const c = await getSlaConfig();
+        setCfg(c);
+        setVerde(c.sla_verde_dias);
+        setAmarelo(c.sla_amarelo_dias);
+      } catch { }
+      setLoading(false);
+    })();
+  }, []);
+
+  const salvar = async () => {
+    setFb(null);
+    setSalvando(true);
+    try {
+      const c = await updateSlaConfig({ sla_verde_dias: verde, sla_amarelo_dias: amarelo });
+      setCfg(c);
+      setFb({ t: "s", m: "Regras atualizadas com sucesso." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao salvar." });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  if (loading) return <div className="p-8 text-slate-500">Carregando...</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Semaforo do Monitor de E-mails</h3>
+        <p className="text-sm text-slate-500">
+          Define quantos dias sem resposta um e-mail pode esperar antes de virar amarelo ou vermelho no Monitor/CRM.
+        </p>
+        <div className="grid grid-cols-2 gap-4 max-w-md">
+          <label className="text-sm text-slate-600">
+            🟢 Verde (dias)
+            <input type="number" min={1} value={verde} onChange={e => setVerde(Number(e.target.value))} disabled={!isAdmin} className="mt-1 w-full border rounded px-3 py-2 disabled:bg-slate-50" />
+          </label>
+          <label className="text-sm text-slate-600">
+            🟡 Amarelo até (dias)
+            <input type="number" min={1} value={amarelo} onChange={e => setAmarelo(Number(e.target.value))} disabled={!isAdmin} className="mt-1 w-full border rounded px-3 py-2 disabled:bg-slate-50" />
+          </label>
+        </div>
+        <p className="text-xs text-slate-400">Acima de {amarelo} dias sem resposta, o status fica vermelho.</p>
+        {fb && <div className={`p-3 rounded text-sm ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{fb.m}</div>}
+        {isAdmin ? (
+          <button onClick={salvar} disabled={salvando} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{salvando ? "Salvando..." : "Salvar regras"}</button>
+        ) : (
+          <p className="text-xs text-slate-400">Somente administradores podem alterar estes valores.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UsuariosTab() {
+  const { username: meuUsername } = useAuth();
+  const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+  const [mostrarNovo, setMostrarNovo] = useState(false);
+  const [novoUser, setNovoUser] = useState("");
+  const [novoEmail, setNovoEmail] = useState("");
+  const [novaSenha, setNovaSenha] = useState("");
+  const [novoAdmin, setNovoAdmin] = useState(false);
+  const [criando, setCriando] = useState(false);
+
+  const carregar = async () => {
+    try {
+      setUsuarios(await listarUsuarios());
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao carregar usuarios." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const toggle = async (u: UsuarioAdmin, campo: "is_admin" | "is_active") => {
+    setFb(null);
+    try {
+      await atualizarUsuarioAdmin(u.id, { [campo]: !u[campo] });
+      await carregar();
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao atualizar usuario." });
+    }
+  };
+
+  const resetarSenha = async (u: UsuarioAdmin) => {
+    const nova = window.prompt(`Nova senha para ${u.username} (min. 8 caracteres):`);
+    if (!nova) return;
+    try {
+      const r = await redefinirSenhaUsuarioAdmin(u.id, nova);
+      setFb({ t: "s", m: r.message || "Senha redefinida." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao redefinir senha." });
+    }
+  };
+
+  const criar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFb(null);
+    setCriando(true);
+    try {
+      await criarUsuarioAdmin({ username: novoUser, password: novaSenha, email: novoEmail || undefined, is_admin: novoAdmin });
+      setFb({ t: "s", m: `Usuario '${novoUser}' criado.` });
+      setNovoUser(""); setNovoEmail(""); setNovaSenha(""); setNovoAdmin(false); setMostrarNovo(false);
+      await carregar();
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao criar usuario." });
+    } finally {
+      setCriando(false);
+    }
+  };
+
+  if (loading) return <div className="p-8 text-slate-500">Carregando...</div>;
+
+  return (
+    <div className="space-y-4">
+      {fb && <div className={`p-3 rounded text-sm ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{fb.m}</div>}
+
+      <div className="rounded-xl bg-white border divide-y divide-slate-100">
+        {usuarios.map(u => (
+          <div key={u.id} className="flex items-center justify-between px-5 py-3 gap-3 flex-wrap">
+            <div>
+              <div className="font-medium text-slate-800">{u.username} {u.username === meuUsername && <span className="text-xs text-slate-400">(você)</span>}</div>
+              <div className="text-xs text-slate-500">{u.email || "sem e-mail"}</div>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-1 text-slate-600">
+                <input type="checkbox" checked={u.is_admin} onChange={() => toggle(u, "is_admin")} />
+                Admin
+              </label>
+              <label className="flex items-center gap-1 text-slate-600">
+                <input type="checkbox" checked={u.is_active} onChange={() => toggle(u, "is_active")} />
+                Ativo
+              </label>
+              <button onClick={() => resetarSenha(u)} className="text-indigo-600 hover:underline text-xs">Redefinir senha</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {mostrarNovo ? (
+        <form onSubmit={criar} className="rounded-xl bg-white border p-5 space-y-3">
+          <h3 className="font-semibold">Novo usuario</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <input placeholder="Usuario" value={novoUser} onChange={e => setNovoUser(e.target.value)} required className="border rounded px-3 py-2" />
+            <input type="email" placeholder="E-mail (opcional)" value={novoEmail} onChange={e => setNovoEmail(e.target.value)} className="border rounded px-3 py-2" />
+            <input type="password" placeholder="Senha (min. 8 caracteres)" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} required className="border rounded px-3 py-2" />
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={novoAdmin} onChange={e => setNovoAdmin(e.target.checked)} />
+              Administrador
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" disabled={criando} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{criando ? "Criando..." : "Criar usuario"}</button>
+            <button type="button" onClick={() => setMostrarNovo(false)} className="px-4 py-2 rounded text-slate-600 hover:bg-slate-100">Cancelar</button>
+          </div>
+        </form>
+      ) : (
+        <button onClick={() => setMostrarNovo(true)} className="bg-indigo-600 text-white px-4 py-2 rounded">+ Novo usuario</button>
+      )}
+    </div>
+  );
+}
+
+type Aba = "perfil" | "regras" | "usuarios" | "email" | "sobre";
+
 export default function ConfiguracoesPage() {
-  const [aba, setAba] = useState<"email" | "sobre">("email");
+  const { isAdmin } = useAuth();
+  const [aba, setAba] = useState<Aba>("perfil");
+
+  const abas: { id: Aba; label: string; icone: string; somenteAdmin?: boolean }[] = [
+    { id: "perfil", label: "Perfil", icone: "👤" },
+    { id: "regras", label: "Regras do CRM/Monitor", icone: "🎯" },
+    { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
+    { id: "email", label: "Email", icone: "✉️" },
+    { id: "sobre", label: "Sobre", icone: "ℹ️" },
+  ];
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-800">Configurações</h1>
-        <p className="text-sm text-slate-500">Configure o e-mail de envio e acompanhe o status dos dados.</p>
+        <p className="text-sm text-slate-500">Sua conta, regras do sistema, usuários e status dos dados.</p>
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-slate-200">
-        <button
-          onClick={() => setAba("email")}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            aba === "email" ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-        >
-          ✉️ Email
-        </button>
-        <button
-          onClick={() => setAba("sobre")}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            aba === "sobre" ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-        >
-          ℹ️ Sobre
-        </button>
+      <div className="mb-6 flex gap-1 border-b border-slate-200 overflow-x-auto">
+        {abas.filter(a => !a.somenteAdmin || isAdmin).map(a => (
+          <button
+            key={a.id}
+            onClick={() => setAba(a.id)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+              aba === a.id ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {a.icone} {a.label}
+          </button>
+        ))}
       </div>
 
-      {aba === "email" ? <EmailTab /> : <SobreTab />}
+      {aba === "perfil" && <PerfilTab />}
+      {aba === "regras" && <RegrasTab />}
+      {aba === "usuarios" && isAdmin && <UsuariosTab />}
+      {aba === "email" && <EmailTab />}
+      {aba === "sobre" && <SobreTab />}
     </div>
   );
 }
