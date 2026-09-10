@@ -125,16 +125,51 @@ export interface EmpresaItem {
   capital_social: number;
   divida_total: number;
   porte_nome: string | null;
+  data_fundacao?: string | null;
 }
 
-export async function listarEmpresas(cidade?: string, cnae?: string, busca?: string, limit = 100, offset = 0): Promise<EmpresaItem[]> {
-  const params = new URLSearchParams();
-  if (cidade) params.append("cidade", cidade);
-  if (cnae) params.append("cnae", cnae);
-  if (busca) params.append("busca", busca);
-  params.append("limit", String(limit));
-  params.append("offset", String(offset));
-  return request(`/api/v1/empresas?${params}`);
+/** Filtros do funil de empresas (aplicados no servidor). */
+export interface EmpresaFiltros {
+  cidade?: string[];
+  cnae?: string[];
+  porte?: string[];
+  busca?: string;
+  divida_min?: number;
+  divida_max?: number;
+  capital_min?: number;
+  capital_max?: number;
+  fundacao_de?: string;   // YYYY-MM-DD
+  fundacao_ate?: string;  // YYYY-MM-DD
+  incluir_inativas?: boolean;
+}
+
+function empresaFiltrosToQuery(f: EmpresaFiltros = {}): URLSearchParams {
+  const p = new URLSearchParams();
+  (f.cidade ?? []).forEach(v => p.append("cidade", v));
+  (f.cnae ?? []).forEach(v => p.append("cnae", v));
+  (f.porte ?? []).forEach(v => p.append("porte", v));
+  if (f.busca) p.append("busca", f.busca);
+  if (f.divida_min != null) p.append("divida_min", String(f.divida_min));
+  if (f.divida_max != null) p.append("divida_max", String(f.divida_max));
+  if (f.capital_min != null) p.append("capital_min", String(f.capital_min));
+  if (f.capital_max != null) p.append("capital_max", String(f.capital_max));
+  if (f.fundacao_de) p.append("fundacao_de", f.fundacao_de);
+  if (f.fundacao_ate) p.append("fundacao_ate", f.fundacao_ate);
+  if (f.incluir_inativas === false) p.append("incluir_inativas", "false");
+  return p;
+}
+
+/** Uma pagina de empresas para o filtro atual (funil server-side). */
+export async function listarEmpresas(filtros: EmpresaFiltros = {}, limit = 100, offset = 0): Promise<EmpresaItem[]> {
+  const p = empresaFiltrosToQuery(filtros);
+  p.append("limit", String(limit));
+  p.append("offset", String(offset));
+  return request(`/api/v1/empresas?${p}`);
+}
+
+/** Total de empresas que batem no filtro atual (contador do funil). */
+export async function contarEmpresas(filtros: EmpresaFiltros = {}): Promise<{ total: number }> {
+  return request(`/api/v1/empresas/count?${empresaFiltrosToQuery(filtros)}`);
 }
 
 export interface Socio {
