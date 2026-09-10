@@ -1,0 +1,41 @@
+name: Keep-alive — mantem Supabase e Render ativos
+
+# O Supabase free PAUSA o banco apos ~7 dias sem uso (e nao volta sozinho).
+# O Render free hiberna o backend apos 15 min parado (volta sozinho, mas com
+# ~50s de cold start). Este workflow da um "ping" no endpoint /health a cada
+# 3 dias -- e como /health consulta o banco, um unico ping mantem os dois
+# ativos. Assim a ferramenta esta sempre de pe quando voce precisa dela.
+
+on:
+  schedule:
+    # A cada 3 dias as 12h UTC (~09h de Brasilia). Folga confortavel dentro
+    # da janela de 7 dias do Supabase.
+    - cron: "0 12 */3 * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping /health
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Acorda o backend e toca o Supabase
+        run: |
+          URL="https://whodados-backend.onrender.com/health"
+          echo "Pingando $URL"
+          # Ate 5 tentativas: a 1a pode demorar (cold start do Render).
+          for i in 1 2 3 4 5; do
+            code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" --max-time 90 "$URL") || code=000
+            echo "Tentativa $i -> HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "Resposta:"; cat /tmp/resp.json; echo
+              if grep -qE '"banco_ok" *: *true' /tmp/resp.json; then
+                echo "OK: backend acordado e banco ativo."
+                exit 0
+              fi
+              echo "[AVISO] Backend respondeu, mas banco_ok != true. Continuando as tentativas..."
+            fi
+            sleep 30
+          done
+          echo "[ERRO] Backend/banco nao responderam 200 com banco_ok apos 5 tentativas."
+          exit 1
