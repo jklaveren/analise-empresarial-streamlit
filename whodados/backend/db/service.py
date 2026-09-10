@@ -788,6 +788,20 @@ def get_org_logo(organizacao_id: int) -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
+def delete_user(user_id: int) -> bool:
+    """Exclui um usuario. Os vinculos usuario_organizacoes caem por CASCADE."""
+    with get_db_cursor() as cur:
+        cur.execute("DELETE FROM app_users WHERE id = %s", (user_id,))
+        return cur.rowcount > 0
+
+
+def update_user_email(user_id: int, email: Optional[str]) -> bool:
+    """Atualiza o e-mail de um usuario (None/vazio limpa)."""
+    with get_db_cursor() as cur:
+        cur.execute("UPDATE app_users SET email = %s, updated_at = NOW() WHERE id = %s", (email or None, user_id))
+        return cur.rowcount > 0
+
+
 def _tabela_existe(cur, nome_tabela: str) -> bool:
     cur.execute(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s) AS existe",
@@ -797,20 +811,83 @@ def _tabela_existe(cur, nome_tabela: str) -> bool:
     return bool(row and row.get("existe"))
 
 
+# Regex (case-insensitive) das situacoes "problematicas" -- mesmo criterio do
+# Legado (toggle "Permitir Falencia / Rec. Judicial"). Quando incluir_inativas
+# e False, essas empresas sao excluidas.
+_BLACKLIST_REGEX = r"RECUPERACAO|FALIDA|JUDICIAL|MASSA FALIDA|EM LIQUIDACAO|BAIXADA|INAPTA"
+
+
+def _norm_lista(v) -> List[str]:
+    """Aceita None, str ou lista -> lista de strings nao-vazias (o endpoint manda
+    lista para multiselect; campanhas antigas podem mandar uma string)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    return [str(x) for x in v if x is not None and str(x) != ""]
+
+
+def _where_empresas(
+    cidade=None, cnae=None, porte=None, busca=None,
+    divida_min=None, divida_max=None, capital_min=None, capital_max=None,
+    fundacao_de=None, fundacao_ate=None, incluir_inativas: bool = True,
+):
+    """Monta o WHERE (e os params) compartilhado pela listagem e pela contagem,
+    a partir dos filtros do funil (cidade, CNAE, porte, faixas de passivo/capital,
+    data de fundacao, blacklist RJ). Assume os aliases e (dados_empresas) e m
+    (municipios) na query."""
+    import re as _re
+    clauses: List[str] = []
+    params: List[Any] = []
+    cidades = _norm_lista(cidade)
+    if cidades:
+        clauses.append("m.nome_municipio = ANY(%s)"); params.append(cidades)
+    cnaes = _norm_lista(cnae)
+    if cnaes:
+        clauses.append('e."CNAE_PRINCIPAL" = ANY(%s)'); params.append(cnaes)
+    portes = _norm_lista(porte)
+    if portes:
+        clauses.append('e."PORTE_NOME" = ANY(%s)'); params.append(portes)
+    if busca:
+        clauses.append('(e."RAZAO_SOCIAL" ILIKE %s OR e."NOME_FANTASIA" ILIKE %s)')
+        params.extend([f"%{busca}%", f"%{busca}%"])
+    if divida_min is not None:
+        clauses.append('COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0) >= %s'); params.append(divida_min)
+    if divida_max is not None:
+        clauses.append('COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0) <= %s'); params.append(divida_max)
+    if capital_min is not None:
+        clauses.append('COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0) >= %s'); params.append(capital_min)
+    if capital_max is not None:
+        clauses.append('COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0) <= %s'); params.append(capital_max)
+    # DATA_FUNDACAO vem como texto YYYYMMDD -> comparacao lexicografica = cronologica.
+    if fundacao_de:
+        clauses.append('e."DATA_FUNDACAO" >= %s'); params.append(_re.sub(r"\D", "", str(fundacao_de)))
+    if fundacao_ate:
+        clauses.append('e."DATA_FUNDACAO" <= %s'); params.append(_re.sub(r"\D", "", str(fundacao_ate)))
+    if not incluir_inativas:
+        clauses.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s'); params.append(_BLACKLIST_REGEX)
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
 def listar_empresas_db(
-    cidade: Optional[str] = None,
-    cnae: Optional[str] = None,
-    busca: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
+    cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
+    divida_min=None, divida_max=None, capital_min=None, capital_max=None,
+    fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
+    incluir_inativas: bool = True,
+    limit: int = 100, offset: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Lista empresas a partir de dados_empresas. Retorna [] se a tabela
-    ainda nao existir (pipeline de ETL nunca rodou) ou em caso de erro."""
+    """Lista empresas de dados_empresas com o funil de filtros (server-side).
+    Retorna [] se a tabela ainda nao existir (ETL nunca rodou) ou em caso de erro."""
     try:
         with get_db_cursor() as cur:
             if not _tabela_existe(cur, "dados_empresas"):
                 return []
-            sql = """
+            where, params = _where_empresas(
+                cidade, cnae, porte, busca, divida_min, divida_max,
+                capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
+            )
+            sql = f"""
                 SELECT
                     e."CNPJ_COMPLETO" AS cnpj_completo,
                     e."RAZAO_SOCIAL" AS razao_social,
@@ -820,29 +897,49 @@ def listar_empresas_db(
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
                     COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
                     COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
-                    e."PORTE_NOME" AS porte_nome
+                    e."PORTE_NOME" AS porte_nome,
+                    e."DATA_FUNDACAO" AS data_fundacao
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
-                WHERE 1=1
+                WHERE 1=1 {where}
+                ORDER BY e."RAZAO_SOCIAL" LIMIT %s OFFSET %s
             """
-            params: List[Any] = []
-            if cidade:
-                sql += " AND m.nome_municipio ILIKE %s"
-                params.append(f"%{cidade}%")
-            if cnae:
-                sql += ' AND e."CNAE_PRINCIPAL" ILIKE %s'
-                params.append(f"%{cnae}%")
-            if busca:
-                sql += ' AND (e."RAZAO_SOCIAL" ILIKE %s OR e."NOME_FANTASIA" ILIKE %s)'
-                params.extend([f"%{busca}%", f"%{busca}%"])
-            sql += ' ORDER BY e."RAZAO_SOCIAL" LIMIT %s OFFSET %s'
-            params.extend([limit, offset])
-            cur.execute(sql, params)
+            cur.execute(sql, params + [limit, offset])
             return cur.fetchall()
     except Exception as e:
         log.warning(f"listar_empresas_db falhou, retornando lista vazia: {e}")
         return []
+
+
+def contar_empresas_db(
+    cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
+    divida_min=None, divida_max=None, capital_min=None, capital_max=None,
+    fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
+    incluir_inativas: bool = True,
+) -> int:
+    """Conta quantas empresas batem no filtro atual (para o contador do funil,
+    sem trazer as linhas). Retorna 0 se a tabela nao existir ou em caso de erro."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "dados_empresas"):
+                return 0
+            where, params = _where_empresas(
+                cidade, cnae, porte, busca, divida_min, divida_max,
+                capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
+            )
+            sql = f"""
+                SELECT COUNT(*) AS total
+                FROM dados_empresas e
+                LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                WHERE 1=1 {where}
+            """
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            return int(row["total"]) if row and row.get("total") is not None else 0
+    except Exception as e:
+        log.warning(f"contar_empresas_db falhou, retornando 0: {e}")
+        return 0
 
 
 def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
