@@ -94,6 +94,102 @@ def ensure_tables():
         cur.execute("CREATE TABLE IF NOT EXISTS cnaes (codigo_cnae VARCHAR(10) PRIMARY KEY, descricao_cnae VARCHAR(300))")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
+    _ensure_multiempresa()
+
+
+def _ensure_multiempresa():
+    """Multi-tenant (empresas NRA / SYVP). Fase aditiva: cria as tabelas de
+    organizacao, o vinculo usuario<->empresa e a config SMTP por empresa,
+    adiciona a coluna organizacao_id (nullable) nas tabelas de controle e faz
+    a migracao (tudo que ja existe vira NRA). NAO mexe no UNIQUE do CRM nem no
+    scoping das queries -- isso vem junto com o codigo que depende, para esta
+    etapa nao quebrar nada. Idempotente: roda a cada boot sem efeito colateral.
+    Ver plano multi-empresa (memoria: whodados-multiempresa-nra-syvp).
+
+    Envolvido em try/except: se algo falhar, apenas loga e segue (o app nao
+    cai por causa da migracao) -- como e idempotente, re-tenta no proximo boot."""
+    import os
+    try:
+        _run_ensure_multiempresa(os)
+    except Exception as e:
+        log.error(f"Falha na migracao multi-empresa (sera retentada no proximo boot): {e}")
+
+
+def _run_ensure_multiempresa(os):
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # --- Tabelas de organizacao ---
+        cur.execute("""CREATE TABLE IF NOT EXISTS organizacoes (
+            id SERIAL PRIMARY KEY,
+            nome VARCHAR(120) NOT NULL,
+            slug VARCHAR(60) UNIQUE NOT NULL,
+            ativo BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS usuario_organizacoes (
+            user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (user_id, organizacao_id)
+        )""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS org_smtp_config (
+            organizacao_id INTEGER PRIMARY KEY REFERENCES organizacoes(id) ON DELETE CASCADE,
+            smtp_host VARCHAR(200),
+            smtp_port INTEGER DEFAULT 587,
+            smtp_username VARCHAR(200),
+            smtp_password VARCHAR(255),
+            smtp_use_tls BOOLEAN DEFAULT TRUE,
+            email_from VARCHAR(255),
+            email_from_name VARCHAR(120),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+
+        # --- Seed das empresas (idempotente por slug) ---
+        cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")
+        cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('SYVP', 'syvp') ON CONFLICT (slug) DO NOTHING")
+
+        # --- jehzinha (admin) tem acesso as duas ---
+        cur.execute("""INSERT INTO usuario_organizacoes (user_id, organizacao_id)
+            SELECT u.id, o.id FROM app_users u CROSS JOIN organizacoes o
+            WHERE u.username = 'jehzinha'
+            ON CONFLICT DO NOTHING""")
+
+        # --- Coluna organizacao_id (nullable) + indice nas tabelas de controle ---
+        for tabela in ("crm", "email_templates", "campanhas", "emails_enviados", "notificacoes"):
+            cur.execute(f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS organizacao_id INTEGER")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{tabela}_org ON {tabela}(organizacao_id)")
+
+        # --- Migracao: tudo que ja existe vira NRA ---
+        for tabela in ("crm", "email_templates", "campanhas", "emails_enviados", "notificacoes"):
+            cur.execute(
+                f"UPDATE {tabela} SET organizacao_id = "
+                f"(SELECT id FROM organizacoes WHERE slug = 'nra') "
+                f"WHERE organizacao_id IS NULL"
+            )
+
+        # --- Migra o SMTP global (.env) para a NRA como valor inicial ---
+        smtp_host = os.getenv("SMTP_HOST", "").strip()
+        if smtp_host:
+            cur.execute(
+                """INSERT INTO org_smtp_config
+                     (organizacao_id, smtp_host, smtp_port, smtp_username,
+                      smtp_password, smtp_use_tls, email_from, email_from_name)
+                   SELECT o.id, %s, %s, %s, %s, %s, %s, %s
+                     FROM organizacoes o WHERE o.slug = 'nra'
+                   ON CONFLICT (organizacao_id) DO NOTHING""",
+                (
+                    smtp_host,
+                    int(os.getenv("SMTP_PORT", "587") or "587"),
+                    os.getenv("SMTP_USERNAME", "").strip(),
+                    os.getenv("SMTP_PASSWORD", "").strip(),
+                    os.getenv("SMTP_USE_TLS", "true").lower() == "true",
+                    os.getenv("EMAIL_FROM", "").strip(),
+                    os.getenv("EMAIL_FROM_NAME", "").strip(),
+                ),
+            )
+
+        conn.commit(); cur.close()
 
 
 def _ensure_enriquecimento_table():
