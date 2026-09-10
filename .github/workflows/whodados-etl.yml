@@ -1,23 +1,42 @@
 name: Atualizar Dados (Pipeline ETL) — WhoDados
 
 on:
-  # Executa toda segunda-feira as 02h UTC (~23h de domingo, horario de Brasilia)
+  # Toda segunda-feira as 02h UTC (~23h de domingo, horario de Brasilia).
+  # Obs: a Receita so publica os dados de CNPJ 1x por mes e a PGFN 1x por
+  # trimestre -- as execucoes semanais no meio do mes reprocessam os mesmos
+  # dados. O cache dos downloads (abaixo) evita rebaixar os ~4 GB, mas o
+  # estagio de processamento (~2h) roda de novo. Considere voltar para
+  # mensal ("0 2 1 * *") se o custo/tempo incomodar.
   schedule:
     - cron: "0 2 * * 1"
 
-  # Permite executar manualmente pelo GitHub (aba "Actions")
+  # Execucao manual pela aba "Actions".
   workflow_dispatch:
     inputs:
       mes_referencia:
-        description: "Mes/Ano de referencia (ex: 2026-05)"
+        description: "Mes/Ano RF (ex: 2026-05). Vazio = detecta automaticamente."
+        required: false
+        default: ""
+      trimestre_pgfn:
+        description: "Trimestre PGFN (ex: 2026_trimestre_01). Vazio = usa o padrao."
         required: false
         default: ""
 
+# Nao deixa duas execucoes do ETL rodarem ao mesmo tempo (a nova espera a
+# anterior terminar em vez de competir pelos mesmos arquivos / cache).
+concurrency:
+  group: etl-pipeline
+  cancel-in-progress: false
+
 jobs:
   etl-pipeline:
-    name: "Executar Pipeline de Extracao"
+    name: "Pipeline de Extracao (fracionado)"
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 350
+
+    env:
+      WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
+      RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
 
     steps:
       - name: Checkout do repositorio
@@ -36,21 +55,82 @@ jobs:
       - name: Instalar ferramentas de rede
         run: sudo apt-get update && sudo apt-get install -y curl wget
 
-      - name: Executar Pipeline de Extracao
-        run: python whodados/pipeline/pipeline.py
+      # ----------------------------------------------------------------
+      # Periodo de referencia: detecta (ou usa o input manual) UMA vez e
+      # fixa em RF_MES_REFERENCIA / PGFN_TRIMESTRE para todos os estagios
+      # seguintes -- assim os estagios nao ficam re-sondando o servidor da
+      # Receita a cada passo, e todos usam exatamente o mesmo mes.
+      # ----------------------------------------------------------------
+      - name: Detectar periodo de referencia (RF + PGFN)
         env:
-          RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
-          WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
-          # Prioridade: input manual (workflow_dispatch) > variavel do repositorio > padrao no codigo.
+          # Prioridade: input manual (workflow_dispatch) > variavel do repo > deteccao automatica.
           RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia || vars.RF_MES_REFERENCIA }}
+          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn || vars.PGFN_TRIMESTRE }}
+        run: |
+          python whodados/pipeline/pipeline.py detect \
+            | grep -E '^(RF_MES_REFERENCIA|PGFN_TRIMESTRE)=' >> "$GITHUB_ENV"
+          echo "Referencia fixada para esta execucao:"
+          grep -E 'RF_MES_REFERENCIA|PGFN_TRIMESTRE' "$GITHUB_ENV"
+
+      # ----------------------------------------------------------------
+      # Cache dos zips baixados (~3-4 GB). Chave por mes RF + trimestre PGFN:
+      # dentro do mesmo mes, re-execucoes (por falha em um estagio tardio)
+      # pulam o download inteiro. Mes novo = cache novo = baixa do zero.
+      # ----------------------------------------------------------------
+      - name: Cache dos downloads (RF + PGFN)
+        uses: actions/cache@v4
+        with:
+          path: whodados/pipeline/raw
+          key: etl-raw-${{ env.RF_MES_REFERENCIA }}-${{ env.PGFN_TRIMESTRE }}
+          restore-keys: |
+            etl-raw-${{ env.RF_MES_REFERENCIA }}-
+
+      # ----------------------------------------------------------------
+      # Estagios. Rodam no mesmo job (o disco persiste entre steps), mas
+      # separados para: (1) timeout proprio por etapa, (2) log limpo por
+      # etapa, (3) re-executar so o que falhou aproveitando o cache.
+      # ----------------------------------------------------------------
+      - name: "Estagio 1/5 — Download RF (empresas, estabelecimentos, socios, aux)"
+        timeout-minutes: 90
+        run: python whodados/pipeline/pipeline.py download-rf
+
+      - name: "Estagio 2/5 — Download PGFN (divida ativa)"
+        timeout-minutes: 45
+        run: python whodados/pipeline/pipeline.py download-pgfn
+
+      - name: "Estagio 3/5 — Processar RF (estab + empresas + socios + municipios + cnaes)"
+        timeout-minutes: 150
+        run: python whodados/pipeline/pipeline.py process-rf
+
+      - name: "Estagio 4/5 — Processar PGFN (consolida divida por CNPJ)"
+        timeout-minutes: 60
+        run: python whodados/pipeline/pipeline.py process-pgfn
+
+      - name: "Estagio 5/5 — Merge (gera subset master + metadata)"
+        timeout-minutes: 30
+        run: python whodados/pipeline/pipeline.py merge
 
       - name: Verificar arquivos gerados
+        if: always()
         run: |
           echo "=== Arquivos em whodados/pipeline/out/ ==="
-          ls -lh whodados/pipeline/out/
+          ls -lh whodados/pipeline/out/ 2>/dev/null || echo "(diretorio vazio)"
           echo ""
           echo "=== Contagem de linhas ==="
           wc -l whodados/pipeline/out/*.csv 2>/dev/null || echo "Nenhum CSV encontrado"
+
+      # Rede de seguranca: mesmo que a sync com o Supabase falhe (ou o job
+      # seja morto depois), os CSVs ficam baixaveis por 14 dias.
+      - name: Publicar CSVs como artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-out-${{ env.RF_MES_REFERENCIA }}
+          path: |
+            whodados/pipeline/out/*.csv
+            whodados/pipeline/out/metadata_pipeline.json
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Sincronizar dados com Supabase
         if: vars.SUPABASE_CONNECTION_STRING != ''
@@ -58,17 +138,11 @@ jobs:
         env:
           DATABASE_URL: ${{ vars.SUPABASE_CONNECTION_STRING }}
           DATA_SOURCE: files
-          WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
 
-      - name: Limpar arquivos temporarios (zips)
+      - name: Limpar intermediarios e zips antigos
         if: always()
         run: |
-          echo "Limpando zips antigos..."
-          find whodados/pipeline/raw -name "*.zip" -mtime +7 -delete 2>/dev/null || true
-          echo "Limpando CSVs intermediarios..."
+          echo "Removendo CSVs intermediarios..."
           rm -f whodados/pipeline/out/aux_*.csv 2>/dev/null || true
-
-      - name: Registrar data da ultima execucao
-        run: |
-          echo "Ultima execucao: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "${{ github.run_id }}" > whodados/.last_run
+          echo "Removendo zips com mais de 14 dias do cache..."
+          find whodados/pipeline/raw -name "*.zip" -mtime +14 -delete 2>/dev/null || true
