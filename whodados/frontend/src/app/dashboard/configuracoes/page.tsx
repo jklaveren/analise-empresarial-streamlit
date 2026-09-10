@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -294,6 +294,31 @@ function UsuariosTab() {
     }
   };
 
+  const editarEmail = async (u: UsuarioAdmin) => {
+    const novo = window.prompt(`E-mail de ${u.username}:`, u.email || "");
+    if (novo === null) return;
+    setFb(null);
+    try {
+      await atualizarUsuarioAdmin(u.id, { email: novo.trim() || null });
+      await carregar();
+      setFb({ t: "s", m: "E-mail atualizado." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao atualizar e-mail." });
+    }
+  };
+
+  const excluir = async (u: UsuarioAdmin) => {
+    if (!window.confirm(`Excluir o usuário '${u.username}'? Esta ação não tem volta.`)) return;
+    setFb(null);
+    try {
+      const r = await excluirUsuarioAdmin(u.id);
+      await carregar();
+      setFb({ t: "s", m: r.message || "Usuário excluído." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Erro ao excluir usuário." });
+    }
+  };
+
   const criar = async (e: React.FormEvent) => {
     e.preventDefault();
     setFb(null);
@@ -343,7 +368,11 @@ function UsuariosTab() {
                 <input type="checkbox" checked={u.is_active} onChange={() => toggle(u, "is_active")} />
                 Ativo
               </label>
+              <button onClick={() => editarEmail(u)} className="text-slate-600 hover:underline text-xs">E-mail</button>
               <button onClick={() => resetarSenha(u)} className="text-indigo-600 hover:underline text-xs">Redefinir senha</button>
+              {u.username !== meuUsername && (
+                <button onClick={() => excluir(u)} className="text-red-600 hover:underline text-xs">Excluir</button>
+              )}
             </div>
           </div>
         ))}

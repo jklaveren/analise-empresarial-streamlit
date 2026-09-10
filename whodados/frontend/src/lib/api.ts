@@ -288,6 +288,9 @@ export interface Template {
   assunto: string;
   corpo_html: string;
   corpo_texto?: string | null;
+  categoria_cnae?: string;
+  imagem_url?: string | null;
+  tem_imagem?: boolean;
   created_at?: string;
   updated_at?: string;
   criado_por?: string;
@@ -318,8 +321,40 @@ export async function criarTemplate(data: Template): Promise<Template> {
   });
 }
 
+export async function atualizarTemplate(id: number, data: Partial<Template>): Promise<Template> {
+  return request(`/api/v1/templates/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deletarTemplate(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/templates/${id}`, { method: "DELETE" });
+}
+
+/** Envia um e-mail de teste deste template (valores de exemplo) para 1 endereco. */
+export async function enviarTesteTemplate(id: number, para: string): Promise<{ sucesso: boolean; simulado?: boolean; erro?: string }> {
+  return request(`/api/v1/templates/${id}/test-send`, {
+    method: "POST",
+    body: JSON.stringify({ para }),
+  });
+}
+
+/** Envia/atualiza a imagem (card) de um template. Referenciada no corpo via {{imagem}}. */
+export async function uploadTemplateImagem(id: number, file: File): Promise<Template> {
+  const form = new FormData();
+  form.append("arquivo", file);
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgId = getActiveOrgId();
+  if (orgId) headers["X-Org-Id"] = String(orgId);
+  const res = await fetch(`${API_URL}/api/v1/templates/${id}/imagem`, { method: "POST", headers, body: form });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({ detail: "Erro" }));
+    throw new ApiError(res.status, b.detail || "Erro ao enviar imagem");
+  }
+  return res.json();
 }
 
 export async function listarCampanhas(): Promise<Campanha[]> {
@@ -486,11 +521,15 @@ export async function uploadOrgLogo(orgId: number, file: File): Promise<{ sucess
   return res.json();
 }
 
-export async function atualizarUsuarioAdmin(userId: number, data: { is_admin?: boolean; is_active?: boolean }): Promise<UsuarioAdmin> {
+export async function atualizarUsuarioAdmin(userId: number, data: { is_admin?: boolean; is_active?: boolean; email?: string | null }): Promise<UsuarioAdmin> {
   return request(`/api/v1/admin/usuarios/${userId}`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
+}
+
+export async function excluirUsuarioAdmin(userId: number): Promise<{ sucesso: boolean; message: string }> {
+  return request(`/api/v1/admin/usuarios/${userId}`, { method: "DELETE" });
 }
 
 export async function redefinirSenhaUsuarioAdmin(userId: number, novaSenha: string): Promise<{ sucesso: boolean; message: string }> {

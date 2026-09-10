@@ -14,6 +14,12 @@ except ImportError:
     get_logger = lambda x: logging.getLogger(x)
 log = get_logger(__name__)
 
+try:
+    from ..crypto_utils import encrypt_secret, decrypt_secret
+except ImportError:  # fallback defensivo -- nunca deve ocorrer
+    def encrypt_secret(x): return x
+    def decrypt_secret(x): return x
+
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
         cur.execute("SELECT * FROM app_users WHERE username = %s", (username,))
@@ -746,7 +752,9 @@ def get_org_smtp_config(organizacao_id: int, incluir_password: bool = False) -> 
     dados["configurado"] = bool(dados.get("smtp_host") and dados.get("smtp_username"))
     dados["tem_logo"] = bool(dados.get("logo_data"))
     dados.pop("logo_data", None)  # bytes crus nunca vao no JSON
-    if not incluir_password:
+    if incluir_password:
+        dados["smtp_password"] = decrypt_secret(dados.get("smtp_password"))
+    else:
         dados.pop("smtp_password", None)
     return dados
 
@@ -766,8 +774,8 @@ def set_org_smtp_config(organizacao_id: int, smtp_host=None, smtp_port=None, smt
         ]:
             if val is not None:
                 campos.append(f"{col} = %s"); valores.append(val)
-        if smtp_password:  # so troca a senha se veio uma nova nao-vazia
-            campos.append("smtp_password = %s"); valores.append(smtp_password)
+        if smtp_password:  # so troca a senha se veio uma nova nao-vazia (cifrada em repouso)
+            campos.append("smtp_password = %s"); valores.append(encrypt_secret(smtp_password))
         if campos:
             campos.append("updated_at = NOW()")
             valores.append(organizacao_id)
