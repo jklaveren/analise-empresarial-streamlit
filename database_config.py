@@ -18,6 +18,7 @@ import os
 TABELA_EMPRESAS = "dados_empresas"
 TABELA_SOCIOS = "dados_socios"
 TABELA_MUNICIPIOS = "municipios"
+TABELA_CNAES = "cnaes"
 TABELA_METADATA = "pipeline_metadata"
 
 
@@ -93,6 +94,14 @@ def ensure_app_tables() -> None:
             )
             cur.execute(
                 f"""
+                CREATE TABLE IF NOT EXISTS {TABELA_CNAES} (
+                    codigo_cnae VARCHAR(10) PRIMARY KEY,
+                    descricao_cnae VARCHAR(300) NOT NULL
+                )
+                """
+            )
+            cur.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS {TABELA_METADATA} (
                     chave VARCHAR(100) PRIMARY KEY,
                     valor TEXT,
@@ -158,6 +167,16 @@ def criar_indices_dados() -> None:
             cur.execute(
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cnpj_basico '''
                 f'''ON {TABELA_EMPRESAS} ("CNPJ_BASICO")'''
+            )
+            # Usados pelos endpoints de analytics (GROUP BY / JOIN por setor
+            # e por municipio) e pelo filtro de listagem de empresas.
+            cur.execute(
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cnae '''
+                f'''ON {TABELA_EMPRESAS} ("CNAE_PRINCIPAL")'''
+            )
+            cur.execute(
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cod_municipio '''
+                f'''ON {TABELA_EMPRESAS} ("COD_MUNICIPIO")'''
             )
             cur.execute(
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_socios_cnpj_basico '''

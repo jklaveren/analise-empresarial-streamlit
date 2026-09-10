@@ -26,6 +26,7 @@ from database_config import (
     garantir_colunas_obrigatorias,
     get_data_table_names,
     registrar_metadata_pipeline,
+    TABELA_CNAES,
     TABELA_MUNICIPIOS,
 )
 import json
@@ -37,6 +38,7 @@ DATA_DIR = BASE_DIR / "pipeline" / "out"
 ARQ_EMPRESAS = DATA_DIR / "subset_rs_final_completo.csv"
 ARQ_SOCIOS = DATA_DIR / "socios_rs.csv"
 ARQ_MUNICIPIOS = DATA_DIR / "municipios.csv"
+ARQ_CNAES = DATA_DIR / "cnaes.csv"
 ARQ_METADATA = DATA_DIR / "metadata_pipeline.json"
 
 
@@ -78,6 +80,23 @@ def carregar_municipios():
     return df[["cod_municipio", "nome_municipio"]]
 
 
+def carregar_cnaes():
+    """Carrega cnaes.csv (codigo -> descricao da atividade economica), se
+    existir. Nao e obrigatorio -- se faltar, as empresas sincronizam mesmo
+    assim e o backend so mostra o codigo do CNAE, sem a descricao."""
+    if not ARQ_CNAES.exists():
+        print(f"[AVISO] '{ARQ_CNAES.name}' nao encontrado, pulando tabela de cnaes.")
+        return None
+    df = pd.read_csv(ARQ_CNAES, sep=";", encoding="utf-8", dtype=str)
+    if df.empty:
+        print(f"[AVISO] '{ARQ_CNAES.name}' esta vazio, pulando tabela de cnaes.")
+        return None
+    df = df.rename(columns={"CODIGO_CNAE": "codigo_cnae", "DESCRICAO_CNAE": "descricao_cnae"})
+    df = df[["codigo_cnae", "descricao_cnae"]].dropna(subset=["codigo_cnae"])
+    df = df.drop_duplicates(subset=["codigo_cnae"])
+    return df
+
+
 def main():
     ensure_app_tables()
     engine = create_db_engine()
@@ -98,6 +117,11 @@ def main():
     if municipios is not None:
         municipios.to_sql(TABELA_MUNICIPIOS, engine, if_exists="replace", index=False, chunksize=5000)
         print(f"OK Tabela de municipios atualizada: {TABELA_MUNICIPIOS} ({len(municipios)} linhas)")
+
+    cnaes = carregar_cnaes()
+    if cnaes is not None:
+        cnaes.to_sql(TABELA_CNAES, engine, if_exists="replace", index=False, chunksize=5000)
+        print(f"OK Tabela de cnaes atualizada: {TABELA_CNAES} ({len(cnaes)} linhas)")
 
     criar_indices_dados()
     print("OK Indices recriados.")

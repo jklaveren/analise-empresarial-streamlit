@@ -4,6 +4,7 @@
 # LOCAL: whodados/pipeline/pipeline.py
 # Roda com: python whodados/pipeline/pipeline.py
 # =================================================================
+import argparse
 import os
 import sys
 import subprocess
@@ -62,7 +63,7 @@ def detectar_mes_rf() -> str:
     """
     override = os.environ.get("RF_MES_REFERENCIA", "").strip().strip("/")
     if override:
-        print(f"  [INFO] Mes RF fixado manualmente via RF_MES_REFERENCIA: {override}")
+        print(f"  [INFO] Mes RF fixado manualmente via RF_MES_REFERENCIA: {override}", file=sys.stderr)
         return override
 
     padrao_seguranca = "2026-05"
@@ -83,18 +84,18 @@ def detectar_mes_rf() -> str:
             )
             codigo = resultado.stdout.strip()
         except Exception as e:
-            print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}")
+            print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}", file=sys.stderr)
             codigo = ""
 
         if codigo == "200":
-            print(f"  [OK] Mes RF detectado automaticamente: {candidato}")
+            print(f"  [OK] Mes RF detectado automaticamente: {candidato}", file=sys.stderr)
             return candidato
 
         mes -= 1
         if mes == 0:
             mes, ano = 12, ano - 1
 
-    print(f"  [WARN] Nao foi possivel detectar o mes RF automaticamente; usando padrao {padrao_seguranca}.")
+    print(f"  [WARN] Nao foi possivel detectar o mes RF automaticamente; usando padrao {padrao_seguranca}.", file=sys.stderr)
     return padrao_seguranca
 
 
@@ -121,11 +122,28 @@ PGFN     = [
 
 
 
+def _zip_valido(caminho: Path) -> bool:
+    """Confere se o arquivo existe e e um zip integro. Um download
+    interrompido deixa um .zip truncado que passaria pelo teste
+    'destino.exists()' e depois quebraria na leitura -- ou pior, seria
+    salvo no cache do GitHub Actions e contaminaria as proximas execucoes."""
+    if not caminho.exists() or caminho.stat().st_size == 0:
+        return False
+    try:
+        with zipfile.ZipFile(caminho) as z:
+            return z.testzip() is None
+    except zipfile.BadZipFile:
+        return False
+
+
 def baixar_rf(arquivo: str) -> Path:
     destino = RAW / arquivo
-    if destino.exists():
-        print(f"  [PULSO] {arquivo} ja existe — pulando.")
+    if _zip_valido(destino):
+        print(f"  [PULSO] {arquivo} ja existe e esta integro — pulando.")
         return destino
+    if destino.exists():
+        print(f"  [REBAIXA] {arquivo} existe mas esta corrompido/truncado — rebaixando.")
+        destino.unlink()
     url = BASE_URL_RF + arquivo
     cmd = [
         "curl", "-u", f"{TOKEN_COMPARTILHAMENTO}:", "-L", "-C", "-",
@@ -307,6 +325,27 @@ def processar_municipios() -> None:
     print(f"\u2705 Municipios processados: {len(df_mun)}")
 
 
+def processar_cnaes() -> None:
+    """Extrai a tabela de codigo->descricao de CNAEs (baixada em Cnaes.zip)
+    para out/cnaes.csv. Usada para traduzir CNAE_PRINCIPAL (que vem so como
+    codigo, ex: '6201100') no nome da atividade economica -- igual ao que o
+    app legado (LegadoStream/engine_dados.py) fazia com um cnaes.csv fixo."""
+    print("\n\U0001F4D6  Etapa: Processando tabela de CNAEs...")
+    destino = OUT / "cnaes.csv"
+    zip_path = RAW / "Cnaes.zip"
+    if not zip_path.exists():
+        print("  [AVISO] Cnaes.zip nao encontrado, pulando esta etapa.")
+        return
+    with zipfile.ZipFile(zip_path) as z:
+        f_name = z.namelist()[0]
+        with z.open(f_name) as f:
+            df_cnae = pd.read_csv(f, sep=";", encoding="latin1", header=None, dtype=str)
+    df_cnae = df_cnae.iloc[:, :2]
+    df_cnae.columns = ["CODIGO_CNAE", "DESCRICAO_CNAE"]
+    df_cnae.to_csv(destino, sep=";", index=False, encoding="utf-8")
+    print(f"\u2705 CNAEs processados: {len(df_cnae)}")
+
+
 def consolidar_dividas_pgfn() -> pd.DataFrame:
     """Consolida dividas ativas da PGFN."""
     print("\n💰 Etapa: Consolidando Dívida Ativa (PGFN)...")
@@ -346,21 +385,55 @@ def consolidar_dividas_pgfn() -> pd.DataFrame:
         df_dividas.rename(columns={"VALOR": "DIVIDA_TOTAL"}, inplace=True)
     else:
         df_dividas = pd.DataFrame(columns=["CNPJ_BASICO", "DIVIDA_TOTAL"])
+
+    # Persiste pro estagio de merge poder rodar isolado (pipeline fracionado).
+    df_dividas.to_csv(OUT / "aux_dividas_pgfn.csv", sep=";", index=False, encoding="utf-8")
     print(f"✅ Dívidas consolidadas: {len(df_dividas)} empresas.")
     return df_dividas
 
 
-def gerar_master(df_emp: pd.DataFrame, df_dividas: pd.DataFrame) -> pd.DataFrame:
-    """Gera o arquivo final subset_rs_final_completo.csv."""
+def _carregar_empresas_aux() -> pd.DataFrame:
+    """Le aux_nomes_empresas.csv (saida de filtrar_empresas). Usado pelo
+    estagio de merge quando rodado isolado."""
+    caminho = OUT / "aux_nomes_empresas.csv"
+    if not caminho.exists():
+        raise FileNotFoundError(
+            f"{caminho} nao encontrado. Rode antes o estagio 'process-rf'."
+        )
+    return pd.read_csv(caminho, sep=";", encoding="utf-8", dtype=str)
+
+
+def _carregar_dividas_aux() -> pd.DataFrame:
+    """Le aux_dividas_pgfn.csv (saida de consolidar_dividas_pgfn). Se nao
+    existir (estagio PGFN nunca rodou), devolve vazio -- o merge segue sem
+    dados de divida em vez de quebrar."""
+    caminho = OUT / "aux_dividas_pgfn.csv"
+    if not caminho.exists():
+        print(f"  [AVISO] {caminho.name} nao encontrado -- master sem dados de divida.")
+        return pd.DataFrame(columns=["CNPJ_BASICO", "DIVIDA_TOTAL"])
+    return pd.read_csv(caminho, sep=";", encoding="utf-8", dtype=str)
+
+
+def gerar_master(df_emp: pd.DataFrame = None, df_dividas: pd.DataFrame = None) -> pd.DataFrame:
+    """Gera o arquivo final subset_rs_final_completo.csv.
+
+    df_emp/df_dividas sao opcionais: se nao passados (estagio de merge rodando
+    isolado), sao lidos dos CSVs auxiliares gravados pelos estagios anteriores.
+    """
     print("\n🚀 Etapa Final: Gerando Master...")
+    if df_emp is None:
+        df_emp = _carregar_empresas_aux()
+    if df_dividas is None:
+        df_dividas = _carregar_dividas_aux()
+
     df_estab = pd.read_csv(OUT / "aux_estab_rs.csv", sep=";", encoding="latin1", dtype=str)
 
     master = df_estab.merge(df_emp, on="CNPJ_BASICO", how="left")
     master = master.merge(df_dividas, on="CNPJ_BASICO", how="left")
 
     master["CONTATO_FONE"] = "(" + master["DDD"].fillna("") + ") " + master["TELEFONE"].fillna("")
-    master["CAPITAL_SOCIAL"] = pd.to_numeric(master["CAPITAL_SOCIAL"].str.replace(",", "."), errors="coerce").fillna(0.0)
-    master["DIVIDA_TOTAL"] = master["DIVIDA_TOTAL"].fillna(0.0)
+    master["CAPITAL_SOCIAL"] = pd.to_numeric(master["CAPITAL_SOCIAL"].astype(str).str.replace(",", "."), errors="coerce").fillna(0.0)
+    master["DIVIDA_TOTAL"] = pd.to_numeric(master["DIVIDA_TOTAL"], errors="coerce").fillna(0.0)
 
     ARQUIVO_FINAL = OUT / "subset_rs_final_completo.csv"
     master.to_csv(ARQUIVO_FINAL, sep=";", index=False, encoding="latin1")
@@ -369,46 +442,112 @@ def gerar_master(df_emp: pd.DataFrame, df_dividas: pd.DataFrame) -> pd.DataFrame
     return master
 
 
-def rodar_pipeline() -> None:
-    """Executa o pipeline completo de extração."""
-    print("=" * 60)
-    print("PIPELINE RS MASTER 2026 — INICIANDO")
-    print(f"Diretorio raiz: {BASE_DIR}")
-    print(f"Raw: {RAW}")
-    print(f"Out: {OUT}")
-    print(f"Trimestre PGFN: {ultimo_trimestre}")
-    print("=" * 60)
-
-    print("\n📥 Baixando arquivos...")
-    for arq in AUX + EMPRESAS + ESTABS + SOCIOS:
-        baixar_rf(arq)
-    for arq in PGFN:
-        baixar_pgfn(arq)
-
-    processar_municipios()
-    cnpjs_rs = filtrar_estabelecimentos()
-    df_emp = filtrar_empresas(cnpjs_rs)
-    filtrar_socios(cnpjs_rs)
-    df_dividas = consolidar_dividas_pgfn()
-    master = gerar_master(df_emp, df_dividas)
-
-    # Grava metadata da execucao (mes/trimestre usados, quantidade final) num
-    # JSON ao lado dos CSVs de saida. O script de sincronizacao
-    # (scripts/sync_data_to_db.py) le esse arquivo e registra no banco, pra
-    # a tela "Sobre" no frontend mostrar quando os dados foram atualizados
-    # por ultimo e com base em qual periodo de referencia.
+def _escrever_metadata(total_matrizes: int) -> None:
+    """Grava metadata da execucao (mes/trimestre usados, quantidade final)
+    num JSON ao lado dos CSVs de saida. O script de sincronizacao
+    (scripts/sync_data_to_db.py) le esse arquivo e registra no banco, pra a
+    tela "Sobre" no frontend mostrar quando os dados foram atualizados por
+    ultimo e com base em qual periodo de referencia."""
     metadata = {
         "mes_referencia_rf": MES_REFERENCIA_RF,
         "trimestre_pgfn": ultimo_trimestre.rstrip("/"),
         "gerado_em": datetime.utcnow().isoformat() + "Z",
-        "total_matrizes": int(len(master)),
+        "total_matrizes": int(total_matrizes),
     }
     with open(OUT / "metadata_pipeline.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
     print(f"\n📝 Metadata gravado: {metadata}")
 
+
+def _cabecalho(titulo: str) -> None:
+    print("=" * 60)
+    print(f"PIPELINE RS MASTER 2026 — {titulo}")
+    print(f"Raw: {RAW}  |  Out: {OUT}")
+    print(f"Mes RF: {MES_REFERENCIA_RF}  |  Trimestre PGFN: {ultimo_trimestre.rstrip('/')}")
+    print("=" * 60)
+
+
+# =================================================================
+# ESTAGIOS -- o pipeline foi fracionado pra rodar por partes no GitHub
+# Actions (ver .github/workflows/etl.yml). Cada estagio le a saida do
+# anterior dos CSVs em out/, entao um estagio pode ser re-executado
+# isolado sem refazer os 3h de download + processamento inteiros.
+# =================================================================
+
+def stage_detect() -> None:
+    """Imprime em stdout as variaveis de referencia detectadas, no formato
+    KEY=VALUE (o workflow faz 'pipeline.py detect | grep ... >> $GITHUB_ENV'
+    pra fixar o mes/trimestre nos estagios seguintes e nao ficar sondando o
+    servidor da Receita de novo a cada passo)."""
+    print(f"RF_MES_REFERENCIA={MES_REFERENCIA_RF}")
+    print(f"PGFN_TRIMESTRE={ultimo_trimestre.rstrip('/')}")
+
+
+def stage_download_rf() -> None:
+    _cabecalho("DOWNLOAD RF")
+    for arq in AUX + EMPRESAS + ESTABS + SOCIOS:
+        baixar_rf(arq)
+    print("\n🏁 Download RF concluido.")
+
+
+def stage_download_pgfn() -> None:
+    _cabecalho("DOWNLOAD PGFN")
+    for arq in PGFN:
+        baixar_pgfn(arq)
+    print("\n🏁 Download PGFN concluido.")
+
+
+def stage_process_rf() -> None:
+    _cabecalho("PROCESS RF")
+    processar_municipios()
+    processar_cnaes()
+    cnpjs_rs = filtrar_estabelecimentos()
+    filtrar_empresas(cnpjs_rs)
+    filtrar_socios(cnpjs_rs)
+    print("\n🏁 Processamento RF concluido.")
+
+
+def stage_process_pgfn() -> None:
+    _cabecalho("PROCESS PGFN")
+    consolidar_dividas_pgfn()
+    print("\n🏁 Processamento PGFN concluido.")
+
+
+def stage_merge() -> None:
+    _cabecalho("MERGE")
+    master = gerar_master()
+    _escrever_metadata(len(master))
+    print("\n🏁 Merge concluido.")
+
+
+def rodar_pipeline() -> None:
+    """Executa todos os estagios em sequencia (comportamento monolitico --
+    util pra rodar localmente com um comando so)."""
+    stage_download_rf()
+    stage_download_pgfn()
+    stage_process_rf()
+    stage_process_pgfn()
+    stage_merge()
     print("\n🏁 Pipeline concluído com sucesso!")
 
 
+_STAGES = {
+    "all": rodar_pipeline,
+    "detect": stage_detect,
+    "download-rf": stage_download_rf,
+    "download-pgfn": stage_download_pgfn,
+    "process-rf": stage_process_rf,
+    "process-pgfn": stage_process_pgfn,
+    "merge": stage_merge,
+}
+
+
 if __name__ == "__main__":
-    rodar_pipeline()
+    parser = argparse.ArgumentParser(
+        description="Pipeline ETL WhoDados (RS Master 2026)."
+    )
+    parser.add_argument(
+        "stage", nargs="?", default="all", choices=list(_STAGES),
+        help="Estagio a executar. Padrao: 'all' (pipeline completo).",
+    )
+    _STAGES[parser.parse_args().stage]()
