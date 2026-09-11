@@ -11,6 +11,7 @@ from .db import (
     create_template, get_template, get_all_templates,
     update_template, delete_template, get_templates_by_categoria,
     set_template_imagem, get_template_imagem, clear_template_imagem,
+    get_empresa_by_cnpj_db,
 )
 from .mailer import enviar_email_teste
 
@@ -79,7 +80,16 @@ async def enviar_teste(template_id: int, data: Dict, current_user: Dict = Depend
     t = get_template(template_id, organizacao_id=org_id)
     if not t:
         raise HTTPException(status_code=404, detail="Template nao encontrado")
-    return enviar_email_teste(para, dict(t), organizacao_id=org_id)
+    # Opcional: se vier um CNPJ, puxa os dados REAIS da empresa para a
+    # personalizacao ({{empresa}}, {{cidade}}, {{cnae_descricao}}...). Senao,
+    # usa valores de exemplo.
+    dados_empresa = None
+    cnpj = (data.get("cnpj") or "").strip()
+    if cnpj:
+        dados_empresa = get_empresa_by_cnpj_db(cnpj) or None
+        if not dados_empresa:
+            raise HTTPException(status_code=404, detail="Empresa (CNPJ) nao encontrada na base.")
+    return enviar_email_teste(para, dict(t), organizacao_id=org_id, dados_empresa=dados_empresa)
 
 
 # ---- Card/imagem do template (usada no corpo do email via {{imagem}}) ----

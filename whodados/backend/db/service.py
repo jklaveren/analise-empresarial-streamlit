@@ -839,6 +839,7 @@ def _where_empresas(
     cidade=None, cnae=None, porte=None, busca=None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de=None, fundacao_ate=None, incluir_inativas: bool = True,
+    contato=None,
 ):
     """Monta o WHERE (e os params) compartilhado pela listagem e pela contagem,
     a partir dos filtros do funil (cidade, CNAE, porte, faixas de passivo/capital,
@@ -874,6 +875,16 @@ def _where_empresas(
         clauses.append('e."DATA_FUNDACAO" <= %s'); params.append(_re.sub(r"\D", "", str(fundacao_ate)))
     if not incluir_inativas:
         clauses.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s'); params.append(_BLACKLIST_REGEX)
+    # Filtro de contato: com_email / so_telefone (sem e-mail, com fone) / sem_contato.
+    if contato:
+        tem_email = 'TRIM(COALESCE(e."EMAIL", \'\')) <> \'\''
+        tem_fone = 'TRIM(TRANSLATE(COALESCE(e."CONTATO_FONE", \'\'), \'()- \', \'\')) <> \'\''
+        if contato == "com_email":
+            clauses.append(tem_email)
+        elif contato == "so_telefone":
+            clauses.append(f"(NOT ({tem_email}) AND {tem_fone})")
+        elif contato == "sem_contato":
+            clauses.append(f"(NOT ({tem_email}) AND NOT ({tem_fone}))")
     where = (" AND " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -882,7 +893,7 @@ def listar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
-    incluir_inativas: bool = True,
+    incluir_inativas: bool = True, contato=None,
     limit: int = 100, offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """Lista empresas de dados_empresas com o funil de filtros (server-side).
@@ -894,6 +905,7 @@ def listar_empresas_db(
             where, params = _where_empresas(
                 cidade, cnae, porte, busca, divida_min, divida_max,
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
+                contato,
             )
             sql = f"""
                 SELECT
@@ -906,7 +918,9 @@ def listar_empresas_db(
                     COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
                     COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
                     e."PORTE_NOME" AS porte_nome,
-                    e."DATA_FUNDACAO" AS data_fundacao
+                    e."DATA_FUNDACAO" AS data_fundacao,
+                    e."EMAIL" AS email,
+                    e."CONTATO_FONE" AS contato_fone
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
