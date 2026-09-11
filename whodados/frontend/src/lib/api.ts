@@ -332,11 +332,12 @@ export async function deletarTemplate(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/templates/${id}`, { method: "DELETE" });
 }
 
-/** Envia um e-mail de teste deste template (valores de exemplo) para 1 endereco. */
-export async function enviarTesteTemplate(id: number, para: string): Promise<{ sucesso: boolean; simulado?: boolean; erro?: string }> {
+/** Envia um e-mail de teste deste template para 1 endereco. Se `cnpj` for
+ *  informado, a personalizacao usa os dados REAIS daquela empresa. */
+export async function enviarTesteTemplate(id: number, para: string, cnpj?: string): Promise<{ sucesso: boolean; simulado?: boolean; erro?: string }> {
   return request(`/api/v1/templates/${id}/test-send`, {
     method: "POST",
-    body: JSON.stringify({ para }),
+    body: JSON.stringify({ para, cnpj }),
   });
 }
 

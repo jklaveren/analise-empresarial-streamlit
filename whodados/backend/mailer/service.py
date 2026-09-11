@@ -257,18 +257,35 @@ def enviar_campanha(
     return enviar_template_para_cnpjs(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=organizacao_id)
 
 
-def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
-    """Envia UM e-mail de teste com o template renderizado (valores de exemplo),
-    usando o SMTP e a assinatura da empresa -- para a pessoa conferir como o
-    e-mail vai chegar antes de disparar a campanha."""
+def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None, dados_empresa: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Envia UM e-mail de teste com o template renderizado, usando o SMTP e a
+    assinatura da empresa -- para conferir como o e-mail vai chegar antes de
+    disparar a campanha. Se dados_empresa for passado (ex.: uma empresa real por
+    CNPJ), a personalizacao usa os dados REAIS dela; senao usa valores de exemplo."""
     smtp_cfg = _smtp_da_org(organizacao_id)
     assinatura = _assinatura_da_org(organizacao_id)
-    vars_amostra = {
-        "empresa": "Empresa Exemplo LTDA", "cnpj": "00000000000000",
-        "cidade": "Porto Alegre", "cnae": "", "cnae_descricao": "",
-        "tema": CATEGORIA_TEMAS["todos"], "categoria": CATEGORIA_DESCRICOES["todos"],
-        "nome_fantasia": "Exemplo", "porte": "", "imagem": template.get("imagem_url") or "",
-    }
+    if dados_empresa:
+        cnae = dados_empresa.get("cnae_principal") or ""
+        categoria = classificar_cnae(cnae) if cnae else "servicos"
+        vars_amostra = {
+            "empresa": dados_empresa.get("razao_social") or dados_empresa.get("nome_fantasia") or "",
+            "cnpj": dados_empresa.get("cnpj_completo") or "",
+            "cidade": dados_empresa.get("municipio") or "",
+            "cnae": cnae,
+            "cnae_descricao": dados_empresa.get("cnae_descricao") or cnae,
+            "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
+            "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
+            "nome_fantasia": dados_empresa.get("nome_fantasia") or "",
+            "porte": dados_empresa.get("porte_nome") or "",
+            "imagem": template.get("imagem_url") or "",
+        }
+    else:
+        vars_amostra = {
+            "empresa": "Empresa Exemplo LTDA", "cnpj": "00000000000000",
+            "cidade": "Porto Alegre", "cnae": "", "cnae_descricao": "",
+            "tema": CATEGORIA_TEMAS["todos"], "categoria": CATEGORIA_DESCRICOES["todos"],
+            "nome_fantasia": "Exemplo", "porte": "", "imagem": template.get("imagem_url") or "",
+        }
     rendered = _render_template(template, vars_amostra)
     assunto = "[TESTE] " + (rendered.get("assunto", "") or "Sem assunto")
     return enviar_email(

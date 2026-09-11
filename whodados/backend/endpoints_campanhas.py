@@ -45,8 +45,33 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), busca=filtros.get("busca"),
         limit=100000, offset=0,
     )
-    cnpjs = [e["cnpj_completo"] for e in empresas if e.get("cnpj_completo")]
-    emails_por_cnpj = {cnpj: f"contato@{cnpj[:8]}.com" for cnpj in cnpjs}
+    # Classifica em 3 grupos: (1) tem e-mail real -> envia; (2) sem e-mail mas
+    # com telefone -> vira notificacao "Ligar" (follow-up por telefone); (3) sem
+    # nada -> pula. Antes usava um e-mail falso (contato@<cnpj>.com) e nada chegava.
+    emails_por_cnpj = {}
+    sem_email_com_fone = []
+    for e in empresas:
+        cnpj = e.get("cnpj_completo")
+        if not cnpj:
+            continue
+        email = (e.get("email") or "").strip()
+        if email and "@" in email:
+            emails_por_cnpj[cnpj] = email
+        elif (e.get("contato_fone") or "").strip(" ()-"):
+            sem_email_com_fone.append(e)
+    cnpjs = list(emails_por_cnpj.keys())
+    if not cnpjs and not sem_email_com_fone:
+        raise HTTPException(status_code=400, detail="Nenhuma empresa deste filtro tem e-mail nem telefone cadastrado.")
+
+    # Notificacoes de "Ligar" para os sem e-mail com telefone (limitado para nao
+    # inundar a aba Notificacoes numa campanha grande).
+    _LIMITE_LIGAR = 100
+    for e in sem_email_com_fone[:_LIMITE_LIGAR]:
+        create_notificacao(
+            "ligar", f"Ligar: {e.get('razao_social') or e['cnpj_completo']}",
+            f"Sem e-mail. Telefone: {(e.get('contato_fone') or '').strip()} | {e.get('municipio', '')}",
+            cnpj=e["cnpj_completo"], user_id=current_user.get("sub"), organizacao_id=org_id,
+        )
     # Monta mapa CNPJ -> dados da empresa (para o template por CNAE)
     dados_empresas = {
         e["cnpj_completo"]: {

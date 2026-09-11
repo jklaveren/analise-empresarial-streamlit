@@ -76,8 +76,9 @@ export default function TemplatesPage() {
   async function handleTestar(t: Template) {
     const para = window.prompt(`Enviar um teste de "${t.nome}" para qual e-mail?`);
     if (!para) return;
+    const cnpj = window.prompt("(Opcional) CNPJ de uma empresa real para testar a personalização com dados reais dela. Deixe em branco para usar dados de exemplo.") || undefined;
     try {
-      const r = await enviarTesteTemplate(t.id!, para);
+      const r = await enviarTesteTemplate(t.id!, para, cnpj);
       if (r.sucesso) alert(r.simulado ? "Teste OK (SMTP não configurado — envio simulado)." : `Teste enviado para ${para}.`);
       else alert(`Falha: ${r.erro || "erro"}`);
     } catch (e) { alert(e instanceof Error ? e.message : "Erro"); }
