@@ -378,16 +378,29 @@ def processar_cnaes() -> None:
 
 
 def consolidar_dividas_pgfn() -> pd.DataFrame:
-    """Consolida dividas ativas da PGFN."""
-    print("\n💰 Etapa: Consolidando Dívida Ativa (PGFN)...")
-    pgfn_chunks = []
+    """Consolida dividas ativas da PGFN, separando por tipo (NAO_PREVIDENCIARIA,
+    PREVIDENCIARIA, FGTS). Gera colunas DIVIDA_FEDERAL, DIVIDA_PREVIDENCIARIA,
+    DIVIDA_FGTS e DIVIDA_TOTAL (soma de todas)."""
+    print("\n💰 Etapa: Consolidação de Dívida Ativa (PGFN)...")
+    # Acumuladores por tipo de dívida
+    por_tipo = {
+        "federal": [],   # Dados_abertos_Nao_Previdenciario
+        "previdenciaria": [],  # Dados_abertos_Previdenciario
+        "fgts": [],      # Dados_abertos_FGTS
+    }
 
-    for arq_pgfn in ["Dados_abertos_Nao_Previdenciario.zip", "Dados_abertos_Previdenciario.zip", "Dados_abertos_FGTS.zip"]:
+    mapeamento_arquivos = [
+        ("Dados_abertos_Nao_Previdenciario.zip", "federal"),
+        ("Dados_abertos_Previdenciario.zip", "previdenciaria"),
+        ("Dados_abertos_FGTS.zip", "fgts"),
+    ]
+
+    for arq_pgfn, tipo in mapeamento_arquivos:
         arq_zip_path = RAW / arq_pgfn
         if not arq_zip_path.exists():
-            print(f"  [PULSO] {arq_pgfn} nao encontrado.")
+            print(f"  [PULSO] {arq_pgfn} não encontrado, pulando {tipo}.")
             continue
-        print(f"📦 Lendo PGFN: {arq_pgfn}")
+        print(f"📦 Lendo PGFN ({tipo}): {arq_pgfn}")
         with zipfile.ZipFile(arq_zip_path) as z:
             for f_name in z.namelist():
                 with z.open(f_name) as f:
@@ -397,29 +410,60 @@ def consolidar_dividas_pgfn() -> pd.DataFrame:
                     )
                     for chunk in chunks:
                         if 0 in chunk.columns and 4 in chunk.columns:
-                            chunk["CNPJ_BASICO"] = (
+                            cnpj = (
                                 chunk[0]
                                 .astype(str)
                                 .str.replace(r"\D", "", regex=True)
                                 .str.zfill(14)
                                 .str[:8]
                             )
-                            chunk["VALOR"] = pd.to_numeric(
+                            valor = pd.to_numeric(
                                 chunk[4].astype(str).str.replace(",", ".", regex=False),
                                 errors="coerce",
                             ).fillna(0.0)
-                            pgfn_chunks.append(chunk[["CNPJ_BASICO", "VALOR"]])
+                            por_tipo[tipo].append(
+                                pd.DataFrame({"CNPJ_BASICO": cnpj, "VALOR": valor})
+                            )
 
-    if pgfn_chunks:
-        df_pgfn_total = pd.concat(pgfn_chunks, ignore_index=True)
-        df_dividas = df_pgfn_total.groupby("CNPJ_BASICO")["VALOR"].sum().reset_index()
-        df_dividas.rename(columns={"VALOR": "DIVIDA_TOTAL"}, inplace=True)
-    else:
-        df_dividas = pd.DataFrame(columns=["CNPJ_BASICO", "DIVIDA_TOTAL"])
+    # Consolida cada tipo separadamente
+    df_dividas = pd.DataFrame(columns=["CNPJ_BASICO"])
+    totais_tipo = {}
 
-    # Persiste pro estagio de merge poder rodar isolado (pipeline fracionado).
+    for tipo in ("federal", "previdenciaria", "fgts"):
+        if por_tipo[tipo]:
+            df_tipo = pd.concat(por_tipo[tipo], ignore_index=True)
+            df_tipo = df_tipo.groupby("CNPJ_BASICO")["VALOR"].sum().reset_index()
+            nome_coluna = f"DIVIDA_{tipo.upper()}"
+            df_tipo.rename(columns={"VALOR": nome_coluna}, inplace=True)
+            totais_tipo[tipo] = len(df_tipo)
+            df_dividas = df_dividas.merge(df_tipo, on="CNPJ_BASICO", how="outer")
+        else:
+            df_dividas[f"DIVIDA_{tipo.upper()}"] = 0.0
+            totais_tipo[tipo] = 0
+
+    # Preenche NaN com 0 nas colunas de dívida
+    for col in ("DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS"):
+        if col in df_dividas.columns:
+            df_dividas[col] = df_dividas[col].fillna(0.0)
+        else:
+            df_dividas[col] = 0.0
+
+    # DIVIDA_TOTAL = soma dos 3 tipos
+    df_dividas["DIVIDA_TOTAL"] = (
+        df_dividas["DIVIDA_FEDERAL"]
+        + df_dividas["DIVIDA_PREVIDENCIARIA"]
+        + df_dividas["DIVIDA_FGTS"]
+    )
+
+    # Reordena colunas
+    df_dividas = df_dividas[
+        ["CNPJ_BASICO", "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA_TOTAL"]
+    ]
+
+    # Persiste pro estágio de merge poder rodar isolado (pipeline fracionado).
     df_dividas.to_csv(OUT / "aux_dividas_pgfn.csv", sep=";", index=False, encoding="utf-8")
     print(f"✅ Dívidas consolidadas: {len(df_dividas)} empresas.")
+    print(f"   - Federal: {totais_tipo['federal']} | Previdenciária: {totais_tipo['previdenciaria']} | FGTS: {totais_tipo['fgts']}")
     return df_dividas
 
 
@@ -441,7 +485,7 @@ def _carregar_dividas_aux() -> pd.DataFrame:
     caminho = OUT / "aux_dividas_pgfn.csv"
     if not caminho.exists():
         print(f"  [AVISO] {caminho.name} nao encontrado -- master sem dados de divida.")
-        return pd.DataFrame(columns=["CNPJ_BASICO", "DIVIDA_TOTAL"])
+        return pd.DataFrame(columns=["CNPJ_BASICO", "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA_TOTAL"])
     return pd.read_csv(caminho, sep=";", encoding="utf-8", dtype=str)
 
 
