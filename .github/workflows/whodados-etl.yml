@@ -68,9 +68,12 @@ jobs:
       # ----------------------------------------------------------------
       - name: Detectar periodo de referencia (RF + PGFN)
         env:
-          # Prioridade: input manual (workflow_dispatch) > variavel do repo > deteccao automatica.
-          RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia || vars.RF_MES_REFERENCIA }}
-          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn || vars.PGFN_TRIMESTRE }}
+          # Prioridade: input manual do workflow_dispatch > deteccao automatica.
+          # Nao usar vars.* aqui: uma "Variable" antiga (RF_MES_REFERENCIA=2026-05)
+          # ficou pisando na deteccao e queimou uma run inteira baixando de um
+          # mes fantasma. Se precisar mesmo fixar, use os inputs do "Run workflow".
+          RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia }}
+          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn }}
         run: |
           python whodados/pipeline/pipeline.py detect \
             | grep -E '^(RF_MES_REFERENCIA|PGFN_TRIMESTRE)=' >> "$GITHUB_ENV"
