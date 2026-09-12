@@ -578,6 +578,33 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
 # abaixo detectam isso e retornam vazio/zero em vez de lancar erro, para o
 # resto da aplicacao nunca quebrar por falta desses dados.
 
+
+# Expressoes SQL que derivam PORTE_NOME e CONTATO_FONE on-the-fly (as duas
+# colunas foram removidas da tabela: eram redundantes -- PORTE_NOME e um
+# mapeamento fixo do PORTE_EMPRESA, e CONTATO_FONE e so DDD + TELEFONE
+# concatenado. Manter derivado economiza ~30MB no Postgres e preserva a
+# API que o frontend consome (porte_nome e contato_fone continuam saindo
+# nos SELECTs, so mudou como sao produzidos).
+PORTE_NOME_SQL = (
+    "CASE e.\"PORTE_EMPRESA\" "
+    "WHEN '01' THEN 'NAO INFORMADO' "
+    "WHEN '02' THEN 'ME' "
+    "WHEN '03' THEN 'EPP' "
+    "WHEN '05' THEN 'MEDIO E GRANDE' "
+    "ELSE 'DEMAIS' END"
+)
+CONTATO_FONE_SQL = (
+    "'(' || COALESCE(e.\"DDD\", '') || ') ' || COALESCE(e.\"TELEFONE\", '')"
+)
+# Mapeamento inverso pra converter filtros do frontend (que ainda mandam
+# 'ME', 'EPP', ...) em codigos PORTE_EMPRESA no WHERE.
+PORTE_NOME_TO_CODE = {
+    "NAO INFORMADO": "01",
+    "ME": "02",
+    "EPP": "03",
+    "MEDIO E GRANDE": "05",
+}
+
 # ==================== CONFIGURACOES DA APLICACAO (app_config) ====================
 
 _SLA_PADRAO = {"sla_verde_dias": 2, "sla_amarelo_dias": 5}
@@ -856,7 +883,11 @@ def _where_empresas(
         clauses.append('e."CNAE_PRINCIPAL" = ANY(%s)'); params.append(cnaes)
     portes = _norm_lista(porte)
     if portes:
-        clauses.append('e."PORTE_NOME" = ANY(%s)'); params.append(portes)
+        # Frontend manda nomes ("ME", "EPP", ...) mas a tabela guarda so o
+        # codigo ("02", "03", ...). Traduz de volta antes do bind.
+        codigos = [PORTE_NOME_TO_CODE[p] for p in portes if p in PORTE_NOME_TO_CODE]
+        if codigos:
+            clauses.append('e."PORTE_EMPRESA" = ANY(%s)'); params.append(codigos)
     if busca:
         clauses.append('(e."RAZAO_SOCIAL" ILIKE %s OR e."NOME_FANTASIA" ILIKE %s)')
         params.extend([f"%{busca}%", f"%{busca}%"])
@@ -878,7 +909,7 @@ def _where_empresas(
     # Filtro de contato: com_email / so_telefone (sem e-mail, com fone) / sem_contato.
     if contato:
         tem_email = 'TRIM(COALESCE(e."EMAIL", \'\')) <> \'\''
-        tem_fone = 'TRIM(TRANSLATE(COALESCE(e."CONTATO_FONE", \'\'), \'()- \', \'\')) <> \'\''
+        tem_fone = 'TRIM(COALESCE(e."TELEFONE", \'\')) <> \'\''
         if contato == "com_email":
             clauses.append(tem_email)
         elif contato == "so_telefone":
@@ -917,10 +948,10 @@ def listar_empresas_db(
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
                     COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
                     COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
-                    e."PORTE_NOME" AS porte_nome,
+                    ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     e."EMAIL" AS email,
-                    e."CONTATO_FONE" AS contato_fone
+                    ({CONTATO_FONE_SQL}) AS contato_fone
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
@@ -975,7 +1006,7 @@ def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
             if not _tabela_existe(cur, "dados_empresas"):
                 return {}
             cur.execute(
-                """
+                f"""
                 SELECT
                     e."CNPJ_COMPLETO" AS cnpj_completo,
                     e."CNPJ_BASICO" AS cnpj_basico,
@@ -986,9 +1017,9 @@ def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
                     COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
                     COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
-                    e."PORTE_NOME" AS porte_nome,
+                    ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
-                    e."CONTATO_FONE" AS contato_fone
+                    ({CONTATO_FONE_SQL}) AS contato_fone
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
@@ -1044,7 +1075,7 @@ def get_metricas_db() -> Dict[str, Any]:
             """)
             por_cidade = {r["cidade"]: r["qtd"] for r in cur.fetchall()}
 
-            cur.execute('SELECT "PORTE_NOME" AS porte, COUNT(*) AS qtd FROM dados_empresas GROUP BY porte')
+            cur.execute(f'SELECT ({PORTE_NOME_SQL}) AS porte, COUNT(*) AS qtd FROM dados_empresas e GROUP BY porte')
             por_porte = {(r["porte"] or "Nao informado"): r["qtd"] for r in cur.fetchall()}
 
             cur.execute('SELECT COALESCE(SUM("CAPITAL_SOCIAL"::numeric), 0) AS total FROM dados_empresas')
