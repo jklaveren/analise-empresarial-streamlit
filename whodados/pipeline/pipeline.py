@@ -17,7 +17,9 @@ from datetime import datetime
 
 import pandas as pd
 
-from pipeline_common import OUT, cabecalho
+from pipeline_common import (
+    OUT, cabecalho, diagnosticar_url, imprimir_diagnostico,
+)
 import pipeline_rf
 import pipeline_pgfn
 
@@ -35,6 +37,90 @@ def stage_detect() -> None:
     que ja ficou nos modulos."""
     print(f"RF_MES_REFERENCIA={pipeline_rf.MES_REFERENCIA_RF}")
     print(f"PGFN_TRIMESTRE={pipeline_pgfn.ULTIMO_TRIMESTRE.rstrip('/')}")
+
+
+def stage_diagnose() -> None:
+    """Bateria rapida de auto-diagnostico -- roda em ~30s e imprime o
+    estado de tudo que o pipeline depende:
+
+    - Token RF (existe? bate no servidor da Receita? qual HTTP code?)
+    - URL RF (Empresas0.zip do mes detectado)
+    - URL PGFN (FGTS.zip do trimestre detectado)
+    - DATABASE_URL (existe? consegue conectar ao Supabase?)
+
+    Nao baixa nada. Nao muda nada. Serve pra saber se vale a pena disparar
+    a run completa (2h+) ou se ja tem um problema conhecido a resolver
+    antes (renovar token, ajustar variavel, etc.).
+
+    Roda com: python pipeline.py diagnose
+    """
+    cabecalho(
+        "AUTO-DIAGNOSTICO",
+        {
+            "Mes RF": pipeline_rf.MES_REFERENCIA_RF,
+            "Trimestre PGFN": pipeline_pgfn.ULTIMO_TRIMESTRE.rstrip("/"),
+        },
+    )
+    problemas: list[str] = []
+
+    # -------- Token RF --------
+    token = pipeline_rf.TOKEN_COMPARTILHAMENTO
+    if not token:
+        problemas.append("RF_SHARE_TOKEN vazio (sem token)")
+        print("  !! Token RF: nao configurado (RF_SHARE_TOKEN vazio).")
+    else:
+        # Nao imprimir o token inteiro (mesmo em log de CI): so tamanho.
+        print(f"  OK Token RF: presente ({len(token)} chars).")
+
+    # -------- Endpoint RF --------
+    url_rf = pipeline_rf.BASE_URL_RF + "Empresas0.zip"
+    print(f"\n  Sondando RF: {url_rf}")
+    diag_rf = diagnosticar_url(url_rf, auth=f"{token}:")
+    imprimir_diagnostico("RF Empresas0.zip", url_rf, diag_rf)
+    if not diag_rf.ok:
+        problemas.append(f"RF nao acessivel ({diag_rf.motivo})")
+
+    # -------- Endpoint PGFN --------
+    url_pgfn = (
+        pipeline_pgfn.URL_BASE_PGFN_INDEX
+        + pipeline_pgfn.ULTIMO_TRIMESTRE
+        + "Dados_abertos_FGTS.zip"
+    )
+    print(f"\n  Sondando PGFN: {url_pgfn}")
+    diag_pgfn = diagnosticar_url(url_pgfn)
+    imprimir_diagnostico("PGFN FGTS.zip", url_pgfn, diag_pgfn)
+    if not diag_pgfn.ok:
+        problemas.append(f"PGFN nao acessivel ({diag_pgfn.motivo})")
+
+    # -------- DATABASE_URL --------
+    import os
+    db_url = os.environ.get("DATABASE_URL", "").strip()
+    if not db_url:
+        print("\n  -- DATABASE_URL nao configurada. Sync com Supabase seria pulada.")
+    else:
+        print("\n  Testando conexao com Supabase...")
+        try:
+            import psycopg2  # importa so aqui pra diagnose funcionar sem a dep
+            conn = psycopg2.connect(db_url, connect_timeout=10)
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            conn.close()
+            print("  OK Supabase: conexao OK.")
+        except Exception as e:
+            print(f"  !! Supabase: falha ao conectar -- {e}")
+            problemas.append("Supabase inacessivel")
+
+    # -------- Resumo --------
+    print("\n" + "=" * 60)
+    if problemas:
+        print(f"[DIAGNOSTICO] {len(problemas)} problema(s) encontrado(s):")
+        for p in problemas:
+            print(f"  - {p}")
+        print("\nCorriga os itens acima antes de disparar a run completa.")
+        raise SystemExit(1)
+    else:
+        print("[DIAGNOSTICO] Tudo OK. Pode disparar a run completa.")
 
 
 # ----------------------------------------------------------------
@@ -126,6 +212,7 @@ def rodar_pipeline() -> None:
 _STAGES = {
     "all": rodar_pipeline,
     "detect": stage_detect,
+    "diagnose": stage_diagnose,
     # RF
     "download-rf": pipeline_rf.stage_download_rf,
     "download-rf-empresas": pipeline_rf.stage_download_rf_empresas,

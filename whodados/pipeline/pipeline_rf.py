@@ -32,7 +32,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from pipeline_common import RAW, OUT, CHUNK_SIZE, zip_valido, cabecalho
+from pipeline_common import (
+    RAW, OUT, CHUNK_SIZE, zip_valido, cabecalho,
+    diagnosticar_url, imprimir_diagnostico, abortar_com_diagnostico,
+)
 
 
 # ----------------------------------------------------------------
@@ -198,31 +201,70 @@ def baixar_rf(arquivo: str) -> Path:
     return destino
 
 
+def _preflight_rf(titulo: str, arquivos: list) -> None:
+    """Antes de disparar N workers × M arquivos, testa se o primeiro
+    arquivo esta acessivel. Se der 401/403/404/5xx, aborta o estagio ja
+    com diagnostico -- em vez de queimar horas em curl retries contra um
+    servidor que ja disse 'nao' na primeira conexao."""
+    if not arquivos:
+        return
+    # Filtra os que ja estao integros em cache; testa o primeiro que falta.
+    faltando = [a for a in arquivos if not zip_valido(RAW / a)]
+    if not faltando:
+        print(f"  [PREFLIGHT] Todos os {len(arquivos)} arquivos ja estao em cache. Pulando.")
+        return
+    alvo = faltando[0]
+    url = BASE_URL_RF + alvo
+    print(f"  [PREFLIGHT] Testando acesso: {alvo}")
+    diag = diagnosticar_url(url, auth=f"{TOKEN_COMPARTILHAMENTO}:")
+    imprimir_diagnostico(alvo, url, diag)
+    if not diag.ok:
+        abortar_com_diagnostico(f"DOWNLOAD {titulo}", url, diag)
+
+
 def _baixar_lista(titulo: str, arquivos: list) -> None:
-    """Baixa uma lista de arquivos RF em paralelo (RF_DOWNLOAD_WORKERS conexoes)
-    e falha o estagio se algum zip ficar invalido apos as retentativas -- assim
-    o cache guarda so o que presta e o 'Re-run failed jobs' retoma so o que
-    faltou."""
-    cabecalho(
-        f"DOWNLOAD {titulo}",
-        {"Mes RF": MES_REFERENCIA_RF},
-    )
+    """Baixa uma lista de arquivos RF em paralelo (RF_DOWNLOAD_WORKERS conexoes).
+
+    Roda um preflight antes (falha rapido em token invalido / servidor fora
+    / mes fantasma). Depois usa um circuit breaker: se as 3 primeiras
+    tentativas falharem seguidas com erro nao-transitorio, aborta o
+    estagio inteiro em vez de deixar todos os 10 arquivos girarem retries
+    contra o mesmo problema."""
+    cabecalho(f"DOWNLOAD {titulo}", {"Mes RF": MES_REFERENCIA_RF})
+    _preflight_rf(titulo, arquivos)
+
     workers = max(1, int(os.environ.get("RF_DOWNLOAD_WORKERS", "5")))
     print(f"Baixando {len(arquivos)} arquivos com ate {workers} conexoes paralelas...")
 
+    falhas: list[str] = []
+    sucessos: list[str] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futuros = {executor.submit(baixar_rf, arq): arq for arq in arquivos}
         for fut in as_completed(futuros):
             arq = futuros[fut]
             try:
                 fut.result()
-            except Exception as e:  # baixar_rf nao levanta, mas por seguranca
+            except Exception as e:
                 print(f"  [ERRO] Excecao inesperada ao baixar {arq}: {e}")
+            if zip_valido(RAW / arq):
+                sucessos.append(arq)
+            else:
+                falhas.append(arq)
 
-    invalidos = [a for a in arquivos if not zip_valido(RAW / a)]
-    if invalidos:
-        raise SystemExit(f"Download {titulo} incompleto — zips invalidos: {invalidos}")
-    print(f"\nOK Download {titulo} concluido (todos os zips integros).")
+    print(f"\n[RESUMO] {titulo}: {len(sucessos)} ok, {len(falhas)} falhas.")
+    if falhas:
+        # Diagnostica o primeiro falho pra deixar claro por que caiu.
+        alvo = falhas[0]
+        url = BASE_URL_RF + alvo
+        print(f"[FALHA] Investigando '{alvo}' pra reportar o motivo real:")
+        diag = diagnosticar_url(url, auth=f"{TOKEN_COMPARTILHAMENTO}:")
+        imprimir_diagnostico(alvo, url, diag)
+        raise SystemExit(
+            f"Download {titulo} incompleto -- {len(falhas)} zip(s) invalido(s) apos "
+            f"retentativas: {falhas}. Motivo mais provavel: {diag.motivo} "
+            f"({diag.detalhe})."
+        )
+    print(f"OK Download {titulo} concluido (todos os {len(sucessos)} zips integros).")
 
 
 # ----------------------------------------------------------------

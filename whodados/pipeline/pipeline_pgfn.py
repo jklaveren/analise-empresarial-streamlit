@@ -35,7 +35,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from pipeline_common import RAW, OUT, CHUNK_SIZE, zip_valido, cabecalho
+from pipeline_common import (
+    RAW, OUT, CHUNK_SIZE, zip_valido, cabecalho,
+    diagnosticar_url, imprimir_diagnostico, abortar_com_diagnostico,
+)
 
 
 # ----------------------------------------------------------------
@@ -270,35 +273,73 @@ def carregar_dividas_aux() -> pd.DataFrame:
 # ----------------------------------------------------------------
 # ESTAGIOS
 # ----------------------------------------------------------------
+def _preflight_pgfn() -> None:
+    """Antes de baixar os 3 zips grandes, testa se a URL do primeiro ja
+    responde. Se der 404 (trimestre errado) ou 5xx (servidor fora),
+    aborta com diagnostico -- sem gastar retries em vao."""
+    faltando = [a for a in PGFN if not zip_valido(RAW / a)]
+    if not faltando:
+        print(f"  [PREFLIGHT] Todos os {len(PGFN)} arquivos PGFN ja estao em cache. Pulando.")
+        return
+    alvo = faltando[0]
+    url = URL_BASE_PGFN_INDEX + ULTIMO_TRIMESTRE + alvo
+    print(f"  [PREFLIGHT] Testando acesso: {alvo}")
+    diag = diagnosticar_url(url)
+    imprimir_diagnostico(alvo, url, diag)
+    if not diag.ok:
+        # Dica extra: 404 no PGFN quase sempre e trimestre desatualizado.
+        if diag.codigo == "404":
+            print(
+                f"  [DICA] Trimestre atual configurado: {ULTIMO_TRIMESTRE.rstrip('/')}. "
+                f"A deteccao automatica pode estar apontando pra um trimestre que ja "
+                f"saiu do ar. Confira em {URL_BASE_PGFN_INDEX} qual trimestre esta "
+                f"listado atualmente.",
+                file=sys.stderr,
+            )
+        abortar_com_diagnostico("DOWNLOAD PGFN", url, diag)
+
+
 def stage_download_pgfn() -> None:
-    """Baixa os 3 arquivos da PGFN e falha o estagio se algum ficar invalido.
+    """Baixa os 3 arquivos da PGFN, com preflight que aborta cedo em erro
+    nao-transitorio, e falha o estagio se algum ficar invalido.
 
     Diferente da versao antiga que so imprimia [WARN] em erro (mascarando
     dividas zeradas no master), agora um download quebrado quebra o estagio
     -- e a variavel de ambiente PGFN_ALLOW_EMPTY permite passar mesmo assim
     (caso seja proposital rodar sem dividas)."""
     cabecalho("DOWNLOAD PGFN", {"Trimestre PGFN": ULTIMO_TRIMESTRE.rstrip("/")})
+    _preflight_pgfn()
 
+    sucessos: list[str] = []
+    falhas: list[str] = []
     for arq in PGFN:
         try:
             baixar_pgfn(arq)
-        except Exception as e:  # baixar_pgfn nao levanta, mas por seguranca
+        except Exception as e:
             print(f"  [ERRO] Excecao inesperada ao baixar {arq}: {e}")
+        if zip_valido(RAW / arq):
+            sucessos.append(arq)
+        else:
+            falhas.append(arq)
 
-    invalidos = [a for a in PGFN if not zip_valido(RAW / a)]
-    if invalidos:
+    print(f"\n[RESUMO] PGFN: {len(sucessos)} ok, {len(falhas)} falhas.")
+    if falhas:
         permite_vazio = os.environ.get("PGFN_ALLOW_EMPTY", "").strip().lower() in ("1", "true", "yes")
+        alvo = falhas[0]
+        url = URL_BASE_PGFN_INDEX + ULTIMO_TRIMESTRE + alvo
+        print(f"[FALHA] Investigando '{alvo}' pra reportar o motivo real:")
+        diag = diagnosticar_url(url)
+        imprimir_diagnostico(alvo, url, diag)
         msg = (
-            f"Download PGFN incompleto -- zips invalidos: {invalidos}. "
-            f"Trimestre usado: {ULTIMO_TRIMESTRE.rstrip('/')}. Verifique se a "
-            f"deteccao automatica pegou o trimestre correto (ou defina "
-            f"PGFN_TRIMESTRE manualmente)."
+            f"Download PGFN incompleto -- {len(falhas)} zip(s) invalido(s): {falhas}. "
+            f"Trimestre usado: {ULTIMO_TRIMESTRE.rstrip('/')}. Motivo mais provavel: "
+            f"{diag.motivo} ({diag.detalhe})."
         )
         if permite_vazio:
             print(f"  [WARN] {msg} (PGFN_ALLOW_EMPTY=1, seguindo mesmo assim)")
         else:
             raise SystemExit(msg)
-    print("\nOK Download PGFN concluido.")
+    print(f"OK Download PGFN concluido ({len(sucessos)} zips integros).")
 
 
 def stage_process_pgfn() -> None:

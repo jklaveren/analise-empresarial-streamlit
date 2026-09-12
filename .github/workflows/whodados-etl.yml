@@ -81,6 +81,19 @@ jobs:
           grep -E 'RF_MES_REFERENCIA|PGFN_TRIMESTRE' "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
+      # Auto-diagnostico: em ~30s testa token RF, URL RF, URL PGFN e
+      # conexao com o Supabase. Se algo estiver errado (token expirado,
+      # servidor fora, trimestre invalido), aborta aqui com mensagem
+      # clara -- em vez de descobrir isso depois de ja ter gastado
+      # 30-60min baixando fantasma.
+      # ----------------------------------------------------------------
+      - name: "Diagnostico rapido (token/URL/banco)"
+        timeout-minutes: 5
+        env:
+          DATABASE_URL: ${{ vars.SUPABASE_CONNECTION_STRING }}
+        run: python whodados/pipeline/pipeline.py diagnose
+
+      # ----------------------------------------------------------------
       # Cache dos zips baixados (~3-4 GB). Chave por mes RF + trimestre PGFN:
       # dentro do mesmo mes, re-execucoes (por falha em um estagio tardio)
       # pulam o download inteiro. Mes novo = cache novo = baixa do zero.
