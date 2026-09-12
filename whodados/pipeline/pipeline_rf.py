@@ -51,21 +51,24 @@ def detectar_mes_rf() -> str:
 
     Prioridade:
     1. Variavel de ambiente RF_MES_REFERENCIA, se definida -- permite fixar
-       manualmente (ex: pra reprocessar um mes especifico), sem depender da
-       deteccao automatica.
+       manualmente (ex: pra reprocessar um mes especifico).
     2. Deteccao automatica: testa o mes atual e recua mes a mes (ate 6 meses)
        verificando no servidor da Receita Federal qual pasta existe de fato
-       (a Receita costuma publicar com atraso, entao o mes corrente pode
-       ainda nao estar disponivel).
-    3. Se a deteccao falhar (sem rede, servidor fora do ar, etc.), cai no
-       padrao fixo abaixo para o pipeline nao quebrar.
+       (a Receita costuma publicar com atraso). Loga o HTTP code de cada
+       tentativa pra distinguir 401 (token expirado), 404 (mes ainda nao
+       publicado) e 000 (timeout/conexao caiu).
+    3. Se nada retornar 200, FALHA em vez de cair num fallback fantasma
+       (rodar o pipeline inteiro contra um mes que nao existe queima 2h+
+       do runner por nada, o que ja aconteceu). Pra debugar sem quebrar,
+       defina RF_ALLOW_FALLBACK=1 -- ai usa RF_FALLBACK_MES ou o padrao
+       abaixo.
     """
     override = os.environ.get("RF_MES_REFERENCIA", "").strip().strip("/")
     if override:
         print(f"  [INFO] Mes RF fixado manualmente via RF_MES_REFERENCIA: {override}", file=sys.stderr)
         return override
 
-    padrao_seguranca = "2026-05"
+    tentativas: list[tuple[str, str]] = []
     ano, mes = datetime.utcnow().year, datetime.utcnow().month
     for _ in range(6):
         candidato = f"{ano:04d}-{mes:02d}"
@@ -81,10 +84,13 @@ def detectar_mes_rf() -> str:
                 ],
                 capture_output=True, text=True,
             )
-            codigo = resultado.stdout.strip()
+            codigo = (resultado.stdout or "").strip() or "000"
         except Exception as e:
             print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}", file=sys.stderr)
-            codigo = ""
+            codigo = "erro"
+
+        tentativas.append((candidato, codigo))
+        print(f"  [SONDA] {candidato} -> HTTP {codigo}", file=sys.stderr)
 
         if codigo == "200":
             print(f"  [OK] Mes RF detectado automaticamente: {candidato}", file=sys.stderr)
@@ -94,8 +100,30 @@ def detectar_mes_rf() -> str:
         if mes == 0:
             mes, ano = 12, ano - 1
 
-    print(f"  [WARN] Nao foi possivel detectar o mes RF automaticamente; usando padrao {padrao_seguranca}.", file=sys.stderr)
-    return padrao_seguranca
+    resumo = ", ".join(f"{m}={c}" for m, c in tentativas)
+    permite_fallback = os.environ.get("RF_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+    if permite_fallback:
+        fallback = os.environ.get("RF_FALLBACK_MES", "").strip() or "2026-05"
+        print(f"  [WARN] Nenhum mes RF respondeu 200 ({resumo}); usando fallback {fallback} (RF_ALLOW_FALLBACK=1).", file=sys.stderr)
+        return fallback
+
+    # Cai aqui em token invalido (todos 401), servidor fora (todos 000 ou erro),
+    # ou mes ainda nao publicado (todos 404). Loga o resumo antes de morrer
+    # pra debugar qual dos tres foi.
+    hint = ""
+    codigos = {c for _, c in tentativas}
+    if codigos == {"401"} or codigos == {"401", "erro"}:
+        hint = " (todos 401 -- provavel token RF_SHARE_TOKEN invalido/expirado)"
+    elif codigos.issubset({"000", "erro", "28"}):
+        hint = " (todos timeout/erro -- servidor da Receita fora ou rede do runner)"
+    elif codigos.issubset({"404", "403"}):
+        hint = " (todos 404/403 -- URL/schema pode ter mudado no servidor)"
+
+    raise SystemExit(
+        f"Nao foi possivel detectar o mes RF automaticamente. Tentativas: {resumo}.{hint} "
+        f"Pra rodar mesmo assim, defina RF_ALLOW_FALLBACK=1 (usa RF_FALLBACK_MES ou 2026-05) "
+        f"ou passe RF_MES_REFERENCIA=<AAAA-MM> pra fixar um mes especifico."
+    )
 
 
 MES_REFERENCIA_RF = detectar_mes_rf()
