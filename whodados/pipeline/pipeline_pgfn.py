@@ -76,57 +76,55 @@ def detectar_trimestre_pgfn() -> str:
     """Detecta o trimestre mais recente publicado pela PGFN.
 
     Prioridade (mesmo esquema do RF em pipeline_rf.py):
-    1. Variavel de ambiente PGFN_TRIMESTRE, se definida -- permite fixar
-       manualmente (ex: pra reprocessar um trimestre especifico).
+    1. Variavel de ambiente PGFN_TRIMESTRE, se definida.
     2. Deteccao automatica: sonda o servidor da PGFN comecando pelo
-       trimestre corrente e recuando (ate 5 trimestres -- ~15 meses)
-       verificando qual pasta existe de fato. A PGFN costuma publicar com
-       algumas semanas de atraso, entao o trimestre corrente pode ainda nao
-       estar disponivel.
-    3. Se a deteccao falhar (sem rede, servidor fora do ar, etc.), cai no
-       padrao fixo abaixo para o pipeline nao quebrar.
-
-    Devolve com barra no final (ex: '2026_trimestre_03/') porque quem chama
-    concatena direto com URL_BASE_PGFN_INDEX + arquivo.
+       trimestre corrente e recuando (ate 5 trimestres -- ~15 meses),
+       usando HEAD + fallback pra GET-range (ver diagnosticar_url).
+    3. Se nenhum trimestre responder 200/206, FALHA (nao cai mais no
+       fallback silencioso 2026_trimestre_01 -- isso mascarava o problema
+       real. Pra debug pontual: PGFN_ALLOW_FALLBACK=1 e PGFN_FALLBACK_TRIMESTRE).
     """
+    from pipeline_common import diagnosticar_url
+
     override = os.environ.get("PGFN_TRIMESTRE", "").strip().strip("/")
     if override:
         print(f"  [INFO] Trimestre PGFN fixado manualmente via PGFN_TRIMESTRE: {override}", file=sys.stderr)
         return f"{override}/"
 
-    padrao_seguranca = "2026_trimestre_01"
+    tentativas: list[tuple[str, str]] = []
     ano, tri = _trimestre_de(datetime.utcnow())
     for _ in range(5):
         candidato = f"{ano:04d}_trimestre_{tri:02d}"
         url_teste = f"{URL_BASE_PGFN_INDEX}{candidato}/Dados_abertos_FGTS.zip"
-        try:
-            # GET-de-1-byte em vez de HEAD (-I) -- ver a mesma nota em
-            # pipeline_rf.detectar_mes_rf(). Alguns servidores retornam
-            # 405 para HEAD, o que fazia a sondagem sempre falhar.
-            resultado = subprocess.run(
-                [
-                    "curl", "-s", "-o", "/dev/null",
-                    "-w", "%{http_code}", "-L", "--range", "0-0",
-                    "--max-time", "15", url_teste,
-                ],
-                capture_output=True, text=True,
-            )
-            codigo = resultado.stdout.strip()
-        except Exception as e:
-            print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}", file=sys.stderr)
-            codigo = ""
-
-        # 200 ou 206 (partial content, quando o servidor honrou o range).
-        if codigo in ("200", "206"):
+        diag = diagnosticar_url(url_teste)
+        tentativas.append((candidato, diag.codigo))
+        print(f"  [SONDA] {candidato} -> HTTP {diag.codigo}", file=sys.stderr)
+        if diag.ok:
             print(f"  [OK] Trimestre PGFN detectado automaticamente: {candidato}", file=sys.stderr)
             return f"{candidato}/"
-
         tri -= 1
         if tri == 0:
             tri, ano = 4, ano - 1
 
-    print(f"  [WARN] Nao foi possivel detectar o trimestre PGFN automaticamente; usando padrao {padrao_seguranca}.", file=sys.stderr)
-    return f"{padrao_seguranca}/"
+    resumo = ", ".join(f"{c}={h}" for c, h in tentativas)
+    permite_fallback = os.environ.get("PGFN_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+    if permite_fallback:
+        fallback = os.environ.get("PGFN_FALLBACK_TRIMESTRE", "").strip() or "2026_trimestre_01"
+        print(f"  [WARN] Nenhum trimestre PGFN respondeu 200 ({resumo}); usando fallback {fallback} (PGFN_ALLOW_FALLBACK=1).", file=sys.stderr)
+        return f"{fallback}/"
+
+    hint = ""
+    codigos = {c for _, c in tentativas}
+    if codigos.issubset({"000", "erro", "no-curl"}):
+        hint = " (todos timeout/erro -- servidor da PGFN fora ou rede do runner)"
+    elif codigos.issubset({"404", "403"}):
+        hint = " (todos 404/403 -- URL/schema pode ter mudado no servidor da PGFN)"
+
+    raise SystemExit(
+        f"Nao foi possivel detectar o trimestre PGFN automaticamente. Tentativas: {resumo}.{hint} "
+        f"Pra rodar mesmo assim, defina PGFN_ALLOW_FALLBACK=1 (com PGFN_FALLBACK_TRIMESTRE opcional) "
+        f"ou passe PGFN_TRIMESTRE=<AAAA_trimestre_NN> pra fixar um trimestre especifico."
+    )
 
 
 ULTIMO_TRIMESTRE = detectar_trimestre_pgfn()
