@@ -15,6 +15,8 @@ import argparse
 import json
 from datetime import datetime
 
+import os
+
 import pandas as pd
 
 from pipeline_common import (
@@ -37,6 +39,10 @@ def stage_detect() -> None:
     que ja ficou nos modulos."""
     print(f"RF_MES_REFERENCIA={pipeline_rf.MES_REFERENCIA_RF}")
     print(f"PGFN_TRIMESTRE={pipeline_pgfn.ULTIMO_TRIMESTRE.rstrip('/')}")
+
+
+def _diagnose_flag(nome: str) -> bool:
+    return os.environ.get(nome, "").strip().lower() in ("1", "true", "yes")
 
 
 def stage_diagnose() -> None:
