@@ -93,9 +93,19 @@ def _colunas_existem(cur, tabela: str, colunas: tuple[str, ...]) -> list[str]:
     return [c for c in colunas if c not in existentes]
 
 
+def _cnpjs_existentes(cur) -> set[str]:
+    """Le todos os CNPJ_BASICO de dados_empresas. Usado pra filtrar o CSV
+    da PGFN (Brasil inteiro, ~6.7M linhas) pra apenas os CNPJs que a
+    gente tem no subset (RS, ~700k). Corta 90% do volume que vai pra
+    staging -- evita SSL timeout durante o UPDATE massivo, principal
+    motivo do sync anterior ter caido no meio."""
+    cur.execute('SELECT DISTINCT "CNPJ_BASICO" FROM dados_empresas')
+    return {r[0].strip() for r in cur.fetchall() if r[0]}
+
+
 def main() -> None:
     df = _carregar_csv()
-    print(f"OK CSV lido: {len(df)} linhas.")
+    print(f"OK CSV lido: {len(df)} linhas (Brasil inteiro).")
 
     conn = _conectar()
     try:
@@ -118,6 +128,17 @@ def main() -> None:
                         f'ALTER TABLE dados_empresas ADD COLUMN IF NOT EXISTS "{col}" NUMERIC DEFAULT 0'
                     )
                 print(f"OK Colunas adicionadas em dados_empresas: {faltando}")
+
+            # FILTRO NA ORIGEM: le os CNPJ_BASICO ja presentes na tabela
+            # e mantem no DataFrame apenas as dividas dessas empresas.
+            # Sem isso: subiria ~6.7M linhas de dividas do Brasil pra
+            # staging so pra usar ~10% no UPDATE final. Com isso: subimos
+            # so os ~700k que interessam. Corta 90% de I/O e memoria de
+            # trabalho -- evita o SSL timeout do Supabase.
+            cnpjs_rs = _cnpjs_existentes(cur)
+            print(f"OK dados_empresas tem {len(cnpjs_rs)} CNPJs (subset RS).")
+            df = df[df["CNPJ_BASICO"].isin(cnpjs_rs)]
+            print(f"OK CSV filtrado: {len(df)} linhas relevantes ao subset RS.")
 
             # Staging table temporaria (some junto com a conexao).
             cur.execute(
@@ -144,27 +165,32 @@ def main() -> None:
             )
             print(f"OK Staging carregada: {len(registros)} linhas.")
 
-            # Zera as 4 colunas em todo mundo primeiro (empresas que sairam
-            # da PGFN nao ficam com valor antigo pendurado) e depois copia
-            # da staging pelas que aparecem.
-            cur.execute(
-                'UPDATE dados_empresas SET '
-                '"DIVIDA_FEDERAL" = 0, "DIVIDA_PREVIDENCIARIA" = 0, '
-                '"DIVIDA_FGTS" = 0, "DIVIDA_TOTAL" = 0'
-            )
+            # UPDATE atomico com LEFT JOIN + COALESCE: empresa que aparece
+            # no stage recebe os valores da PGFN; a que nao aparece
+            # (fora do trimestre atual) e ZERADA. Um unico UPDATE em vez
+            # de dois -- metade do WAL, metade da chance de timeout.
             cur.execute(
                 """
                 UPDATE dados_empresas e SET
-                    "DIVIDA_FEDERAL"        = s."DIVIDA_FEDERAL",
-                    "DIVIDA_PREVIDENCIARIA" = s."DIVIDA_PREVIDENCIARIA",
-                    "DIVIDA_FGTS"           = s."DIVIDA_FGTS",
-                    "DIVIDA_TOTAL"          = s."DIVIDA_TOTAL"
-                FROM stage_dividas s
+                    "DIVIDA_FEDERAL"        = COALESCE(s."DIVIDA_FEDERAL", 0),
+                    "DIVIDA_PREVIDENCIARIA" = COALESCE(s."DIVIDA_PREVIDENCIARIA", 0),
+                    "DIVIDA_FGTS"           = COALESCE(s."DIVIDA_FGTS", 0),
+                    "DIVIDA_TOTAL"          = COALESCE(s."DIVIDA_TOTAL", 0)
+                FROM (
+                    SELECT e2."CNPJ_BASICO",
+                           s2."DIVIDA_FEDERAL",
+                           s2."DIVIDA_PREVIDENCIARIA",
+                           s2."DIVIDA_FGTS",
+                           s2."DIVIDA_TOTAL"
+                    FROM dados_empresas e2
+                    LEFT JOIN stage_dividas s2
+                        ON e2."CNPJ_BASICO" = s2."CNPJ_BASICO"
+                ) s
                 WHERE e."CNPJ_BASICO" = s."CNPJ_BASICO"
                 """
             )
             afetadas = cur.rowcount
-            print(f"OK dados_empresas atualizada: {afetadas} linhas com divida.")
+            print(f"OK dados_empresas atualizada: {afetadas} linhas.")
 
             cur.execute(
                 'SELECT COUNT(*) FROM dados_empresas WHERE "DIVIDA_TOTAL" > 0'
