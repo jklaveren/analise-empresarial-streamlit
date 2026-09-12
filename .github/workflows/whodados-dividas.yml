@@ -1,0 +1,106 @@
+name: Atualizar Dividas (PGFN) — WhoDados
+
+# Workflow so pra dividas: baixa PGFN, consolida e atualiza SOMENTE as
+# colunas DIVIDA_* em dados_empresas no Supabase. NAO depende do lado da
+# Receita Federal do pipeline (que hoje esta com os runners do GitHub
+# bloqueados por IP no servidor arquivos.receitafederal.gov.br). Assim
+# as dividas continuam atualizando automaticamente todo trimestre,
+# independente do estado do outro lado.
+#
+# Requisitos: tabela 'dados_empresas' ja existente no Supabase (populada
+# por uma run anterior do whodados-etl.yml completo). Este workflow so
+# atualiza colunas de divida; nao cria empresas do zero.
+
+on:
+  # PGFN publica trimestralmente. Todo dia 5 do mes, 03h UTC, tenta
+  # atualizar -- se o trimestre nao mudou, a deteccao pega o mesmo e
+  # so refaz a sync (barato, ~15min).
+  schedule:
+    - cron: "0 3 5 * *"
+
+  workflow_dispatch:
+    inputs:
+      trimestre_pgfn:
+        description: "Trimestre PGFN (ex: 2026_trimestre_02). Vazio = detecta automaticamente."
+        required: false
+        default: ""
+
+concurrency:
+  group: etl-dividas
+  cancel-in-progress: false
+
+jobs:
+  atualizar-dividas:
+    name: "Atualizar dividas PGFN"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      WHO_PROJECT_DIR: ${{ github.workspace }}/whodados
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: whodados/pipeline/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r whodados/pipeline/requirements-dev.txt
+
+      # PGFN publica no https://dadosabertos.pgfn.gov.br/ -- outro servidor,
+      # sem o bloqueio de IP que atinge a Receita. Se algum dia essa URL
+      # tambem for bloqueada, o preflight vai avisar em segundos.
+      - name: "Detectar trimestre PGFN"
+        env:
+          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn }}
+        run: |
+          cd whodados/pipeline
+          python -c "import pipeline_pgfn; print(f'PGFN_TRIMESTRE={pipeline_pgfn.ULTIMO_TRIMESTRE.rstrip(chr(47))}')" \
+            | grep -E '^PGFN_TRIMESTRE=' >> "$GITHUB_ENV"
+          echo "Trimestre fixado: $(grep PGFN_TRIMESTRE $GITHUB_ENV)"
+
+      - name: "Download PGFN (com preflight)"
+        timeout-minutes: 45
+        run: python whodados/pipeline/pipeline_pgfn.py download-pgfn
+
+      - name: "Consolidar dividas por CNPJ"
+        timeout-minutes: 30
+        run: python whodados/pipeline/pipeline_pgfn.py process-pgfn
+
+      - name: "Verificar CSV gerado"
+        if: always()
+        run: |
+          echo "=== aux_dividas_pgfn.csv ==="
+          ls -lh whodados/pipeline/out/aux_dividas_pgfn.csv 2>/dev/null || echo "(nao encontrado)"
+          echo "Linhas: $(wc -l < whodados/pipeline/out/aux_dividas_pgfn.csv 2>/dev/null || echo '(n/a)')"
+
+      - name: "Publicar CSV como artifact"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dividas-${{ env.PGFN_TRIMESTRE }}
+          path: whodados/pipeline/out/aux_dividas_pgfn.csv
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: "Atualizar Supabase (so colunas de divida)"
+        if: vars.SUPABASE_CONNECTION_STRING != ''
+        run: python whodados/scripts/sync_dividas_only.py
+        env:
+          DATABASE_URL: ${{ vars.SUPABASE_CONNECTION_STRING }}
+
+      - name: "Aviso se falhar"
+        if: failure()
+        run: |
+          echo "::error title=Atualizacao de dividas falhou::Um estagio nao concluiu. Se foi no download PGFN, o log deve dizer o motivo (preflight)."
+          {
+            echo "## Atualizacao de dividas PGFN falhou"
+            echo ""
+            echo "Consulte o log do estagio que quebrou -- o preflight ou"
+            echo "o [RESUMO] no final imprime o motivo real."
+          } >> "$GITHUB_STEP_SUMMARY"
