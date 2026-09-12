@@ -97,10 +97,14 @@ def detectar_trimestre_pgfn() -> str:
         candidato = f"{ano:04d}_trimestre_{tri:02d}"
         url_teste = f"{URL_BASE_PGFN_INDEX}{candidato}/Dados_abertos_FGTS.zip"
         try:
+            # GET-de-1-byte em vez de HEAD (-I) -- ver a mesma nota em
+            # pipeline_rf.detectar_mes_rf(). Alguns servidores retornam
+            # 405 para HEAD, o que fazia a sondagem sempre falhar.
             resultado = subprocess.run(
                 [
                     "curl", "-s", "-o", "/dev/null",
-                    "-w", "%{http_code}", "-I", "-L", "--max-time", "15", url_teste,
+                    "-w", "%{http_code}", "-L", "--range", "0-0",
+                    "--max-time", "15", url_teste,
                 ],
                 capture_output=True, text=True,
             )
@@ -109,7 +113,8 @@ def detectar_trimestre_pgfn() -> str:
             print(f"  [WARN] Falha ao verificar disponibilidade de {candidato}: {e}", file=sys.stderr)
             codigo = ""
 
-        if codigo == "200":
+        # 200 ou 206 (partial content, quando o servidor honrou o range).
+        if codigo in ("200", "206"):
             print(f"  [OK] Trimestre PGFN detectado automaticamente: {candidato}", file=sys.stderr)
             return f"{candidato}/"
 
