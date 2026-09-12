@@ -102,40 +102,75 @@ _MAPEAMENTO_CODIGO = {
 }
 
 
-def diagnosticar_url(url: str, auth: str | None = None, timeout: int = 15) -> DiagUrl:
-    """Sonda uma URL com GET-de-1-byte e devolve diagnostico estruturado.
-
-    Nao levanta excecao: retorna um DiagUrl com ok=False e motivo/detalhe
-    que dizem o que fazer. Usado por (a) deteccao de mes/trimestre, (b)
-    preflight antes de baixar em massa (falhar rapido em vez de queimar
-    horas contra um servidor que ja rejeitou o primeiro pedido)."""
+def _sondar_curl(url: str, extra: list[str], auth: str | None, timeout: int) -> str:
+    """Executa um curl silencioso que devolve so o HTTP code (ou '000' se
+    a conexao caiu antes de receber resposta)."""
     cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-L",
-           "--range", "0-0", "--max-time", str(timeout)]
+           "--max-time", str(timeout)] + extra
     if auth:
         cmd += ["-u", auth]
     cmd.append(url)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True)
-        codigo = (r.stdout or "").strip() or "000"
+        return (r.stdout or "").strip() or "000"
     except FileNotFoundError:
-        return DiagUrl(False, "000", "rede", "curl nao esta instalado no ambiente.")
-    except Exception as e:
-        return DiagUrl(False, "erro", "rede", f"Excecao ao sondar: {e}")
+        return "no-curl"
+    except Exception:
+        return "erro"
 
+
+def diagnosticar_url(url: str, auth: str | None = None, timeout: int = 15) -> DiagUrl:
+    """Sonda uma URL e devolve diagnostico estruturado.
+
+    Tenta duas estrategias em cascata e aceita a que der 200/206:
+    1. HEAD (curl -I): rapido, funciona na maioria dos servidores.
+    2. GET-range de 1 byte (curl --range 0-0): fallback quando o servidor
+       nao aceita HEAD e responde 405/501.
+
+    Isso cobre os dois casos que ja bateram:
+    - arquivos.receitafederal.gov.br rejeita HEAD (retorna 405), aceita range.
+    - dadosabertos.pgfn.gov.br pode nao aceitar range em algumas
+      configuracoes; nesse caso o HEAD sozinho ja resolve.
+
+    Nao levanta excecao: retorna DiagUrl com ok=False + motivo humano."""
+    tentativas: list[tuple[str, str]] = []
+
+    codigo = _sondar_curl(url, ["--head"], auth, timeout)
+    tentativas.append(("HEAD", codigo))
+    if codigo in ("200", "206"):
+        return DiagUrl(True, codigo, "ok",
+                       f"HEAD respondeu {codigo}. Arquivo existe.")
+
+    # Fallback via range so pra codigos que sugerem 'HEAD nao suportado' ou
+    # 'sem resposta'. Nao adianta tentar range em 401/403/404 (a resposta
+    # ja e conclusiva -- token/permissao/URL).
+    if codigo in ("405", "501", "000", "erro", "no-curl"):
+        codigo_range = _sondar_curl(url, ["--range", "0-0"], auth, timeout)
+        tentativas.append(("RANGE", codigo_range))
+        if codigo_range in ("200", "206"):
+            return DiagUrl(True, codigo_range, "ok",
+                           f"HEAD {codigo}, mas GET-range respondeu {codigo_range}. Arquivo existe.")
+        # Usa o code do range para o diagnostico final -- normalmente ele
+        # da uma resposta HTTP real onde HEAD deu 000.
+        codigo = codigo_range if codigo_range not in ("000", "erro", "no-curl") else codigo
+
+    resumo_tentativas = ", ".join(f"{m}={c}" for m, c in tentativas)
+
+    if codigo == "no-curl":
+        return DiagUrl(False, "000", "rede", "curl nao esta instalado no ambiente.")
     motivo, detalhe = _MAPEAMENTO_CODIGO.get(codigo, (None, None))
-    if motivo == "ok":
-        return DiagUrl(True, codigo, "ok", detalhe or "OK")
     if motivo:
-        return DiagUrl(False, codigo, motivo, detalhe)
-    if codigo == "000":
+        return DiagUrl(False, codigo, motivo, f"{detalhe} (tentativas: {resumo_tentativas})")
+    if codigo in ("000", "erro"):
         return DiagUrl(False, codigo, "rede",
-                       "sem resposta do servidor (timeout, DNS ou conexao caiu). "
-                       "Verifique se o site esta no ar; runner do GitHub pode estar sem rota.")
+                       f"sem resposta do servidor em nenhuma tentativa ({resumo_tentativas}). "
+                       "Timeout, DNS ou conexao caiu -- servidor pode estar fora ou "
+                       "rota do runner bloqueada.")
     if codigo.startswith("4"):
-        return DiagUrl(False, codigo, "desconhecido", f"erro do cliente HTTP {codigo}.")
+        return DiagUrl(False, codigo, "desconhecido", f"erro do cliente HTTP {codigo} ({resumo_tentativas}).")
     if codigo.startswith("5"):
-        return DiagUrl(False, codigo, "servidor", f"erro do servidor HTTP {codigo}.")
-    return DiagUrl(False, codigo, "desconhecido", f"codigo HTTP inesperado {codigo}.")
+        return DiagUrl(False, codigo, "servidor", f"erro do servidor HTTP {codigo} ({resumo_tentativas}).")
+    return DiagUrl(False, codigo, "desconhecido", f"codigo HTTP inesperado {codigo} ({resumo_tentativas}).")
 
 
 def imprimir_diagnostico(nome: str, url: str, diag: DiagUrl) -> None:
