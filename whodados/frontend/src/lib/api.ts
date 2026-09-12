@@ -673,3 +673,38 @@ export function getSocioDetalhe(nome: string): Promise<SocioEmpresa[]> {
 export function getOpcoesFiltro(): Promise<OpcoesFiltro> {
   return request("/api/v1/analytics/opcoes-filtro");
 }
+
+// ==================== INTEGRACOES (WhatsApp / Twilio) ====================
+
+export interface IntegracaoConfig {
+  id: number;
+  key: string;
+  value: string | null;
+  descricao: string | null;
+  ativo: boolean;
+}
+
+/** Lista as integrações salvas no banco (Brevo/Twilio). */
+export async function listarIntegracoes(): Promise<IntegracaoConfig[]> {
+  return request("/api/v1/integracoes");
+}
+
+/** Salva/atualiza o valor de uma integração. */
+export async function salvarIntegracao(key: string, value: string, descricao?: string): Promise<IntegracaoConfig> {
+  return request("/api/v1/integracoes", {
+    method: "POST",
+    body: JSON.stringify({ key, value, descricao }),
+  });
+}
+
+/** Envia uma mensagem de WhatsApp para um número. */
+export async function enviarWhatsApp(
+  telefone: string,
+  mensagem: string,
+  cnpj?: string
+): Promise<{ status: string; sid: string; to: string }> {
+  return request("/api/v1/integracoes/whatsapp/enviar", {
+    method: "POST",
+    body: JSON.stringify({ telefone, mensagem, cnpj }),
+  });
+}

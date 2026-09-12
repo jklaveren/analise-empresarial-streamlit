@@ -46,11 +46,12 @@ export function AnalyticsCharts({ empresas }: AnalyticsChartsProps) {
 
   if (empresas.length === 0) return null;
 
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
       {/* Por Cidade */}
-      <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200">
-        <h3 className="font-semibold text-slate-800 mb-4">Empresas por Cidade</h3>
+      <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-shadow duration-300">
+        <h3 className="font-semibold text-slate-800 text-lg mb-1">Empresas por Cidade</h3>
+        <p className="text-xs text-slate-400 mb-5">Distribuição geográfica</p>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={porCidade} layout="vertical" margin={{ left: 8, right: 16 }}>
@@ -58,15 +59,22 @@ export function AnalyticsCharts({ empresas }: AnalyticsChartsProps) {
               <XAxis type="number" tick={{ fontSize: 11 }} />
               <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={100} />
               <Tooltip />
-              <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
+              <Bar dataKey="value" fill="url(#cityBarGradient)" radius={[0, 4, 4, 0]} />
+              <defs>
+                <linearGradient id="cityBarGradient" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#6366f1" />
+                  <stop offset="100%" stopColor="#8b5cf6" />
+                </linearGradient>
+              </defs>
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* Por Porte */}
-      <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200">
-        <h3 className="font-semibold text-slate-800 mb-4">Por Porte</h3>
+      <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300">
+        <h3 className="font-semibold text-slate-800 text-lg mb-1">Por Porte</h3>
+        <p className="text-xs text-slate-400 mb-5">Distribuição por porte da empresa</p>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
@@ -91,8 +99,9 @@ export function AnalyticsCharts({ empresas }: AnalyticsChartsProps) {
       </div>
 
       {/* Com Divida */}
-      <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200 md:col-span-2">
-        <h3 className="font-semibold text-slate-800 mb-4">Dívida Ativa</h3>
+      <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300 md:col-span-2">
+        <h3 className="font-semibold text-slate-800 text-lg mb-1">Dívida Ativa</h3>
+        <p className="text-xs text-slate-400 mb-5">Empresas com vs sem dívida</p>
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>

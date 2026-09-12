@@ -200,6 +200,19 @@ def _run_ensure_multiempresa(os):
                 ),
             )
 
+        # --- Tabela de integracoes externas (Brevo, Twilio) ---
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS integracao_configs (
+                id SERIAL PRIMARY KEY,
+                key VARCHAR(100) UNIQUE NOT NULL,
+                value TEXT,
+                descricao VARCHAR(255),
+                ativo BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            )"""
+        )
+
         conn.commit(); cur.close()
 
 

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig, listarIntegracoes, salvarIntegracao, IntegracaoConfig } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -555,7 +555,110 @@ function EmpresasTab() {
   );
 }
 
-type Aba = "perfil" | "regras" | "usuarios" | "empresas" | "email" | "sobre";
+function IntegracoesTab() {
+  const [configs, setConfigs] = useState<Record<string, IntegracaoConfig>>({});
+  const [carregando, setCarregando] = useState(true);
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [salvando, setSalvando] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ tipo: "s" | "e"; msg: string } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      setCarregando(true);
+      try {
+        const lista = await listarIntegracoes();
+        const mapa: Record<string, IntegracaoConfig> = {};
+        lista.forEach(c => { mapa[c.key] = c; });
+        setConfigs(mapa);
+        const ini: Record<string, string> = {};
+        lista.forEach(c => { if (c.value) ini[c.key] = c.value; });
+        setInputs(ini);
+      } catch { setFeedback({ tipo: "e", msg: "Nao foi possivel carregar as integracoes." }); }
+      setCarregando(false);
+    })();
+  }, []);
+
+  async function salvar(key: string, label: string) {
+    const valor = (inputs[key] || "").trim();
+    if (!valor) { setFeedback({ tipo: "e", msg: `Preencha ${label}.` }); return; }
+    setSalvando(key);
+    setFeedback(null);
+    try {
+      await salvarIntegracao(key, valor, label);
+      setFeedback({ tipo: "s", msg: `${label} salvo com sucesso!` });
+    } catch (e: any) {
+      setFeedback({ tipo: "e", msg: e.message || "Erro ao salvar." });
+    } finally {
+      setSalvando(null);
+    }
+  }
+
+  if (carregando) return <div className="p-8 text-slate-500">Carregando integracoes...</div>;
+
+  const campo = (key: string, label: string, desc: string, placeholder: string, senha = false) => (
+    <div className="rounded-xl bg-white border border-slate-200 p-5 space-y-2">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-800">{label}</h3>
+        <span className={"text-xs px-2 py-0.5 rounded-full " + (configs[key]?.ativo || (inputs[key]) ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500")}>
+          {(configs[key]?.ativo || inputs[key]) ? "Configurado" : "Pendente"}
+        </span>
+      </div>
+      <p className="text-xs text-slate-500">{desc}</p>
+      <input
+        type={senha ? "password" : "text"}
+        value={inputs[key] || ""}
+        onChange={e => setInputs(prev => ({ ...prev, [key]: e.target.value }))}
+        placeholder={placeholder}
+        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+      />
+      <button
+        onClick={() => salvar(key, label)}
+        disabled={salvando === key}
+        className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium"
+      >
+        {salvando === key ? "Salvando..." : "Salvar"}
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
+        Configure aqui as credenciais dos servicos de comunicacao. O <strong>Brevo</strong> cuida dos
+        e-mails e o <strong>Twilio</strong> do WhatsApp. Tudo fica salvo com seguranca e usado pelo
+        proprio app.
+      </div>
+
+      <div>
+        <h3 className="font-bold text-slate-800 mb-1">Brevo (E-mail)</h3>
+        <p className="text-xs text-slate-500 mb-3">
+          <a href="https://www.brevo.com/" target="_blank" rel="noopener" className="text-indigo-600 hover:underline">Criar conta Brevo (gratis)</a>
+          {" "}&mdash; a chave fica em Settings &gt; SMTP &amp; API &gt; API Keys.
+        </p>
+        {campo("brevo_api_key", "API Key do Brevo", "Chave de API para envio de e-mails transacionais e campanhas.", "xkeysib-...")}
+      </div>
+
+      <div>
+        <h3 className="font-bold text-slate-800 mb-1">Twilio (WhatsApp)</h3>
+        <p className="text-xs text-slate-500 mb-3">
+          <a href="https://www.twilio.com/whatsapp" target="_blank" rel="noopener" className="text-indigo-600 hover:underline">Criar conta Twilio</a>
+          {" "}&mdash; no console voce encontra SID, Token e o numero de origem (sandbox: whatsapp:+14155238886).
+        </p>
+        {campo("twilio_sid", "Account SID", "Identificador da conta Twilio.", "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", true)}
+        {campo("twilio_token", "Auth Token", "Token de autenticacao da conta Twilio.", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", true)}
+        {campo("twilio_wa_number", "Numero de origem WhatsApp", "Numero Twilio (ex: 14155238886) ou o numero Business configurado.", "14155238886")}
+      </div>
+
+      {feedback && (
+        <div className={`p-3 rounded text-sm ${feedback.tipo === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+          {feedback.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Aba = "perfil" | "regras" | "usuarios" | "empresas" | "email" | "integracoes" | "sobre";
 
 export default function ConfiguracoesPage() {
   const { isAdmin } = useAuth();
@@ -567,6 +670,7 @@ export default function ConfiguracoesPage() {
     { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
     { id: "empresas", label: "Empresas", icone: "🏢", somenteAdmin: true },
     { id: "email", label: "Email (global)", icone: "✉️", somenteAdmin: true },
+    { id: "integracoes", label: "Integrações (Brevo/Twilio)", icone: "🔌" },
     { id: "sobre", label: "Sobre", icone: "ℹ️" },
   ];
 
@@ -596,6 +700,7 @@ export default function ConfiguracoesPage() {
       {aba === "usuarios" && isAdmin && <UsuariosTab />}
       {aba === "empresas" && isAdmin && <EmpresasTab />}
       {aba === "email" && isAdmin && <EmailTab />}
+      {aba === "integracoes" && <IntegracoesTab />}
       {aba === "sobre" && <SobreTab />}
     </div>
   );
