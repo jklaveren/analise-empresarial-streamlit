@@ -9,7 +9,7 @@ from .auth import get_current_user
 from .services.whatsapp_service import enviar_whatsapp, validar_whatsapp
 from .db.config import get_cur
 
-router = APIRouter(prefix="/integracoes", tags=["Integrações"])
+router = APIRouter(prefix="/api/v1/integracoes", tags=["Integrações"])
 
 
 @router.get("")
