@@ -10,17 +10,11 @@ on:
   schedule:
     - cron: "0 2 * * 1"
 
-  # Execucao manual pela aba "Actions".
+  # Execucao manual pela aba "Actions". Sem inputs -- a deteccao automatica
+  # do mes RF e do trimestre PGFN sonda os servidores na hora, entao nao
+  # ha o que preencher. Se um dia precisar reprocessar um mes especifico,
+  # temporariamente reintroduza um input aqui (ou passe via 'env:').
   workflow_dispatch:
-    inputs:
-      mes_referencia:
-        description: "Mes/Ano RF (ex: 2026-05). Vazio = detecta automaticamente."
-        required: false
-        default: ""
-      trimestre_pgfn:
-        description: "Trimestre PGFN (ex: 2026_trimestre_02). Vazio = detecta automaticamente."
-        required: false
-        default: ""
 
 # Nao deixa duas execucoes do ETL rodarem ao mesmo tempo (a nova espera a
 # anterior terminar em vez de competir pelos mesmos arquivos / cache).
@@ -67,13 +61,10 @@ jobs:
       # Receita a cada passo, e todos usam exatamente o mesmo mes.
       # ----------------------------------------------------------------
       - name: Detectar periodo de referencia (RF + PGFN)
-        env:
-          # Prioridade: input manual do workflow_dispatch > deteccao automatica.
-          # Nao usar vars.* aqui: uma "Variable" antiga (RF_MES_REFERENCIA=2026-05)
-          # ficou pisando na deteccao e queimou uma run inteira baixando de um
-          # mes fantasma. Se precisar mesmo fixar, use os inputs do "Run workflow".
-          RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia }}
-          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn }}
+        # Sem env: a deteccao automatica sonda os servidores toda vez. O
+        # dispatch nao pergunta mais mes/trimestre pro usuario -- se toparmos
+        # com necessidade real de override, colocar env aqui explicitamente
+        # apontando pra um secret/var, nao pra um input do dispatch.
         run: |
           python whodados/pipeline/pipeline.py detect \
             | grep -E '^(RF_MES_REFERENCIA|PGFN_TRIMESTRE)=' >> "$GITHUB_ENV"
