@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { MultiSelect } from "@/components/MultiSelect";
 import { FunilInsights } from "@/components/FunilInsights";
 import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
@@ -13,8 +14,6 @@ function formatBRL(v: number) {
 }
 
 export default function DashboardPage() {
-  const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
-
   // Filtros do funil (estado bruto)
   const [cidade, setCidade] = useState<string[]>([]);
   const [porte, setPorte] = useState<string[]>([]);
@@ -27,15 +26,16 @@ export default function DashboardPage() {
   const [fundacaoDe, setFundacaoDe] = useState("");
   const [fundacaoAte, setFundacaoAte] = useState("");
   const [incluirInativas, setIncluirInativas] = useState(true);
-
-  const [empresas, setEmpresas] = useState<EmpresaItem[]>([]);
-  const [total, setTotal] = useState<number | null>(null);
   const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
-  // Opcoes dos multiselects (uma vez)
-  useEffect(() => { getOpcoesFiltro().then(setOpcoes).catch(() => {}); }, []);
+  // Opcoes dos multiselects -- cachea por 30min (cidades/portes/cnaes mudam
+  // raro). Assim voltar pra tela nao dispara essa query.
+  const opcoesQuery = useQuery({
+    queryKey: ["opcoes-filtro"],
+    queryFn: getOpcoesFiltro,
+    staleTime: 30 * 60 * 1000,
+  });
+  const opcoes: OpcoesFiltro | null = opcoesQuery.data ?? null;
 
   // Filtros "crus" -> aplicados com atraso (nao dispara a cada tecla nos campos)
   const filtros: EmpresaFiltros = useMemo(() => ({
@@ -72,23 +72,27 @@ export default function DashboardPage() {
   // Volta pra primeira pagina quando o filtro aplicado muda
   useEffect(() => { setPage(0); }, [appliedKey]);
 
-  // Contagem do funil
-  useEffect(() => {
-    contarEmpresas(applied).then(r => setTotal(r.total)).catch(() => setTotal(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedKey]);
+  // Contagem do funil -- cacheada pela combinacao de filtros. Trocar
+  // filtro dispara uma nova query; voltar pra combinacao antiga usa o
+  // valor em memoria (sem re-hit no banco).
+  const countQuery = useQuery({
+    queryKey: ["empresas-count", applied],
+    queryFn: () => contarEmpresas(applied),
+  });
+  const total = countQuery.data?.total ?? null;
 
-  // Pagina atual
-  useEffect(() => {
-    let cancel = false;
-    setLoading(true); setError("");
-    listarEmpresas(applied, PAGE_SIZE, page * PAGE_SIZE)
-      .then(d => { if (!cancel) setEmpresas(d); })
-      .catch(() => { if (!cancel) setError("Erro ao carregar empresas."); })
-      .finally(() => { if (!cancel) setLoading(false); });
-    return () => { cancel = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedKey, page]);
+  // Pagina atual -- cacheada por (filtros, pagina). Navegar/voltar em outra
+  // aba e voltar aqui reidrata instantaneo com o valor em memoria.
+  // placeholderData: keepPreviousData evita "flash" de tabela vazia
+  // enquanto a proxima pagina carrega.
+  const empresasQuery = useQuery({
+    queryKey: ["empresas", applied, page],
+    queryFn: () => listarEmpresas(applied, PAGE_SIZE, page * PAGE_SIZE),
+    placeholderData: (prev) => prev,
+  });
+  const empresas: EmpresaItem[] = empresasQuery.data ?? [];
+  const loading = empresasQuery.isPending;
+  const error = empresasQuery.isError ? "Erro ao carregar empresas." : "";
 
   const cidadeOptions = useMemo(() => (opcoes?.cidades ?? []).map(c => ({ value: c, label: c })), [opcoes]);
   const porteOptions = useMemo(() => (opcoes?.portes ?? []).map(p => ({ value: p, label: p })), [opcoes]);
