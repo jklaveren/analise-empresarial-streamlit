@@ -5,24 +5,41 @@
 --   Um UNICO ALTER TABLE agrupa TODOS os DROP COLUMN + ALTER COLUMN
 --   TYPE. Assim o Postgres reescreve o heap uma unica vez -- o rewrite
 --   ja compacta a tabela (sem tuplas mortas, sem colunas removidas,
---   sem folgas). Nao precisa de VACUUM FULL depois, ganha ~10x em
+--   sem folgas). Nao precisa de VACUUM FULL depois, ganha ~5x em
 --   tempo comparado a rodar ALTER por ALTER com VACUUM no fim.
+--
+-- Robusto contra dois estados possiveis do banco:
+--   (a) schema antigo -- so tem DIVIDA_TOTAL, sem DIVIDA_FEDERAL /
+--       DIVIDA_PREVIDENCIARIA / DIVIDA_FGTS (aqui o script cria).
+--   (b) schema novo -- as 4 colunas ja existem (sync_dividas_only.py
+--       ja rodou; aqui o ADD COLUMN IF NOT EXISTS e no-op).
 --
 -- Bloqueio:
 --   O ALTER TABLE toma AccessExclusiveLock na dados_empresas durante
---   todo o rewrite (esperado: ~1-3 min pra ~700k linhas em plano
---   basico do Supabase). Queries do backend nessa tabela ficam em
---   espera; o backend ja tem fallback pra tabela ausente / queries
---   que falham (retorna [] ou {}), entao a UI segue funcionando.
+--   todo o rewrite (esperado: ~1-3 min pra ~700k linhas). Backend ja
+--   tem fallback pra tabela ausente -- UI segue funcionando.
 --
 -- Uso: Supabase Dashboard -> SQL Editor -> New query -> cola tudo -> Run.
 -- =================================================================
 
 -- ----------------------------------------------------------------
--- O ALTER unico: drops + type changes numa reescrita so
+-- Passo 1: garantir que todas as colunas de divida existem
+-- ----------------------------------------------------------------
+-- ADD COLUMN IF NOT EXISTS com DEFAULT constante nao reescreve a tabela
+-- no Postgres 11+ (metadado apenas). Se as colunas ja existem, e no-op.
+ALTER TABLE dados_empresas
+    ADD COLUMN IF NOT EXISTS "DIVIDA_FEDERAL"        NUMERIC(18,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS "DIVIDA_PREVIDENCIARIA" NUMERIC(18,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS "DIVIDA_FGTS"           NUMERIC(18,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS "DIVIDA_TOTAL"          NUMERIC(18,2) DEFAULT 0;
+
+-- ----------------------------------------------------------------
+-- Passo 2: o ALTER unico -- drops + type changes numa reescrita so
 -- ----------------------------------------------------------------
 -- Cada USING trata os valores feios inline (NULLIF pra '', regex pra
 -- YYYYMMDD invalido) -- entao nao precisa UPDATE de limpeza antes.
+-- Se a coluna ja e do tipo alvo, o USING vira no-op simbolico e o
+-- ALTER continua sem custo extra.
 ALTER TABLE dados_empresas
     DROP COLUMN IF EXISTS "CONTATO_FONE",
     DROP COLUMN IF EXISTS "PORTE_NOME",
