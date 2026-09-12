@@ -18,12 +18,9 @@ on:
   schedule:
     - cron: "0 3 5 * *"
 
+  # Sem inputs -- a deteccao automatica do trimestre PGFN sonda o servidor
+  # na hora. Nada pra preencher no "Run workflow".
   workflow_dispatch:
-    inputs:
-      trimestre_pgfn:
-        description: "Trimestre PGFN (ex: 2026_trimestre_02). Vazio = detecta automaticamente."
-        required: false
-        default: ""
 
 concurrency:
   group: etl-dividas
@@ -56,8 +53,6 @@ jobs:
       # sem o bloqueio de IP que atinge a Receita. Se algum dia essa URL
       # tambem for bloqueada, o preflight vai avisar em segundos.
       - name: "Detectar trimestre PGFN"
-        env:
-          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn }}
         run: |
           cd whodados/pipeline
           python -c "import pipeline_pgfn; print(f'PGFN_TRIMESTRE={pipeline_pgfn.ULTIMO_TRIMESTRE.rstrip(chr(47))}')" \
