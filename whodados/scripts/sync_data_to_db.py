@@ -22,6 +22,8 @@ from database_config import (
     EXPECTED_SOCIO_COLUMNS,
     create_db_engine,
     criar_indices_dados,
+    dtypes_empresas,
+    dtypes_socios,
     ensure_app_tables,
     garantir_colunas_obrigatorias,
     get_data_table_names,
@@ -61,6 +63,21 @@ def carregar_csvs():
 
     empresas = garantir_colunas_obrigatorias(empresas, EXPECTED_EMPRESA_COLUMNS)
     socios = garantir_colunas_obrigatorias(socios, EXPECTED_SOCIO_COLUMNS)
+
+    # Converte tipos ANTES do to_sql pra que os dtypes SQL explicitos (NUMERIC,
+    # DATE) recebam os valores certos e nao tudo como string.
+    for col in ("CAPITAL_SOCIAL", "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA",
+                "DIVIDA_FGTS", "DIVIDA_TOTAL"):
+        if col in empresas.columns:
+            empresas[col] = pd.to_numeric(
+                empresas[col].astype(str).str.replace(",", "."),
+                errors="coerce",
+            )
+    if "DATA_FUNDACAO" in empresas.columns:
+        # DATA_FUNDACAO vem como 'AAAAMMDD' no CSV da Receita.
+        empresas["DATA_FUNDACAO"] = pd.to_datetime(
+            empresas["DATA_FUNDACAO"], format="%Y%m%d", errors="coerce"
+        ).dt.date
 
     return empresas, socios
 
@@ -108,8 +125,17 @@ def main():
         print(f"Sincronizacao abortada: {erro}", file=sys.stderr)
         sys.exit(1)
 
-    empresas.to_sql(tabelas["empresas"], engine, if_exists="replace", index=False, chunksize=5000)
-    socios.to_sql(tabelas["socios"], engine, if_exists="replace", index=False, chunksize=5000)
+    # dtype=... define o tipo SQL de cada coluna (NUMERIC, DATE, VARCHAR(N))
+    # em vez de tudo TEXT ilimitado. Reduz espaco no disco do Postgres e
+    # deixa queries analiticas (SUM, GROUP BY numerico) mais rapidas.
+    empresas.to_sql(
+        tabelas["empresas"], engine, if_exists="replace", index=False,
+        chunksize=5000, dtype=dtypes_empresas(),
+    )
+    socios.to_sql(
+        tabelas["socios"], engine, if_exists="replace", index=False,
+        chunksize=5000, dtype=dtypes_socios(),
+    )
     print(f"OK Tabela de empresas atualizada: {tabelas['empresas']} ({len(empresas)} linhas)")
     print(f"OK Tabela de socios atualizada: {tabelas['socios']} ({len(socios)} linhas)")
 

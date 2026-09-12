@@ -38,6 +38,25 @@ _BASE_FROM = """
 _CAPITAL = 'COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0)'
 _DIVIDA = 'COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0)'
 
+# PORTE_NOME nao existe mais na tabela -- e derivado do PORTE_EMPRESA (codigo).
+# Espelha o mapeamento antigo do pipeline pra manter a API igual pro frontend.
+# (Mesma expressao vive em service.py; duplicada aqui pra manter cada modulo
+# self-contained -- se um dia forem consolidar, mover pra config.py.)
+_PORTE_NOME_SQL = (
+    "CASE e.\"PORTE_EMPRESA\" "
+    "WHEN '01' THEN 'NAO INFORMADO' "
+    "WHEN '02' THEN 'ME' "
+    "WHEN '03' THEN 'EPP' "
+    "WHEN '05' THEN 'MEDIO E GRANDE' "
+    "ELSE 'DEMAIS' END"
+)
+_PORTE_NOME_TO_CODE = {
+    "NAO INFORMADO": "01",
+    "ME": "02",
+    "EPP": "03",
+    "MEDIO E GRANDE": "05",
+}
+
 
 def _tabela_existe(cur, nome: str) -> bool:
     cur.execute(
@@ -73,8 +92,12 @@ def _filtros_sql(
         cond.append('e."CNAE_PRINCIPAL" = ANY(%s)')
         params.append(list(cnaes))
     if portes:
-        cond.append('e."PORTE_NOME" = ANY(%s)')
-        params.append(list(portes))
+        # Frontend manda nomes ('ME', 'EPP', ...); a tabela guarda so o
+        # codigo. Traduz de volta.
+        codigos = [_PORTE_NOME_TO_CODE[p] for p in portes if p in _PORTE_NOME_TO_CODE]
+        if codigos:
+            cond.append('e."PORTE_EMPRESA" = ANY(%s)')
+            params.append(codigos)
     if divida_min is not None:
         cond.append(f"{_DIVIDA} >= %s")
         params.append(divida_min)
@@ -241,7 +264,7 @@ def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
             where, params = _filtros_sql(**filtros)
             cur.execute(
                 f"""
-                SELECT COALESCE(NULLIF(e."PORTE_NOME", ''), 'Nao informado') AS porte,
+                SELECT ({_PORTE_NOME_SQL}) AS porte,
                        COUNT(*) AS qtd
                 {_BASE_FROM}
                 WHERE 1=1 {where}
@@ -276,7 +299,7 @@ def analytics_top_empresas(
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    e."PORTE_NOME" AS porte_nome,
+                    ({_PORTE_NOME_SQL}) AS porte_nome,
                     {_CAPITAL} AS capital_social,
                     {_DIVIDA} AS divida_total
                 {_BASE_FROM}
@@ -410,11 +433,14 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
                 )
                 cidades = [r["nome_municipio"] for r in cur.fetchall()]
 
+            # Porte agora e derivado do codigo PORTE_EMPRESA -- so 5 nomes
+            # possiveis, e a ordem visual eh melhor fixa (ME, EPP, MEDIO E
+            # GRANDE, ...) do que ordem alfabetica.
             cur.execute(
-                'SELECT DISTINCT "PORTE_NOME" AS p FROM dados_empresas '
-                'WHERE "PORTE_NOME" IS NOT NULL AND "PORTE_NOME" <> \'\' ORDER BY p'
+                f'SELECT DISTINCT ({_PORTE_NOME_SQL}) AS p FROM dados_empresas e '
+                f'WHERE e."PORTE_EMPRESA" IS NOT NULL'
             )
-            portes = [r["p"] for r in cur.fetchall()]
+            portes = sorted({r["p"] for r in cur.fetchall() if r["p"]})
 
             cnaes: List[str] = []
             if _tabela_existe(cur, "cnaes"):

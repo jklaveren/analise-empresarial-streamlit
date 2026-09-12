@@ -145,7 +145,9 @@ def gerar_master() -> pd.DataFrame:
     master = df_estab.merge(df_emp, on="CNPJ_BASICO", how="left")
     master = master.merge(df_dividas, on="CNPJ_BASICO", how="left")
 
-    master["CONTATO_FONE"] = "(" + master["DDD"].fillna("") + ") " + master["TELEFONE"].fillna("")
+    # CONTATO_FONE removido do master: era derivado (DDD + TELEFONE) e so
+    # inflava o banco. O backend concatena on-the-fly no SELECT (ver
+    # backend/db/service.py: CONTATO_FONE_SQL).
     master["CAPITAL_SOCIAL"] = pd.to_numeric(
         master["CAPITAL_SOCIAL"].astype(str).str.replace(",", "."), errors="coerce"
     ).fillna(0.0)

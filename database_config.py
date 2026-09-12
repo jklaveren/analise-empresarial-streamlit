@@ -29,11 +29,16 @@ def get_data_table_names() -> dict:
 
 # Colunas produzidas por whodados/pipeline/pipeline.py::gerar_master()
 # (arquivo out/subset_rs_final_completo.csv)
+#
+# NOTA: CONTATO_FONE e PORTE_NOME (que existiam antes) foram removidos --
+# ambos eram derivados de outras colunas (DDD+TELEFONE e PORTE_EMPRESA) e
+# so inflavam a tabela sem carregar informacao nova. O backend deriva os
+# dois on-the-fly nos SELECTs (ver service.py / analytics.py).
 EXPECTED_EMPRESA_COLUMNS = [
     "CNPJ_BASICO", "CNPJ_COMPLETO", "RAZAO_SOCIAL", "NOME_FANTASIA",
     "DATA_FUNDACAO", "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "BAIRRO",
-    "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "EMAIL", "CONTATO_FONE",
-    "CAPITAL_SOCIAL", "PORTE_EMPRESA", "PORTE_NOME",
+    "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "EMAIL",
+    "CAPITAL_SOCIAL", "PORTE_EMPRESA",
     "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA_TOTAL",
 ]
 
@@ -43,6 +48,51 @@ EXPECTED_SOCIO_COLUMNS = [
     "CNPJ_BASICO", "IDENTIFICADOR_SOCIO", "NOME_SOCIO",
     "CPF_CNPJ_SOCIO", "QUALIF_SOCIO",
 ]
+
+
+def dtypes_empresas() -> dict:
+    """Tipos SQL explicitos pro to_sql do pandas gravar cada coluna com o
+    tipo certo em vez de tudo como TEXT ilimitado.
+
+    Ganho principal: DIVIDA_* e CAPITAL_SOCIAL como NUMERIC (bytes fixos)
+    em vez de TEXT (strlen). DATA_FUNDACAO como DATE (4 bytes vs 8 chars).
+    Codigos com tamanho fixo ganham validacao (evita string monstro por bug).
+    """
+    from sqlalchemy import types as t
+    return {
+        "CNPJ_BASICO":           t.CHAR(8),
+        "CNPJ_COMPLETO":         t.CHAR(14),
+        "RAZAO_SOCIAL":          t.String(300),
+        "NOME_FANTASIA":         t.String(300),
+        "DATA_FUNDACAO":         t.Date(),
+        "CNAE_PRINCIPAL":        t.String(10),
+        "LOGRADOURO":            t.String(300),
+        "NUMERO":                t.String(20),
+        "BAIRRO":                t.String(200),
+        "CEP":                   t.String(10),
+        "COD_MUNICIPIO":         t.String(10),
+        "DDD":                   t.String(4),
+        "TELEFONE":              t.String(30),
+        "EMAIL":                 t.String(255),
+        "CAPITAL_SOCIAL":        t.Numeric(18, 2),
+        "PORTE_EMPRESA":         t.CHAR(2),
+        "DIVIDA_FEDERAL":        t.Numeric(18, 2),
+        "DIVIDA_PREVIDENCIARIA": t.Numeric(18, 2),
+        "DIVIDA_FGTS":           t.Numeric(18, 2),
+        "DIVIDA_TOTAL":          t.Numeric(18, 2),
+    }
+
+
+def dtypes_socios() -> dict:
+    """Tipos SQL explicitos pra dados_socios."""
+    from sqlalchemy import types as t
+    return {
+        "CNPJ_BASICO":         t.CHAR(8),
+        "IDENTIFICADOR_SOCIO": t.CHAR(1),
+        "NOME_SOCIO":          t.String(200),
+        "CPF_CNPJ_SOCIO":      t.String(20),
+        "QUALIF_SOCIO":        t.String(4),
+    }
 
 
 def garantir_colunas_obrigatorias(df, colunas_esperadas):

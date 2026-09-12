@@ -332,12 +332,10 @@ def filtrar_empresas(cnpjs_rs: set) -> pd.DataFrame:
 
     df_emp = pd.concat(emp_chunks_list, ignore_index=True)
     df_emp.columns = ["CNPJ_BASICO", "RAZAO_SOCIAL", "CAPITAL_SOCIAL", "PORTE_EMPRESA"]
-    df_emp["PORTE_NOME"] = (
-        df_emp["PORTE_EMPRESA"]
-        .str.strip()
-        .map({"01": "NAO INFORMADO", "02": "ME", "03": "EPP", "05": "MEDIO E GRANDE"})
-        .fillna("DEMAIS")
-    )
+    # PORTE_NOME removido: era derivado do PORTE_EMPRESA por um mapa fixo
+    # ('01' -> 'NAO INFORMADO', '02' -> 'ME', etc.) e so inflava a tabela
+    # sem informacao nova. O backend faz o mapeamento no SELECT (ver
+    # backend/db/service.py: PORTE_NOME_SQL / PORTE_NOME_TO_CODE).
     df_emp.to_csv(destino, sep=";", index=False, encoding="utf-8")
     print(f"OK Empresas filtradas: {len(df_emp)}")
     return df_emp
