@@ -108,7 +108,7 @@ function FunilTab() {
         });
       }
     } catch (err) {
-      setError("Erro ao carregar o CRM. Tente novamente.");
+      setError("Erro ao carregar os clientes. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -134,7 +134,7 @@ function FunilTab() {
   if (loading) {
     return (
       <div className="text-center py-12">
-        <p className="text-slate-500">Carregando CRM...</p>
+        <p className="text-slate-500">Carregando clientes...</p>
       </div>
     );
   }
@@ -476,9 +476,9 @@ export default function CrmPage() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-800">CRM</h1>
+        <h1 className="text-2xl font-bold text-slate-800">Clientes</h1>
         <p className="text-sm text-slate-500">
-          Acompanhe o funil de empresas e o follow-up dos e-mails enviados, tudo em um só lugar.
+          Acompanhe a carteira de empresas e o follow-up dos envios, tudo em um só lugar.
         </p>
       </div>
 
@@ -489,7 +489,7 @@ export default function CrmPage() {
             aba === "funil" ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700"
           }`}
         >
-          🗂️ Funil
+          🗂️ Clientes
         </button>
         <button
           onClick={() => setAba("monitor")}

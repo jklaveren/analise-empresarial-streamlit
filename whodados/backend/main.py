@@ -9,6 +9,7 @@ from .logger import logger
 from .db.config import ensure_tables_exist, check_database_health
 from .db import seed_default_templates
 from .endpoints import router as api_router
+from .endpoints_integracoes import router as integracoes_router
 
 
 _SECRET_KEY_PADRAO = "change-me-in-production-use-strong-secret"
@@ -79,6 +80,7 @@ except ImportError as e:
     logger.warning(f"Security middlewares not available: {e}")
 
 app.include_router(api_router)
+app.include_router(integracoes_router)
 
 
 @app.get("/health")

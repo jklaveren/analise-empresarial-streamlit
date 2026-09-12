@@ -1,40 +1,23 @@
 @echo off
-REM Inicia o WhoDados localmente: backend (FastAPI) + frontend (Next.js),
-REM cada um em sua propria janela, para testar antes de comitar no git.
+REM Sobe SO o frontend (Next.js) apontando para o backend de producao (Render).
+REM O backend nao roda localmente aqui -- ele vive no Render e a DATABASE_URL
+REM do Supabase esta la. Se quiser rodar o stack completo local (raro), use
+REM o iniciar-completo.bat (backend + frontend).
 cd /d "%~dp0"
 
-REM --- Avisos de setup (clone novo nao tem .env nem node_modules) ---
-if not exist "backend\.env" (
-    echo [AVISO] backend\.env nao encontrado. O backend nao vai conectar no Supabase.
-    echo         Crie a partir de backend\.env.example e preencha a DATABASE_URL.
-    echo.
-)
 if not exist "frontend\node_modules" (
-    echo [AVISO] frontend\node_modules nao encontrado. Rode 'npm install' na pasta frontend antes.
-    echo.
+    echo [AVISO] frontend\node_modules nao encontrado. Rode primeiro:
+    echo         cd frontend ^&^& npm install
+    pause
+    exit /b 1
 )
 
-REM --- Ativa a virtualenv (.venv) se existir, para o uvicorn ser encontrado ---
-if exist ".venv\Scripts\activate.bat" (
-    set "ATIVAR_VENV=call .venv\Scripts\activate.bat && "
-) else (
-    echo [AVISO] .venv nao encontrada. Usando o Python do PATH global.
-    echo         Se der 'uvicorn nao reconhecido', crie a venv:
-    echo         python -m venv .venv ^&^& .venv\Scripts\activate ^&^& pip install -r backend\requirements.txt
-    echo.
-    set "ATIVAR_VENV="
-)
-
-echo Iniciando backend (FastAPI) na porta 8000...
-start "WhoDados - Backend" cmd /k "%ATIVAR_VENV%uvicorn backend.main:app --reload --port 8000"
-
-echo Iniciando frontend (Next.js) na porta 3000...
+echo Subindo o frontend (Next.js) na porta 3000...
+echo Backend: apontando para https://whodados-backend.onrender.com (producao)
+echo.
 start "WhoDados - Frontend" cmd /k "cd frontend && npm run dev"
-
 echo.
-echo Backend:  http://localhost:8000
-echo Frontend: http://localhost:3000
-echo.
-echo As duas janelas que abriram mostram os logs dos servidores.
-echo Para parar, basta fechar essas janelas.
+echo Abra http://localhost:3000 quando aparecer 'Ready' na janela do frontend.
+echo (Primeira requisicao pode demorar ~50s -- Render free acorda o backend.)
+echo Para parar, feche a janela do frontend.
 pause

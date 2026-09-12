@@ -60,23 +60,30 @@ export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
   const setorData = setores.map(s => ({ name: (s.descricao || s.cnae).slice(0, 28), divida: s.divida_total, qtd: s.qtd }));
   const porteData = portes.map(p => ({ name: p.porte || "—", value: p.qtd }));
 
-  return (
-    <div className="space-y-6">
+    return (
+    <div className="space-y-8">
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {(loading && !resumo ? Array.from({ length: 6 }) : kpis).map((k, i) => (
-          <div key={i} className="rounded-xl bg-white border border-slate-200 p-4">
-            <div className="text-xs text-slate-500">{(k as { label?: string })?.label ?? "…"}</div>
-            <div className="text-lg font-bold text-slate-800 mt-1">{(k as { valor?: string })?.valor ?? "—"}</div>
+          <div 
+            key={i} 
+            className="rounded-2xl bg-white/80 backdrop-blur-sm border border-slate-200/50 p-5 shadow-lg hover:shadow-xl transition-all duration-300 group"
+          >
+            <div className="text-xs text-slate-500 group-hover:text-slate-700 transition-colors">
+              {(k as { label?: string })?.label ?? "…"}
+            </div>
+            <div className="text-xl font-bold text-slate-800 mt-2 group-hover:text-indigo-600 transition-colors">
+              {(k as { valor?: string })?.valor ?? "—"}
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Dívida por cidade */}
-        <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200">
-          <h3 className="font-semibold text-slate-800 mb-1">Dívida por cidade</h3>
-          <p className="text-xs text-slate-400 mb-4">Total de passivo por município (base filtrada inteira)</p>
+        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-shadow duration-300">
+          <h3 className="font-semibold text-slate-800 text-lg mb-1">Dívida por cidade</h3>
+          <p className="text-xs text-slate-400 mb-5">Total de passivo por município (base filtrada inteira)</p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={cidadeData} layout="vertical" margin={{ left: 8, right: 16 }}>
@@ -84,16 +91,22 @@ export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
                 <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => brl(Number(v))} />
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={90} />
                 <Tooltip formatter={(v: number, n) => n === "divida" ? brl(Number(v)) : v} />
-                <Bar dataKey="divida" name="Dívida" fill="#ef4444" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="divida" name="Dívida" fill="url(#cityGradient)" radius={[0, 4, 4, 0]} />
+                <defs>
+                  <linearGradient id="cityGradient" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#ef4444" />
+                    <stop offset="100%" stopColor="#f97316" />
+                  </linearGradient>
+                </defs>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         {/* Dívida por setor */}
-        <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200">
-          <h3 className="font-semibold text-slate-800 mb-1">Dívida por setor (CNAE)</h3>
-          <p className="text-xs text-slate-400 mb-4">Top setores por passivo</p>
+        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300">
+          <h3 className="font-semibold text-slate-800 text-lg mb-1">Dívida por setor (CNAE)</h3>
+          <p className="text-xs text-slate-400 mb-5">Top setores por passivo</p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={setorData} layout="vertical" margin={{ left: 8, right: 16 }}>
@@ -101,20 +114,26 @@ export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
                 <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => brl(Number(v))} />
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={140} />
                 <Tooltip formatter={(v: number, n) => n === "divida" ? brl(Number(v)) : v} />
-                <Bar dataKey="divida" name="Dívida" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="divida" name="Dívida" fill="url(#sectorGradient)" radius={[0, 4, 4, 0]} />
+                <defs>
+                  <linearGradient id="sectorGradient" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#8b5cf6" />
+                    <stop offset="100%" stopColor="#ec4899" />
+                  </linearGradient>
+                </defs>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         {/* Distribuição por porte */}
-        <div className="rounded-xl bg-white p-6 shadow-sm border border-slate-200 lg:col-span-2">
-          <h3 className="font-semibold text-slate-800 mb-4">Distribuição por porte</h3>
+        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300 lg:col-span-2">
+          <h3 className="font-semibold text-slate-800 text-lg mb-1">Distribuição por porte</h3>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={porteData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={2} dataKey="value">
-                  {porteData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  {porteData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]}/>)}
                 </Pie>
                 <Tooltip formatter={(v: number) => v.toLocaleString("pt-BR")} />
                 <Legend />
