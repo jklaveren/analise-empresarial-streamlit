@@ -77,10 +77,15 @@ def detectar_mes_rf() -> str:
             f"Dados/Cadastros/CNPJ/{candidato}/Empresas0.zip"
         )
         try:
+            # GET-de-1-byte em vez de HEAD (-I): o servidor da Receita nao
+            # responde 200 para HEAD (retorna 405/403), o que fazia toda
+            # sondagem falhar no runner do GitHub e caia num fallback fantasma.
+            # --range 0-0 pede so o primeiro byte via GET; 200 ou 206 = existe.
             resultado = subprocess.run(
                 [
                     "curl", "-u", f"{TOKEN_COMPARTILHAMENTO}:", "-s", "-o", "/dev/null",
-                    "-w", "%{http_code}", "-I", "-L", "--max-time", "15", url_teste,
+                    "-w", "%{http_code}", "-L", "--range", "0-0",
+                    "--max-time", "15", url_teste,
                 ],
                 capture_output=True, text=True,
             )
@@ -92,7 +97,9 @@ def detectar_mes_rf() -> str:
         tentativas.append((candidato, codigo))
         print(f"  [SONDA] {candidato} -> HTTP {codigo}", file=sys.stderr)
 
-        if codigo == "200":
+        # 206 = Partial Content (servidor honrou o --range).
+        # 200 = OK (servidor ignorou o range e mandou tudo -- funciona igual).
+        if codigo in ("200", "206"):
             print(f"  [OK] Mes RF detectado automaticamente: {candidato}", file=sys.stderr)
             return candidato
 
