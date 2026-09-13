@@ -65,51 +65,80 @@ jobs:
             head -c 200 resposta.xml 2>/dev/null || echo "(vazio)"
           fi
 
-      - name: "4/4 - Baixar um arquivo pequeno de verdade"
+      - name: "4/4 - Baixar de verdade pelas DUAS rotas"
         id: baixar
         run: |
-          BASE="https://arquivos.receitafederal.gov.br/public.php/dav/files/$RF_TOKEN"
+          HOST="https://arquivos.receitafederal.gov.br"
+          DAV="$HOST/public.php/dav/files/$RF_TOKEN"
           MES=$(curl -s --max-time 45 -X PROPFIND -H 'Depth: 1' \
-            "$BASE/Dados/Cadastros/CNPJ/" 2>/dev/null \
+            "$DAV/Dados/Cadastros/CNPJ/" 2>/dev/null \
             | grep -oE '[0-9]{4}-[0-9]{2}' | sort -u | tail -1)
           MES="${MES:-2026-08}"
           echo "Mes alvo: $MES"
+          CAMINHO="Dados/Cadastros/CNPJ/$MES/Cnaes.zip"
 
-          CODE=$(curl -s -o Cnaes.zip -w '%{http_code}' --max-time 120 \
-            "$BASE/Dados/Cadastros/CNPJ/$MES/Cnaes.zip" || echo "000")
-          echo "HTTP $CODE"
-          echo "codigo=$CODE" >> "$GITHUB_OUTPUT"
+          # Rota A: dav/files, sem auth -- usada pelo pipeline_levas.py
+          A=$(curl -s -o a.zip -w '%{http_code}' --max-time 120 \
+            "$DAV/$CAMINHO" || echo "000")
+          echo "A) dav/files (sem auth) : HTTP $A"
 
-          if [ "$CODE" = "200" ]; then
-            python3 -c "import zipfile,sys; sys.exit(0 if zipfile.is_zipfile('Cnaes.zip') else 1)" \
-              && echo "ZIP valido - $(stat -c%s Cnaes.zip) bytes" \
-              || { echo "Baixou mas NAO e ZIP valido"; exit 1; }
-          fi
+          # Rota B: webdav com o token como usuario -- usada pelo
+          # pipeline_rf.py, que e o que o ETL #15 executa.
+          B=$(curl -s -o b.zip -w '%{http_code}' --max-time 120 \
+            -u "$RF_TOKEN:" "$HOST/public.php/webdav/$CAMINHO" || echo "000")
+          echo "B) webdav (com auth)    : HTTP $B"
+
+          echo "codigo=$A" >> "$GITHUB_OUTPUT"
+          echo "codigo_webdav=$B" >> "$GITHUB_OUTPUT"
+
+          # Um HTML de erro tambem chega com status 200; todo ZIP comeca
+          # com os bytes "PK", entao isso separa arquivo de pagina de erro.
+          for f in a.zip b.zip; do
+            if [ -s "$f" ]; then
+              if [ "$(head -c 2 "$f")" = "PK" ]; then
+                echo "  $f: ZIP valido ($(stat -c%s "$f") bytes)"
+              else
+                echo "  $f: NAO e ZIP -- inicio: $(head -c 60 "$f" | tr -d '\0')"
+              fi
+            else
+              echo "  $f: vazio"
+            fi
+          done
 
       - name: "Veredito"
         if: always()
         run: |
-          CODE="${{ steps.baixar.outputs.codigo }}"
+          A="${{ steps.baixar.outputs.codigo }}"
+          B="${{ steps.baixar.outputs.codigo_webdav }}"
           {
             echo "## Runner do GitHub x Receita Federal"
             echo ""
-            case "$CODE" in
-              200) echo "**ALCANCA.** Download funcionou do runner."
-                   echo ""
-                   echo "O HTTP 000 anterior era a URL errada, nao bloqueio de IP."
-                   echo "Da pra migrar o ETL de volta pro Actions (com o pipeline"
-                   echo "em levas, que cabe nos 14 GB de disco do runner)." ;;
-              000) echo "**BLOQUEADO.** Sem resposta do servidor."
-                   echo ""
-                   echo "Bloqueio de IP confirmado agora com a URL correta."
-                   echo "O ETL da Receita fica no Colab." ;;
-              401|403) echo "**ALCANCA, mas token recusado (HTTP $CODE).**"
-                   echo ""
-                   echo "Rede esta liberada -- o problema e o token de compartilhamento." ;;
-              404) echo "**ALCANCA, mas caminho nao existe (HTTP 404).**"
-                   echo ""
-                   echo "Rede liberada; a estrutura de pastas mudou." ;;
-              *)   echo "**Inconclusivo** (HTTP ${CODE:-sem codigo}). Ver os passos acima." ;;
-            esac
+            echo "| Rota | Usada por | HTTP |"
+            echo "|---|---|---|"
+            echo "| \`dav/files\` sem auth | pipeline_levas.py | ${A:-?} |"
+            echo "| \`webdav\` com auth | pipeline_rf.py (ETL) | ${B:-?} |"
+            echo ""
+            if [ "$A" = "200" ] || [ "$B" = "200" ]; then
+              echo "**ALCANCA.** O runner baixou da Receita."
+              echo ""
+              echo "Ou seja: o HTTP 000 de antes nao era bloqueio de IP."
+              echo "Da pra trazer o ETL de volta pro Actions usando o pipeline"
+              echo "em levas, que cabe nos 14 GB de disco do runner."
+            elif [ "$A" = "000" ] && [ "$B" = "000" ]; then
+              echo "**BLOQUEADO.** Nenhuma das duas rotas respondeu."
+              echo ""
+              echo "Bloqueio de IP confirmado. O ETL da Receita fica no Colab;"
+              echo "so a PGFN continua no Actions."
+            elif [ "$A" = "401" ] || [ "$B" = "401" ] || [ "$A" = "403" ] || [ "$B" = "403" ]; then
+              echo "**ALCANCA, mas o token foi recusado.**"
+              echo ""
+              echo "A rede esta liberada -- o problema e o token de compartilhamento."
+            elif [ "$A" = "404" ] || [ "$B" = "404" ]; then
+              echo "**ALCANCA, mas o caminho nao existe.**"
+              echo ""
+              echo "Rede liberada; a estrutura de pastas mudou."
+            else
+              echo "**Inconclusivo.** Ver os passos acima."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "Veredito para HTTP ${CODE:-?} escrito no resumo do job."
+          echo "Veredito escrito no resumo do job (A=$A B=$B)."
