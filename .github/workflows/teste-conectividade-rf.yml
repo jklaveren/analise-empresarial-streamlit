@@ -1,0 +1,115 @@
+name: "Teste: runner alcanca a Receita Federal?"
+
+# Responde UMA pergunta: o runner do GitHub consegue falar com
+# arquivos.receitafederal.gov.br?
+#
+# Os testes anteriores deram HTTP 000 e concluimos bloqueio de IP, mas
+# usavam a rota /public.php/webdav/ com um mes que nao existia mais.
+# Como URL errada e rede bloqueada dao sintomas diferentes (404/401 vs
+# 000/timeout), esse diagnostico ficou inconclusivo.
+#
+# Aqui sonda a rota correta -- /public.php/dav/files/<token>/... -- e
+# separa os casos:
+#   200/206  -> alcanca; da pra migrar o ETL de volta pro Actions
+#   000      -> sem resposta: bloqueio de IP confirmado, fica no Colab
+#   401/403  -> alcanca, mas token invalido ou expirado
+#   404      -> alcanca, mas o caminho mudou
+#
+# Roda so sob demanda e leva ~1 minuto.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sondar:
+    name: "Sondar arquivos.receitafederal.gov.br"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # Mesmo token publico do compartilhamento usado pelo pipeline.
+      RF_TOKEN: ${{ vars.RF_SHARE_TOKEN || 'gn672Ad4CF8N6TK' }}
+
+    steps:
+      - name: "IP de saida do runner"
+        run: |
+          echo "IP: $(curl -s --max-time 15 https://api.ipify.org || echo '(nao obtido)')"
+
+      - name: "1/4 - DNS e TCP"
+        run: |
+          echo "== DNS =="
+          getent hosts arquivos.receitafederal.gov.br || echo "FALHOU: nao resolveu"
+          echo "== TCP 443 =="
+          timeout 15 bash -c '</dev/tcp/arquivos.receitafederal.gov.br/443' \
+            && echo "OK: porta 443 aceita conexao" \
+            || echo "FALHOU: nao conectou na 443 (bloqueio de rede)"
+
+      - name: "2/4 - HTTPS na raiz"
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            https://arquivos.receitafederal.gov.br/ || echo "000")
+          echo "HTTP $CODE"
+          [ "$CODE" = "000" ] && echo "::warning::Sem resposta na raiz -- indicio de bloqueio" || true
+
+      - name: "3/4 - PROPFIND (listar meses disponiveis)"
+        run: |
+          BASE="https://arquivos.receitafederal.gov.br/public.php/dav/files/$RF_TOKEN"
+          CODE=$(curl -s -o resposta.xml -w '%{http_code}' --max-time 45 \
+            -X PROPFIND -H 'Depth: 1' "$BASE/Dados/Cadastros/CNPJ/" || echo "000")
+          echo "HTTP $CODE"
+          if [ "$CODE" = "207" ] || [ "$CODE" = "200" ]; then
+            echo "Meses encontrados:"
+            grep -oE '[0-9]{4}-[0-9]{2}' resposta.xml | sort -u | tail -5
+          else
+            echo "Corpo da resposta (200 primeiros bytes):"
+            head -c 200 resposta.xml 2>/dev/null || echo "(vazio)"
+          fi
+
+      - name: "4/4 - Baixar um arquivo pequeno de verdade"
+        id: baixar
+        run: |
+          BASE="https://arquivos.receitafederal.gov.br/public.php/dav/files/$RF_TOKEN"
+          MES=$(curl -s --max-time 45 -X PROPFIND -H 'Depth: 1' \
+            "$BASE/Dados/Cadastros/CNPJ/" 2>/dev/null \
+            | grep -oE '[0-9]{4}-[0-9]{2}' | sort -u | tail -1)
+          MES="${MES:-2026-08}"
+          echo "Mes alvo: $MES"
+
+          CODE=$(curl -s -o Cnaes.zip -w '%{http_code}' --max-time 120 \
+            "$BASE/Dados/Cadastros/CNPJ/$MES/Cnaes.zip" || echo "000")
+          echo "HTTP $CODE"
+          echo "codigo=$CODE" >> "$GITHUB_OUTPUT"
+
+          if [ "$CODE" = "200" ]; then
+            python3 -c "import zipfile,sys; sys.exit(0 if zipfile.is_zipfile('Cnaes.zip') else 1)" \
+              && echo "ZIP valido - $(stat -c%s Cnaes.zip) bytes" \
+              || { echo "Baixou mas NAO e ZIP valido"; exit 1; }
+          fi
+
+      - name: "Veredito"
+        if: always()
+        run: |
+          CODE="${{ steps.baixar.outputs.codigo }}"
+          {
+            echo "## Runner do GitHub x Receita Federal"
+            echo ""
+            case "$CODE" in
+              200) echo "**ALCANCA.** Download funcionou do runner."
+                   echo ""
+                   echo "O HTTP 000 anterior era a URL errada, nao bloqueio de IP."
+                   echo "Da pra migrar o ETL de volta pro Actions (com o pipeline"
+                   echo "em levas, que cabe nos 14 GB de disco do runner)." ;;
+              000) echo "**BLOQUEADO.** Sem resposta do servidor."
+                   echo ""
+                   echo "Bloqueio de IP confirmado agora com a URL correta."
+                   echo "O ETL da Receita fica no Colab." ;;
+              401|403) echo "**ALCANCA, mas token recusado (HTTP $CODE).**"
+                   echo ""
+                   echo "Rede esta liberada -- o problema e o token de compartilhamento." ;;
+              404) echo "**ALCANCA, mas caminho nao existe (HTTP 404).**"
+                   echo ""
+                   echo "Rede liberada; a estrutura de pastas mudou." ;;
+              *)   echo "**Inconclusivo** (HTTP ${CODE:-sem codigo}). Ver os passos acima." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Veredito para HTTP ${CODE:-?} escrito no resumo do job."
