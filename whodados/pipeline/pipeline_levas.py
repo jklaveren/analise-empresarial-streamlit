@@ -55,6 +55,7 @@ AUX_ESTAB = OUT / "aux_estab_rs.csv"
 AUX_SOCIOS = OUT / "socios_rs.csv"
 AUX_EMPRESAS = OUT / "empresas_rs.csv"
 AUX_DIVIDAS = OUT / "dividas.csv"
+AUX_SIMPLES = OUT / "simples_rs.csv"
 ARQUIVO_FINAL = OUT / "subset_rs_final_completo.csv"
 ESTADO = OUT / "_progresso.json"
 
@@ -264,7 +265,8 @@ print(f"✅ PGFN: {TRIMESTRE}")
 # bairro vinha vazio (16 e complemento).
 COLS_ESTAB = ["CNPJ_BASICO", "CNPJ_COMPLETO", "NOME_FANTASIA", "DATA_FUNDACAO",
               "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "COMPLEMENTO", "BAIRRO",
-              "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "TELEFONE_2", "EMAIL"]
+              "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "TELEFONE_2", "EMAIL",
+              "CNAE_SECUNDARIA"]
 
 
 def processar_estabelecimentos(caminho):
@@ -280,8 +282,11 @@ def processar_estabelecimentos(caminho):
         # logradouro como aparece num endereco.
         res["_LOGRADOURO"] = (res[13].fillna("").str.strip() + " " +
                               res[14].fillna("").str.strip()).str.strip()
+        # col 12 traz as CNAEs secundarias separadas por virgula. Uma empresa
+        # costuma atuar em mais de uma atividade, e segmentar so pela principal
+        # perde quem exerce a atividade-alvo como secundaria.
         sel = res[["CNPJ_BASICO", "CNPJ_COMPLETO", 4, 10, 11,
-                   "_LOGRADOURO", 15, 16, 17, 18, 20, 21, 22, 24, 27]]
+                   "_LOGRADOURO", 15, 16, 17, 18, 20, 21, 22, 24, 27, 12]]
         sel.columns = COLS_ESTAB
         anexar_csv(sel, AUX_ESTAB, encoding="latin1")
         total += len(sel)
@@ -310,8 +315,9 @@ def processar_empresas(caminho):
         res = chunk[chunk[0].isin(cnpjs_rs)]
         if res.empty:
             continue
-        sel = res[[0, 1, 4, 5]].copy()
-        sel.columns = ["CNPJ_BASICO", "RAZAO_SOCIAL", "CAPITAL_SOCIAL", "PORTE_EMPRESA"]
+        sel = res[[0, 1, 4, 5, 2, 3]].copy()
+        sel.columns = ["CNPJ_BASICO", "RAZAO_SOCIAL", "CAPITAL_SOCIAL",
+                       "PORTE_EMPRESA", "NATUREZA_JURIDICA", "QUALIF_RESPONSAVEL"]
         anexar_csv(sel, AUX_EMPRESAS, encoding="latin1")
         total += len(sel)
     return total
@@ -399,6 +405,70 @@ print(f"\n💰 {com_divida:,} empresas do RS com dívida ativa")
 
 
 # ----------------------------------------------------------------
+# ETAPA 4b - SIMPLES / MEI
+# ----------------------------------------------------------------
+# Regime tributario separa MEI de empresa estruturada melhor que o campo
+# porte, que so tem tres faixas. Util pra qualificar o tamanho real do lead.
+def processar_simples(caminho):
+    total = 0
+    for chunk in ler_zip_em_chunks(caminho):
+        chunk[0] = chunk[0].str.zfill(8)
+        res = chunk[chunk[0].isin(cnpjs_rs)]
+        if res.empty:
+            continue
+        sel = res[[0, 1, 4]].copy()
+        sel.columns = ["CNPJ_BASICO", "OPCAO_SIMPLES", "OPCAO_MEI"]
+        anexar_csv(sel, AUX_SIMPLES)
+        total += len(sel)
+    return total
+
+
+em_levas(["Simples.zip"], URL_RF, "ETAPA 4b - Simples / MEI", processar_simples)
+
+
+# ----------------------------------------------------------------
+# ETAPA 4c - TABELAS DE DOMINIO
+# ----------------------------------------------------------------
+# Arquivos de menos de 1 MB que traduzem os codigos (CNAE, municipio,
+# natureza juridica, qualificacao do socio). Sem eles a tela mostra
+# "6201500" em vez de "Desenvolvimento de programas de computador".
+TABELAS_DOMINIO = {
+    "Cnaes.zip": "cnaes.csv",
+    "Municipios.zip": "municipios.csv",
+    "Naturezas.zip": "naturezas.csv",
+    "Qualificacoes.zip": "qualificacoes.csv",
+}
+
+
+def baixar_tabelas_dominio():
+    print()
+    print("=" * 70)
+    print("ETAPA 4c - Tabelas de dominio")
+    print("=" * 70)
+    estado = ler_estado()
+    for arquivo, saida in TABELAS_DOMINIO.items():
+        chave = "dominio:" + arquivo
+        destino_csv = OUT / saida
+        if chave in estado["feitos"] and destino_csv.exists():
+            print("   ja gerado: " + saida)
+            continue
+        zip_local = RAW / arquivo
+        baixar(URL_RF + "/" + arquivo, zip_local, arquivo)
+        partes = list(ler_zip_em_chunks(zip_local))
+        if partes:
+            tab = pd.concat(partes, ignore_index=True).iloc[:, :2]
+            tab.columns = ["CODIGO", "DESCRICAO"]
+            tab.to_csv(destino_csv, sep=";", index=False, encoding="latin1")
+            print("   OK " + saida + ": " + format(len(tab), ",") + " codigos")
+        if not MANTER_ZIPS:
+            zip_local.unlink(missing_ok=True)
+        marcar_feito(estado, chave)
+
+
+baixar_tabelas_dominio()
+
+
+# ----------------------------------------------------------------
 # ETAPA 5 — CONSOLIDACAO
 # ----------------------------------------------------------------
 print(f"\n{'='*70}\nETAPA 5 — Consolidação\n{'='*70}")
@@ -406,6 +476,10 @@ print(f"\n{'='*70}\nETAPA 5 — Consolidação\n{'='*70}")
 df_emp = pd.read_csv(AUX_EMPRESAS, sep=";", encoding="latin1", dtype=str)
 master = df_estab.merge(df_emp, on="CNPJ_BASICO", how="left")
 master = master.merge(df_dividas, on="CNPJ_BASICO", how="left")
+
+if AUX_SIMPLES.exists():
+    df_simples = pd.read_csv(AUX_SIMPLES, sep=";", dtype=str)
+    master = master.merge(df_simples, on="CNPJ_BASICO", how="left")
 
 master["CAPITAL_SOCIAL"] = pd.to_numeric(
     master["CAPITAL_SOCIAL"].str.replace(",", ".", regex=False), errors="coerce").fillna(0.0)

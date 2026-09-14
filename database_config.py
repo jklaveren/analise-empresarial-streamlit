@@ -39,6 +39,8 @@ EXPECTED_EMPRESA_COLUMNS = [
     "DATA_FUNDACAO", "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "COMPLEMENTO",
     "BAIRRO", "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "TELEFONE_2", "EMAIL",
     "CAPITAL_SOCIAL", "PORTE_EMPRESA",
+    "CNAE_SECUNDARIA", "NATUREZA_JURIDICA", "QUALIF_RESPONSAVEL",
+    "OPCAO_SIMPLES", "OPCAO_MEI",
     "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA_TOTAL",
 ]
 
@@ -78,6 +80,12 @@ def dtypes_empresas() -> dict:
         "EMAIL":                 t.String(255),
         "CAPITAL_SOCIAL":        t.Numeric(18, 2),
         "PORTE_EMPRESA":         t.CHAR(2),
+        # Lista separada por virgula -- uma empresa costuma ter varias.
+        "CNAE_SECUNDARIA":       t.Text(),
+        "NATUREZA_JURIDICA":     t.String(10),
+        "QUALIF_RESPONSAVEL":    t.String(4),
+        "OPCAO_SIMPLES":         t.CHAR(1),
+        "OPCAO_MEI":             t.CHAR(1),
         "DIVIDA_FEDERAL":        t.Numeric(18, 2),
         "DIVIDA_PREVIDENCIARIA": t.Numeric(18, 2),
         "DIVIDA_FGTS":           t.Numeric(18, 2),
