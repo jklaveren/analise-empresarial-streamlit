@@ -12,6 +12,7 @@
 import json
 import os
 import re
+import time
 import zipfile
 from pathlib import Path
 
@@ -94,16 +95,55 @@ def marcar_feito(estado, chave):
 # ----------------------------------------------------------------
 # DOWNLOAD
 # ----------------------------------------------------------------
-def listar_dav(caminho):
-    r = requests.request("PROPFIND", f"{DAV_RF}/{caminho}/",
-                         headers={"Depth": "1"}, timeout=60, verify=False)
-    r.raise_for_status()
-    hrefs = re.findall(r"<d:href>([^<]*)</d:href>", r.text, re.IGNORECASE)
-    return [h.rstrip("/").split("/")[-1] for h in hrefs if h.rstrip("/").split("/")[-1]]
+def listar_dav(caminho, tentativas=5):
+    """Lista uma pasta do WebDAV. Repete com espera crescente: numa execucao
+    de horas, uma conexao recusada e rotina, e sem retry ela derruba o
+    pipeline inteiro antes de baixar um byte."""
+    for n in range(1, tentativas + 1):
+        try:
+            r = requests.request("PROPFIND", f"{DAV_RF}/{caminho}/",
+                                 headers={"Depth": "1", "User-Agent": UA},
+                                 timeout=60, verify=False)
+            r.raise_for_status()
+            hrefs = re.findall(r"<d:href>([^<]*)</d:href>", r.text, re.IGNORECASE)
+            return [h.rstrip("/").split("/")[-1] for h in hrefs
+                    if h.rstrip("/").split("/")[-1]]
+        except Exception as e:
+            if n == tentativas:
+                raise SystemExit(
+                    f"❌ Nao consegui listar {caminho} apos {tentativas} tentativas.\n"
+                    f"   Ultimo erro: {type(e).__name__}: {e}\n"
+                    f"   Se for 'RemoteDisconnected', o servidor esta recusando "
+                    f"este IP -- tente de outra rede.")
+            espera = 5 * n
+            print(f"   ⏳ listagem falhou ({type(e).__name__}), "
+                  f"tentativa {n}/{tentativas}, esperando {espera}s...")
+            time.sleep(espera)
 
 
-def baixar(url, destino, rotulo):
-    """Baixa com stream e retomada. Levanta SystemExit com o motivo se falhar."""
+def baixar(url, destino, rotulo, tentativas=6):
+    """Baixa com stream e retomada, repetindo em erro de rede.
+
+    Numa execucao de horas a conexao cai; como cada tentativa retoma do
+    ponto em que parou (header Range), repetir custa pouco e evita perder
+    o que ja foi baixado."""
+    for n in range(1, tentativas + 1):
+        try:
+            _baixar_uma_vez(url, destino, rotulo)
+            return
+        except requests.RequestException as e:
+            if n == tentativas:
+                raise SystemExit(
+                    f"❌ {rotulo}: desisti apos {tentativas} tentativas.\n"
+                    f"   Ultimo erro: {type(e).__name__}: {e}\n   URL: {url}")
+            espera = min(10 * n, 60)
+            baixado = destino.stat().st_size / MB if destino.exists() else 0
+            print(f"\n   ⏳ {type(e).__name__} — tentativa {n}/{tentativas}, "
+                  f"retomando de {baixado:,.0f} MB em {espera}s...")
+            time.sleep(espera)
+
+
+def _baixar_uma_vez(url, destino, rotulo):
     if destino.exists() and zipfile.is_zipfile(destino):
         print(f"   ⏭️  {rotulo} (já baixado)")
         return
@@ -113,30 +153,28 @@ def baixar(url, destino, rotulo):
     if parcial:
         headers["Range"] = f"bytes={parcial}-"
 
-    try:
-        # stream=True e obrigatorio: Estabelecimentos0.zip tem 2GB e sem isso
-        # o requests carrega tudo na RAM antes de gravar.
-        with requests.get(url, headers=headers, stream=True,
-                          timeout=(30, 300), verify=False) as r:
-            if r.status_code not in (200, 206):
-                raise SystemExit(f"❌ {rotulo}: HTTP {r.status_code}\n   URL: {url}")
+    # stream=True e obrigatorio: Estabelecimentos0.zip tem 2GB e sem isso
+    # o requests carrega tudo na RAM antes de gravar.
+    # RequestException aqui sobe pro retry em baixar().
+    with requests.get(url, headers=headers, stream=True,
+                      timeout=(30, 300), verify=False) as r:
+        if r.status_code not in (200, 206):
+            raise SystemExit(f"❌ {rotulo}: HTTP {r.status_code}\n   URL: {url}")
 
-            total = int(r.headers.get("Content-Length", 0))
-            modo = "ab" if (r.status_code == 206 and parcial) else "wb"
-            if modo == "ab":
-                total += parcial
-            feito = parcial if modo == "ab" else 0
+        total = int(r.headers.get("Content-Length", 0))
+        modo = "ab" if (r.status_code == 206 and parcial) else "wb"
+        if modo == "ab":
+            total += parcial
+        feito = parcial if modo == "ab" else 0
 
-            with open(destino, modo) as f:
-                for bloco in r.iter_content(chunk_size=8 * MB):
-                    f.write(bloco)
-                    feito += len(bloco)
-                    if total:
-                        print(f"\r   ⬇️  {rotulo}: {feito/MB:,.0f}/{total/MB:,.0f} MB "
-                              f"({feito*100//total}%)", end="", flush=True)
-            print()
-    except requests.RequestException as e:
-        raise SystemExit(f"❌ {rotulo}: {type(e).__name__}: {e}\n   URL: {url}")
+        with open(destino, modo) as f:
+            for bloco in r.iter_content(chunk_size=8 * MB):
+                f.write(bloco)
+                feito += len(bloco)
+                if total:
+                    print(f"\r   ⬇️  {rotulo}: {feito/MB:,.0f}/{total/MB:,.0f} MB "
+                          f"({feito*100//total}%)", end="", flush=True)
+        print()
 
     # Uma pagina de erro tambem chega com status 200; o teste de zip pega isso.
     if not zipfile.is_zipfile(destino):
