@@ -46,7 +46,7 @@ EXPECTED_EMPRESA_COLUMNS = [
 # (arquivo out/socios_rs.csv)
 EXPECTED_SOCIO_COLUMNS = [
     "CNPJ_BASICO", "IDENTIFICADOR_SOCIO", "NOME_SOCIO",
-    "CPF_CNPJ_SOCIO", "QUALIF_SOCIO",
+    "CPF_CNPJ_SOCIO", "QUALIF_SOCIO", "DATA_ENTRADA", "FAIXA_ETARIA",
 ]
 
 
@@ -94,6 +94,10 @@ def dtypes_socios() -> dict:
         "NOME_SOCIO":          t.String(200),
         "CPF_CNPJ_SOCIO":      t.String(20),
         "QUALIF_SOCIO":        t.String(4),
+        "DATA_ENTRADA":        t.String(8),
+        # Codigo de faixa etaria da RF. A traducao (faixa -> anos) fica na
+        # aplicacao; aqui guardamos o codigo como veio.
+        "FAIXA_ETARIA":        t.CHAR(1),
     }
 
 

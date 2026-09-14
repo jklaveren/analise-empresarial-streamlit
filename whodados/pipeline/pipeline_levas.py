@@ -331,9 +331,14 @@ def processar_socios(caminho):
         res = chunk[chunk[0].isin(cnpjs_rs)]
         if res.empty:
             continue
-        sel = res[[0, 1, 2, 3, 4]].copy()
+        # Layout de SOCIOS (11 colunas). Alem dos identificadores, duas
+        # colunas valem por si: 5 (entrada na sociedade) marca reorganizacao
+        # societaria recente, e 10 (faixa etaria) aponta socio em idade de
+        # sucessao -- os dois principais gatilhos de assessoria societaria.
+        sel = res[[0, 1, 2, 3, 4, 5, 10]].copy()
         sel.columns = ["CNPJ_BASICO", "IDENTIFICADOR_SOCIO", "NOME_SOCIO",
-                       "CPF_CNPJ_SOCIO", "QUALIF_SOCIO"]
+                       "CPF_CNPJ_SOCIO", "QUALIF_SOCIO", "DATA_ENTRADA",
+                       "FAIXA_ETARIA"]
         anexar_csv(sel, AUX_SOCIOS)
         total += len(sel)
     return total
