@@ -205,9 +205,20 @@ print(f"✅ PGFN: {TRIMESTRE}")
 # ----------------------------------------------------------------
 # ETAPA 1 — ESTABELECIMENTOS (define quais CNPJs sao do RS)
 # ----------------------------------------------------------------
+# Layout de ESTABELECIMENTOS (30 colunas), conferido contra o arquivo real:
+#   0 cnpj_basico   1 ordem       2 dv          3 matriz/filial  4 nome_fantasia
+#   5 situacao      6 dt_situacao 7 motivo      8 cidade_ext     9 pais
+#  10 dt_inicio    11 cnae_princ 12 cnae_sec   13 TIPO_LOGRAD   14 LOGRADOURO
+#  15 NUMERO       16 COMPLEMENTO 17 BAIRRO    18 cep           19 uf
+#  20 municipio    21 ddd_1      22 telefone_1 23 ddd_2         24 TELEFONE_2
+#  25 ddd_fax      26 fax        27 email      28 sit_especial  29 dt_sit_especial
+#
+# O mapeamento anterior lia 13/14/16 como logradouro/numero/bairro, o que
+# desloca tudo: logradouro virava "RUA", numero virava o nome da rua e o
+# bairro vinha vazio (16 e complemento).
 COLS_ESTAB = ["CNPJ_BASICO", "CNPJ_COMPLETO", "NOME_FANTASIA", "DATA_FUNDACAO",
-              "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "BAIRRO", "CEP",
-              "COD_MUNICIPIO", "DDD", "TELEFONE", "EMAIL"]
+              "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "COMPLEMENTO", "BAIRRO",
+              "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "TELEFONE_2", "EMAIL"]
 
 
 def processar_estabelecimentos(caminho):
@@ -219,7 +230,12 @@ def processar_estabelecimentos(caminho):
             continue
         res["CNPJ_BASICO"] = res[0].str.zfill(8)
         res["CNPJ_COMPLETO"] = res["CNPJ_BASICO"] + res[1].str.zfill(4) + res[2].str.zfill(2)
-        sel = res[["CNPJ_BASICO", "CNPJ_COMPLETO", 4, 10, 11, 13, 14, 16, 18, 20, 21, 22, 27]]
+        # Tipo e nome vem separados ("RUA" + "CAROLINA SUCUPIRA"); juntar da o
+        # logradouro como aparece num endereco.
+        res["_LOGRADOURO"] = (res[13].fillna("").str.strip() + " " +
+                              res[14].fillna("").str.strip()).str.strip()
+        sel = res[["CNPJ_BASICO", "CNPJ_COMPLETO", 4, 10, 11,
+                   "_LOGRADOURO", 15, 16, 17, 18, 20, 21, 22, 24, 27]]
         sel.columns = COLS_ESTAB
         anexar_csv(sel, AUX_ESTAB, encoding="latin1")
         total += len(sel)
@@ -356,18 +372,32 @@ print(f"✅ {len(master):,} empresas consolidadas -> {ARQUIVO_FINAL}")
 # ----------------------------------------------------------------
 if DATABASE_URL:
     print(f"\n{'='*70}\nETAPA 6 — Supabase\n{'='*70}")
+    import sys
     from sqlalchemy import create_engine
 
+    # database_config vive na raiz do repo; o pipeline roda de whodados/pipeline.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from database_config import (criar_indices_dados, dtypes_empresas,
+                                 dtypes_socios)
+
+    # Sem dtype= o to_sql grava toda coluna como TEXT ilimitado -- foi o que
+    # inflou a base pra ~700 MB. Os tipos explicitos (NUMERIC/DATE/CHAR)
+    # cortam isso. E replace recria a tabela, entao os indices vem depois.
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
     master.to_sql("dados_empresas", engine, if_exists="replace",
-                  index=False, chunksize=5000, method="multi")
+                  index=False, chunksize=5000, method="multi",
+                  dtype=dtypes_empresas())
     print(f"✅ dados_empresas: {len(master):,} linhas")
 
     if AUX_SOCIOS.exists():
         df_socios = pd.read_csv(AUX_SOCIOS, sep=";", dtype=str)
         df_socios.to_sql("dados_socios", engine, if_exists="replace",
-                         index=False, chunksize=5000, method="multi")
+                         index=False, chunksize=5000, method="multi",
+                         dtype=dtypes_socios())
         print(f"✅ dados_socios: {len(df_socios):,} linhas")
+
+    criar_indices_dados()
+    print("✅ indices recriados")
 else:
     print("\n⚠️  DATABASE_URL não definida — dados ficaram só em CSV.")
 
