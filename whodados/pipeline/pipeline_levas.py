@@ -301,6 +301,10 @@ if not AUX_ESTAB.exists():
     raise SystemExit("❌ Nenhuma matriz do RS encontrada — o layout da RF pode ter mudado.")
 
 df_estab = pd.read_csv(AUX_ESTAB, sep=";", encoding="latin1", dtype=str)
+# Os aux CSVs sao gravados por acrescimo e o checkpoint so marca um zip depois
+# de processado. Se o processo cair no meio de um zip, o reinicio acrescenta
+# esse zip de novo -- sem este dedup a empresa sairia duplicada no banco.
+df_estab = df_estab.drop_duplicates(subset="CNPJ_COMPLETO")
 cnpjs_rs = set(df_estab["CNPJ_BASICO"].unique())
 print(f"\n📍 {len(df_estab):,} matrizes ativas no RS | {len(cnpjs_rs):,} CNPJs únicos")
 
@@ -474,11 +478,13 @@ baixar_tabelas_dominio()
 print(f"\n{'='*70}\nETAPA 5 — Consolidação\n{'='*70}")
 
 df_emp = pd.read_csv(AUX_EMPRESAS, sep=";", encoding="latin1", dtype=str)
+df_emp = df_emp.drop_duplicates(subset="CNPJ_BASICO")
 master = df_estab.merge(df_emp, on="CNPJ_BASICO", how="left")
 master = master.merge(df_dividas, on="CNPJ_BASICO", how="left")
 
 if AUX_SIMPLES.exists():
     df_simples = pd.read_csv(AUX_SIMPLES, sep=";", dtype=str)
+    df_simples = df_simples.drop_duplicates(subset="CNPJ_BASICO")
     master = master.merge(df_simples, on="CNPJ_BASICO", how="left")
 
 master["CAPITAL_SOCIAL"] = pd.to_numeric(
@@ -487,6 +493,14 @@ master["DATA_FUNDACAO"] = pd.to_datetime(master["DATA_FUNDACAO"], format="%Y%m%d
                                          errors="coerce")
 for coluna in COLS_DIVIDA + ["DIVIDA_TOTAL"]:
     master[coluna] = master[coluna].fillna(0.0)
+
+if AUX_SOCIOS.exists():
+    df_s = pd.read_csv(AUX_SOCIOS, sep=";", dtype=str)
+    antes = len(df_s)
+    df_s = df_s.drop_duplicates()
+    if len(df_s) != antes:
+        df_s.to_csv(AUX_SOCIOS, sep=";", index=False)
+        print(f"   socios: {antes - len(df_s):,} linhas duplicadas removidas")
 
 master.to_csv(ARQUIVO_FINAL, sep=";", index=False, encoding="latin1")
 print(f"✅ {len(master):,} empresas consolidadas -> {ARQUIVO_FINAL}")
