@@ -27,6 +27,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TOKEN_RF = os.environ.get("RF_SHARE_TOKEN", "").strip() or "gn672Ad4CF8N6TK"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
+# Identifica quem esta baixando, em vez do "python-requests/2.x" generico.
+# Um cliente que se identifica e um download de dados abertos; e o oposto
+# do padrao que dispara defesa anti-abuso.
+UA = ("WhoDados-ETL/1.0 (dados abertos CNPJ; "
+      "https://github.com/jklaveren/analise-empresarial-streamlit)")
+
 # True mantem os zips (cache entre execucoes, precisa dos 27GB).
 # False apaga cada zip apos processar -- este e o modo "em levas".
 MANTER_ZIPS = os.environ.get("MANTER_ZIPS", "").lower() in ("1", "true", "sim")
@@ -103,7 +109,9 @@ def baixar(url, destino, rotulo):
         return
 
     parcial = destino.stat().st_size if destino.exists() else 0
-    headers = {"Range": f"bytes={parcial}-"} if parcial else {}
+    headers = {"User-Agent": UA}
+    if parcial:
+        headers["Range"] = f"bytes={parcial}-"
 
     try:
         # stream=True e obrigatorio: Estabelecimentos0.zip tem 2GB e sem isso
