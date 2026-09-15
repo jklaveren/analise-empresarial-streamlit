@@ -185,12 +185,13 @@ def _baixar_uma_vez(url, destino, rotulo):
                          f"   URL: {url}")
 
 
-def ler_zip_em_chunks(caminho):
-    """Itera os chunks de todos os CSVs dentro do zip."""
+def ler_zip_em_chunks(caminho, header=None):
+    """Itera os chunks de todos os CSVs dentro do zip. Os arquivos da RF vem
+    sem cabecalho; os da PGFN tem (header=0)."""
     with zipfile.ZipFile(caminho) as z:
         for nome in z.namelist():
             with z.open(nome) as f:
-                yield from pd.read_csv(f, sep=";", encoding="latin1", header=None,
+                yield from pd.read_csv(f, sep=";", encoding="latin1", header=header,
                                        dtype=str, chunksize=CHUNK_SIZE,
                                        low_memory=False)
 
@@ -363,16 +364,25 @@ em_levas([f"Socios{i}.zip" for i in range(10)], URL_RF,
 # ----------------------------------------------------------------
 # Cada zip da PGFN e um tipo de divida. Agrega por CNPJ ja filtrando pelo RS,
 # senao carregaria os ~6,7M de devedores do Brasil inteiro na memoria.
+#
+# Os CSVs da PGFN tem cabecalho, e a posicao do valor muda entre arquivos
+# (col 12 no SIDA/PREV, 14 no FGTS). Ler pelo nome evita o bug antigo, que
+# lia a col 4 (UF_DEVEDOR, "RS") como valor e zerava todas as dividas.
 def fazer_processador_pgfn(coluna):
     def processar(caminho):
         parciais = []
-        for chunk in ler_zip_em_chunks(caminho):
-            if 0 not in chunk.columns or 4 not in chunk.columns:
-                continue
-            cnpj = chunk[0].str.replace(r"\D", "", regex=True).str.zfill(14).str[:8]
-            valor = pd.to_numeric(chunk[4].str.replace(",", ".", regex=False),
+        for chunk in ler_zip_em_chunks(caminho, header=0):
+            if "CPF_CNPJ" not in chunk.columns or "VALOR_CONSOLIDADO" not in chunk.columns:
+                raise SystemExit(f"❌ {caminho.name}: layout da PGFN mudou, colunas: "
+                                 f"{list(chunk.columns)}")
+            digitos = chunk["CPF_CNPJ"].fillna("").str.replace(r"\D", "", regex=True)
+            # CPF vem mascarado ("XXX735.623XX"); completar com zeros faria ele
+            # casar com um CNPJ por acaso. So CNPJ tem 14 digitos.
+            pj = digitos.str.len() == 14
+            valor = pd.to_numeric(chunk.loc[pj, "VALOR_CONSOLIDADO"]
+                                  .str.replace(",", ".", regex=False),
                                   errors="coerce").fillna(0.0)
-            bloco = pd.DataFrame({"CNPJ_BASICO": cnpj, coluna: valor})
+            bloco = pd.DataFrame({"CNPJ_BASICO": digitos[pj].str[:8], coluna: valor})
             bloco = bloco[bloco["CNPJ_BASICO"].isin(cnpjs_rs)]
             if not bloco.empty:
                 parciais.append(bloco.groupby("CNPJ_BASICO", as_index=False)[coluna].sum())
