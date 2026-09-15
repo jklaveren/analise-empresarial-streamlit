@@ -8,6 +8,7 @@ import OrgSwitcher from "@/components/OrgSwitcher";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Empresas", icon: "📊" },
+  { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑" },
   { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },

@@ -5,27 +5,51 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { MultiSelect } from "@/components/MultiSelect";
 import { FunilInsights } from "@/components/FunilInsights";
+import { TopEmpresasRanking } from "@/components/TopEmpresasRanking";
 import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
 
 const PAGE_SIZE = 50;
+
+// Guarda a ultima configuracao de filtros no navegador -- reabrir a tela
+// (ou voltar de outra aba) retoma de onde parou em vez de comecar zerado.
+// So conveniencia de UI: nao sincroniza entre abas/dispositivos, entao
+// nunca deve ser a unica fonte de um dado importante.
+const FILTROS_STORAGE_KEY = "whodados:empresas:filtros";
+
+interface FiltrosSalvos {
+  cidade: string[]; porte: string[]; cnae: string[]; busca: string;
+  dividaMin: string; dividaMax: string; capitalMin: string; capitalMax: string;
+  fundacaoDe: string; fundacaoAte: string; incluirInativas: boolean;
+}
+
+function lerFiltrosSalvos(): Partial<FiltrosSalvos> {
+  try {
+    const bruto = localStorage.getItem(FILTROS_STORAGE_KEY);
+    return bruto ? JSON.parse(bruto) : {};
+  } catch {
+    return {}; // storage bloqueado (aba privada) ou JSON invalido -- comeca zerado
+  }
+}
 
 function formatBRL(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 export default function DashboardPage() {
-  // Filtros do funil (estado bruto)
-  const [cidade, setCidade] = useState<string[]>([]);
-  const [porte, setPorte] = useState<string[]>([]);
-  const [cnae, setCnae] = useState<string[]>([]);
-  const [busca, setBusca] = useState("");
-  const [dividaMin, setDividaMin] = useState("");
-  const [dividaMax, setDividaMax] = useState("");
-  const [capitalMin, setCapitalMin] = useState("");
-  const [capitalMax, setCapitalMax] = useState("");
-  const [fundacaoDe, setFundacaoDe] = useState("");
-  const [fundacaoAte, setFundacaoAte] = useState("");
-  const [incluirInativas, setIncluirInativas] = useState(true);
+  // Filtros do funil (estado bruto) -- inicializado com o que ficou salvo
+  // da ultima visita (lazy initializer: so le localStorage uma vez, no mount).
+  const [salvos] = useState(lerFiltrosSalvos);
+  const [cidade, setCidade] = useState<string[]>(salvos.cidade ?? []);
+  const [porte, setPorte] = useState<string[]>(salvos.porte ?? []);
+  const [cnae, setCnae] = useState<string[]>(salvos.cnae ?? []);
+  const [busca, setBusca] = useState(salvos.busca ?? "");
+  const [dividaMin, setDividaMin] = useState(salvos.dividaMin ?? "");
+  const [dividaMax, setDividaMax] = useState(salvos.dividaMax ?? "");
+  const [capitalMin, setCapitalMin] = useState(salvos.capitalMin ?? "");
+  const [capitalMax, setCapitalMax] = useState(salvos.capitalMax ?? "");
+  const [fundacaoDe, setFundacaoDe] = useState(salvos.fundacaoDe ?? "");
+  const [fundacaoAte, setFundacaoAte] = useState(salvos.fundacaoAte ?? "");
+  const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? true);
   const [page, setPage] = useState(0);
 
   // Opcoes dos multiselects -- cachea por 30min (cidades/portes/cnaes mudam
@@ -54,6 +78,22 @@ export default function DashboardPage() {
   const [applied, setApplied] = useState<EmpresaFiltros>(filtros);
   useEffect(() => {
     const t = setTimeout(() => setApplied(filtros), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtrosKey]);
+
+  // Persiste a config atual pra proxima visita. Mesmo debounce dos filtros
+  // aplicados -- nao grava a cada tecla digitada na busca.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const dados: FiltrosSalvos = {
+          cidade, porte, cnae, busca, dividaMin, dividaMax,
+          capitalMin, capitalMax, fundacaoDe, fundacaoAte, incluirInativas,
+        };
+        localStorage.setItem(FILTROS_STORAGE_KEY, JSON.stringify(dados));
+      } catch { /* storage bloqueado -- so perde a conveniencia, segue normal */ }
+    }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtrosKey]);
@@ -107,6 +147,7 @@ export default function DashboardPage() {
     setCidade([]); setPorte([]); setCnae([]); setBusca("");
     setDividaMin(""); setDividaMax(""); setCapitalMin(""); setCapitalMax("");
     setFundacaoDe(""); setFundacaoAte(""); setIncluirInativas(true);
+    try { localStorage.removeItem(FILTROS_STORAGE_KEY); } catch { /* ignora */ }
   };
 
   return (
@@ -167,6 +208,9 @@ export default function DashboardPage() {
 
       {/* Insights agregados sobre a base filtrada inteira */}
       <FunilInsights filtros={analyticsFiltros} />
+
+      {/* Ranking das maiores empresas (divida ou capital) na selecao atual */}
+      <TopEmpresasRanking filtros={analyticsFiltros} />
 
       {error && <div className="rounded-lg bg-red-50 p-4 text-red-700">{error}</div>}
 
