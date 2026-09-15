@@ -196,7 +196,11 @@ def analytics_por_cidade(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY cidade
-                ORDER BY divida_total DESC
+                -- O grafico "Empresas por cidade" plota qtd (nao divida/capital) --
+                -- o Top N precisa ser selecionado pelo mesmo criterio, senao uma
+                -- cidade com poucas empresas mas divida/capital concentrado (ex.:
+                -- 1 empresa gigante) entra no lugar de cidades com mais empresas.
+                ORDER BY qtd DESC
                 LIMIT %s
                 """,
                 [*params, limite],
@@ -235,7 +239,13 @@ def analytics_por_setor(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY e."CNAE_PRINCIPAL"
-                ORDER BY capital_total DESC
+                -- Mesmo raciocinio do analytics_por_cidade: "Empresas por setor"
+                -- plota qtd, entao o Top N tem que vir por qtd. Antes vinha por
+                -- capital_total, e um setor pequeno com 1 empresa gigante (ex.:
+                -- Yara Fertilizantes, R$ 10,6 bi de capital em 59 empresas do
+                -- setor) aparecia no lugar de setores com dezenas de milhares
+                -- de empresas.
+                ORDER BY qtd DESC
                 LIMIT %s
                 """,
                 [*params, limite],
