@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { MultiSelect } from "@/components/MultiSelect";
 import {
@@ -25,10 +26,18 @@ function formatBRL(v: number): string {
  * entre as empresas em que constam como socio, e em quais empresas.
  */
 export default function SociosPage() {
+  const searchParams = useSearchParams();
   const [cidade, setCidade] = useState<string[]>([]);
   const [cnae, setCnae] = useState<string[]>([]);
   const [porte, setPorte] = useState<string[]>([]);
   const [socioSelecionado, setSocioSelecionado] = useState<string | null>(null);
+
+  // Vindo de um link "ver no ranking de sócios" (ex.: pagina de detalhe da
+  // empresa) -- abre ja com o drill-down desse socio.
+  useEffect(() => {
+    const nome = searchParams?.get("nome");
+    if (nome) setSocioSelecionado(nome);
+  }, [searchParams]);
 
   const opcoesQuery = useQuery({
     queryKey: ["opcoes-filtro"],

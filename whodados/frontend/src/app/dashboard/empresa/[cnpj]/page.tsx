@@ -197,7 +197,15 @@ export default function EmpresaDetalhePage() {
             <tbody>
               {empresa.socios.map((s, i) => (
                 <tr key={i} className="border-t border-slate-100">
-                  <td className="py-2 font-medium">{s.nome_socio}</td>
+                  <td className="py-2 font-medium">
+                    <Link
+                      href={`/dashboard/socios?nome=${encodeURIComponent(s.nome_socio)}`}
+                      className="text-indigo-600 hover:underline"
+                      title="Ver ranking e outras empresas deste sócio"
+                    >
+                      {s.nome_socio}
+                    </Link>
+                  </td>
                   <td className="py-2 font-mono text-xs">{s.cpf_cnpj_socio || "-"}</td>
                   <td className="py-2">{s.qualif_socio || "-"}</td>
                 </tr>
