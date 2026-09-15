@@ -150,14 +150,26 @@ def main():
     print(f"OK Tabela de empresas atualizada: {tabelas['empresas']} ({len(empresas)} linhas)")
     print(f"OK Tabela de socios atualizada: {tabelas['socios']} ({len(socios)} linhas)")
 
+    # dtype= explicito e obrigatorio aqui: sem isso o pandas cria as colunas
+    # de codigo como TEXT plano, enquanto dados_empresas usa VARCHAR(10)
+    # (dtypes_empresas). O JOIN entre tipos diferentes forca um cast que
+    # quebra a estimativa de selectividade do Postgres -- uma consulta de
+    # ~1s vira 25-30s (bug real encontrado em producao em 15/09/2026, ver
+    # whodados/scripts/fix_tipos_dominio.sql para o reparo do banco atual).
+    from sqlalchemy import types as _t
+
     municipios = carregar_municipios()
     if municipios is not None:
-        municipios.to_sql(TABELA_MUNICIPIOS, engine, if_exists="replace", index=False, chunksize=5000)
+        municipios.to_sql(TABELA_MUNICIPIOS, engine, if_exists="replace", index=False,
+                          chunksize=5000, dtype={"cod_municipio": _t.String(10),
+                                                  "nome_municipio": _t.String(200)})
         print(f"OK Tabela de municipios atualizada: {TABELA_MUNICIPIOS} ({len(municipios)} linhas)")
 
     cnaes = carregar_cnaes()
     if cnaes is not None:
-        cnaes.to_sql(TABELA_CNAES, engine, if_exists="replace", index=False, chunksize=5000)
+        cnaes.to_sql(TABELA_CNAES, engine, if_exists="replace", index=False,
+                     chunksize=5000, dtype={"codigo_cnae": _t.String(10),
+                                            "descricao_cnae": _t.String(300)})
         print(f"OK Tabela de cnaes atualizada: {TABELA_CNAES} ({len(cnaes)} linhas)")
 
     criar_indices_dados()
