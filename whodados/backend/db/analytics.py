@@ -62,6 +62,25 @@ def _expr_capital(cols: set) -> str:
 def _tem_divida(cols: set) -> bool:
     return "DIVIDA_TOTAL" in cols
 
+# PORTE_NOME nao existe mais na tabela -- e derivado do PORTE_EMPRESA (codigo).
+# Espelha o mapeamento antigo do pipeline pra manter a API igual pro frontend.
+# (Mesma expressao vive em service.py; duplicada aqui pra manter cada modulo
+# self-contained -- se um dia forem consolidar, mover pra config.py.)
+_PORTE_NOME_SQL = (
+    "CASE e.\"PORTE_EMPRESA\" "
+    "WHEN '01' THEN 'NAO INFORMADO' "
+    "WHEN '02' THEN 'ME' "
+    "WHEN '03' THEN 'EPP' "
+    "WHEN '05' THEN 'MEDIO E GRANDE' "
+    "ELSE 'DEMAIS' END"
+)
+_PORTE_NOME_TO_CODE = {
+    "NAO INFORMADO": "01",
+    "ME": "02",
+    "EPP": "03",
+    "MEDIO E GRANDE": "05",
+}
+
 
 def _tabela_existe(cur, nome: str) -> bool:
     cur.execute(
@@ -100,8 +119,12 @@ def _filtros_sql(
         cond.append('e."CNAE_PRINCIPAL" = ANY(%s)')
         params.append(list(cnaes))
     if portes:
-        cond.append('e."PORTE_NOME" = ANY(%s)')
-        params.append(list(portes))
+        # Frontend manda nomes ('ME', 'EPP', ...); a tabela guarda so o
+        # codigo. Traduz de volta.
+        codigos = [_PORTE_NOME_TO_CODE[p] for p in portes if p in _PORTE_NOME_TO_CODE]
+        if codigos:
+            cond.append('e."PORTE_EMPRESA" = ANY(%s)')
+            params.append(codigos)
     if tem_divida:
         if divida_min is not None:
             cond.append(f"{div_expr} >= %s")
@@ -223,7 +246,11 @@ def analytics_por_cidade(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY cidade
-                ORDER BY {ordem} DESC
+                -- O grafico "Empresas por cidade" plota qtd (nao divida/capital) --
+                -- o Top N precisa ser selecionado pelo mesmo criterio, senao uma
+                -- cidade com poucas empresas mas divida/capital concentrado (ex.:
+                -- 1 empresa gigante) entra no lugar de cidades com mais empresas.
+                ORDER BY qtd DESC
                 LIMIT %s
                 """,
                 [*params, limite],
@@ -268,7 +295,13 @@ def analytics_por_setor(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY e."CNAE_PRINCIPAL"
-                ORDER BY capital_total DESC
+                -- Mesmo raciocinio do analytics_por_cidade: "Empresas por setor"
+                -- plota qtd, entao o Top N tem que vir por qtd. Antes vinha por
+                -- capital_total, e um setor pequeno com 1 empresa gigante (ex.:
+                -- Yara Fertilizantes, R$ 10,6 bi de capital em 59 empresas do
+                -- setor) aparecia no lugar de setores com dezenas de milhares
+                -- de empresas.
+                ORDER BY qtd DESC
                 LIMIT %s
                 """,
                 [*params, limite],
@@ -303,7 +336,7 @@ def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
             )
             cur.execute(
                 f"""
-                SELECT COALESCE(NULLIF(e."PORTE_NOME", ''), 'Nao informado') AS porte,
+                SELECT ({_PORTE_NOME_SQL}) AS porte,
                        COUNT(*) AS qtd
                 {_BASE_FROM}
                 WHERE 1=1 {where}
@@ -349,7 +382,7 @@ def analytics_top_empresas(
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    e."PORTE_NOME" AS porte_nome,
+                    ({_PORTE_NOME_SQL}) AS porte_nome,
                     {cap_expr} AS capital_social,
                     {div_expr} AS divida_total
                 {_BASE_FROM}
@@ -499,11 +532,14 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
                 )
                 cidades = [r["nome_municipio"] for r in cur.fetchall()]
 
+            # Porte agora e derivado do codigo PORTE_EMPRESA -- so 5 nomes
+            # possiveis, e a ordem visual eh melhor fixa (ME, EPP, MEDIO E
+            # GRANDE, ...) do que ordem alfabetica.
             cur.execute(
-                'SELECT DISTINCT "PORTE_NOME" AS p FROM dados_empresas '
-                'WHERE "PORTE_NOME" IS NOT NULL AND "PORTE_NOME" <> \'\' ORDER BY p'
+                f'SELECT DISTINCT ({_PORTE_NOME_SQL}) AS p FROM dados_empresas e '
+                f'WHERE e."PORTE_EMPRESA" IS NOT NULL'
             )
-            portes = [r["p"] for r in cur.fetchall()]
+            portes = sorted({r["p"] for r in cur.fetchall() if r["p"]})
 
             cnaes: List[str] = []
             if _tabela_existe(cur, "cnaes"):

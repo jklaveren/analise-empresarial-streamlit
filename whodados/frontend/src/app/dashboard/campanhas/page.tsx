@@ -117,7 +117,7 @@ export default function CampanhasPage() {
 
   async function carregarOpcoes() {
     try {
-      const o: any = (await getOpcoesFiltro({} as any)) as any;
+      const o: any = (await getOpcoesFiltro()) as any;
       setOpcoes({ cidades: o?.cidades || [], cnaes: o?.cnaes || o?.setores || [], portes: o?.portes || [] });
     } catch { /* sem opções — campos continuam utilizáveis */ }
   }

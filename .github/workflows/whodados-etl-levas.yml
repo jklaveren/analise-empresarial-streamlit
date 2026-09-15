@@ -1,0 +1,96 @@
+name: Atualizar Dados (ETL em levas) — WhoDados
+
+# ETL completo num estagio so, usando whodados/pipeline/pipeline_levas.py.
+#
+# Diferenca pro whodados-etl.yml antigo: aquele baixa os ~27 GB todos e so
+# depois processa, o que nao cabe nos 14 GB de disco do runner. Este baixa
+# um arquivo, processa, apaga e vai pro proximo -- o pico fica em ~2 GB.
+#
+# O pipeline tambem retoma de onde parou (out/_progresso.json), entao se o
+# job estourar o tempo, rodar de novo continua em vez de recomecar.
+
+on:
+  # A Receita publica CNPJ 1x por mes; rodar todo dia 12 pega o mes novo
+  # com folga. A deteccao do mes sonda o servidor na hora.
+  schedule:
+    - cron: "0 3 12 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: etl-pipeline
+  cancel-in-progress: false
+
+jobs:
+  etl:
+    name: "ETL completo (baixa, processa e carrega)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: whodados/pipeline/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r whodados/pipeline/requirements-dev.txt
+
+      # Libera o que vem pre-instalado no runner e nao usamos (~20 GB).
+      # O pipeline em levas cabe sem isso, mas a folga evita que um arquivo
+      # maior que o previsto derrube o job perto do fim.
+      - name: Liberar espaco em disco
+        run: |
+          echo "Antes:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          echo "Depois:"; df -h / | tail -1
+
+      - name: "Rodar ETL em levas"
+        timeout-minutes: 320
+        env:
+          RF_SHARE_TOKEN: ${{ secrets.RF_SHARE_TOKEN }}
+          # Prefere o secret: o repo e publico, e o GitHub mascara secrets
+          # nos logs mas nao mascara variables. A variable fica como fallback
+          # pra nao quebrar enquanto a migracao nao acontece.
+          DATABASE_URL: ${{ secrets.SUPABASE_CONNECTION_STRING || vars.SUPABASE_CONNECTION_STRING }}
+          BASE_DIR: ${{ github.workspace }}/dados_etl
+          MANTER_ZIPS: "0"
+          PYTHONUNBUFFERED: "1"
+        run: python whodados/pipeline/pipeline_levas.py
+
+      - name: "Conferir o que saiu"
+        if: always()
+        run: |
+          OUT="${{ github.workspace }}/dados_etl/out"
+          if [ -f "$OUT/subset_rs_final_completo.csv" ]; then
+            echo "Empresas: $(( $(wc -l < "$OUT/subset_rs_final_completo.csv") - 1 )) linhas"
+            echo "Colunas:  $(head -1 "$OUT/subset_rs_final_completo.csv")"
+          else
+            echo "CSV final nao foi gerado"
+          fi
+          echo "Disco restante:"; df -h / | tail -1
+
+      # Guarda o resultado mesmo se a carga no Supabase falhar -- assim da
+      # pra recarregar sem rebaixar os 27 GB.
+      - name: "Publicar CSVs como artifact"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dados-rs
+          path: ${{ github.workspace }}/dados_etl/out/*.csv
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: "Aviso se falhar"
+        if: failure()
+        run: |
+          {
+            echo "## ETL falhou"
+            echo ""
+            echo "O pipeline guarda progresso em out/_progresso.json, entao"
+            echo "rodar de novo continua de onde parou em vez de recomecar."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -8,7 +8,7 @@ import {
   getEmpresaDetalhe,
   CrmKanban,
   CrmStatus,
-  ClientesClassificacao,
+  CrmClassificacao,
   listarEmailsMonitor,
   getMonitorStats,
   getEmailsVermelhos,
@@ -17,13 +17,13 @@ import {
   MonitorStats,
   Campanha,
   classificarBase,
-  getClientesClassificacaoEstatisticas,
-  listarClientesClassificados,
-  ClientesClassificado,
+  getCrmClassificacaoEstatisticas,
+  listarCrmClassificados,
+  CrmClassificado,
   ClassificacaoEstatisticas,
 } from "@/lib/api";
 
-const COLUNAS: { status: ClientesStatus; label: string; cor: string }[] = [
+const COLUNAS: { status: CrmStatus; label: string; cor: string }[] = [
   { status: "novo", label: "Novo", cor: "border-slate-300 bg-slate-50" },
   { status: "em_contato", label: "Em contato", cor: "border-sky-300 bg-sky-50" },
   { status: "negociando", label: "Negociando", cor: "border-amber-300 bg-amber-50" },
@@ -31,7 +31,7 @@ const COLUNAS: { status: ClientesStatus; label: string; cor: string }[] = [
   { status: "descartado", label: "Descartado", cor: "border-rose-300 bg-rose-50" },
 ];
 
-const KANBAN_VAZIO: ClientesKanban = {
+const KANBAN_VAZIO: CrmKanban = {
   novo: [],
   em_contato: [],
   negociando: [],
@@ -110,8 +110,8 @@ type SemaforoKey = keyof typeof SEMAFORO_CONFIG;
 
 function ClassificacaoTab() {
   const [stats, setStats] = useState<ClassificacaoEstatisticas | null>(null);
-  const [filtro, setFiltro] = useState<ClientesClassificacao | "sem_classificacao" | "">("");
-  const [registros, setRegistros] = useState<ClientesClassificado[]>([]);
+  const [filtro, setFiltro] = useState<CrmClassificacao | "sem_classificacao" | "">("");
+  const [registros, setRegistros] = useState<CrmClassificado[]>([]);
   const [loading, setLoading] = useState(true);
   const [classificando, setClassificando] = useState(false);
   const [feedback, setFeedback] = useState<{ tipo: "s" | "e"; msg: string } | null>(null);
@@ -120,8 +120,8 @@ function ClassificacaoTab() {
     setLoading(true);
     try {
       const [st, lista] = await Promise.all([
-        getClientesClassificacaoEstatisticas(),
-        listarClientesClassificados(filtro || undefined),
+        getCrmClassificacaoEstatisticas(),
+        listarCrmClassificados(filtro || undefined),
       ]);
       setStats(st);
       setRegistros(lista);
@@ -152,13 +152,13 @@ function ClassificacaoTab() {
     }
   };
 
-  const reclassificar = async (cnpj: string, classificacao: ClientesClassificacao, motivo?: string) => {
+  const reclassificar = async (cnpj: string, classificacao: CrmClassificacao, motivo?: string) => {
     try {
       if (classificacao === "fora_perfil") {
         const motivoManual = prompt("Motivo do descarte (ou Enter para usar o padrao):");
-        await atualizarClientes(cnpj, { classificacao, motivo: motivoManual || motivo || "Descartado manualmente" });
+        await atualizarCrm(cnpj, { classificacao, motivo: motivoManual || motivo || "Descartado manualmente" });
       } else {
-        await atualizarClientes(cnpj, { classificacao, motivo });
+        await atualizarCrm(cnpj, { classificacao, motivo });
       }
       await carregar();
     } catch {
@@ -188,13 +188,11 @@ function ClassificacaoTab() {
 
       <div className="flex flex-wrap gap-4">
         {cards.map((c) => {
-          const dados = stats ? stats[c.k] : undefined;
-          const valor = dados ? dados.total : 0;
-          const cor = dados ? dados.cor : "bg-slate-100";
+          const valor = stats ? (stats[c.k as keyof ClassificacaoEstatisticas] ?? 0) : 0;
           return (
             <div key={c.k} className={`rounded-xl border ${c.cor} p-4 min-w-[160px]`}>
               <div className="flex items-center gap-2">
-                <span className={`w-3 h-3 rounded-full ${cor}`} />
+                <span>{c.icone}</span>
                 <span className="text-xs font-medium text-slate-600">{c.label}</span>
               </div>
               <div className="text-2xl font-bold text-slate-800 mt-2">
@@ -246,11 +244,11 @@ function ClassificacaoTab() {
                   <td className="px-4 py-2 text-xs text-slate-600">{r.cnpj}</td>
                   <td className="px-4 py-2 text-sm text-slate-800">{r.razao_social}</td>
                   <td className="px-4 py-2">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${CLASSIFICACAO_CONFIG[r.classificacao]?.badge || "bg-slate-100 text-slate-600"}`}>
-                      {CLASSIFICACAO_CONFIG[r.classificacao]?.icon || "❔"} {CLASSIFICACAO_CONFIG[r.classificacao]?.label || r.classificacao}
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${CLASSIFICACAO_CONFIG[r.classificacao ?? ""]?.badge || "bg-slate-100 text-slate-600"}`}>
+                      ❔ {CLASSIFICACAO_CONFIG[r.classificacao ?? ""]?.label || r.classificacao || "Sem classificação"}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-xs text-slate-500">{r.motivo_descarte || "—"}</td>
+                  <td className="px-4 py-2 text-xs text-slate-500">{r.motivo || "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -267,7 +265,7 @@ function ClassificacaoTab() {
 
 function FunilTab() {
 
-  const [kanban, setKanban] = useState<ClientesKanban>(KANBAN_VAZIO);
+  const [kanban, setKanban] = useState<CrmKanban>(KANBAN_VAZIO);
   const [nomes, setNomes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -275,7 +273,7 @@ function FunilTab() {
 
   const carregar = async () => {
     try {
-      const data = await listarClientesKanban();
+      const data = await listarCrmKanban();
       setKanban(data);
 
       const cnpjs = Array.from(
@@ -309,10 +307,10 @@ function FunilTab() {
     carregar();
     }, []);
 
-  const moverPara = async (cnpj: string, novoStatus: ClientesStatus) => {
+  const moverPara = async (cnpj: string, novoStatus: CrmStatus) => {
     setMovendo(cnpj);
     try {
-      await atualizarClientes(cnpj, { status: novoStatus });
+      await atualizarCrm(cnpj, { status: novoStatus });
       await carregar();
     } catch {
       setError("Não foi possível mover esse registro. Tente novamente.");
@@ -367,7 +365,7 @@ function FunilTab() {
                       className="mt-2 w-full text-xs border border-slate-200 rounded-md px-2 py-1 text-slate-600 disabled:opacity-50"
                       value={r.status}
                       disabled={movendo === r.cnpj}
-                      onChange={(e) => moverPara(r.cnpj, e.target.value as ClientesStatus)}
+                      onChange={(e) => moverPara(r.cnpj, e.target.value as CrmStatus)}
                     >
                       {COLUNAS.map((c) => (
                         <option key={c.status} value={c.status}>

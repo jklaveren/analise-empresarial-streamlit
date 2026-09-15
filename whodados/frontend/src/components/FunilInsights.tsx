@@ -10,7 +10,7 @@ import {
   AnalyticsFiltros, AnalyticsResumo, CidadeAgg, SetorAgg, PorteAgg,
 } from "@/lib/api";
 
-const COLORS = ["#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#10b981", "#3b82f6"];
+const COLORS = ["#4f46e5", "#0ea5e9", "#0d9488", "#7c3aed", "#0891b2", "#64748b"];
 
 function brl(v: number): string {
   if (Math.abs(v) >= 1e9) return `R$ ${(v / 1e9).toFixed(1)} bi`;
@@ -19,11 +19,15 @@ function brl(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+const num = (v: number) => v.toLocaleString("pt-BR");
+
 /**
- * Insights AGREGADOS sobre a base filtrada inteira (não sobre a página exibida).
- * Cada valor é calculado no servidor (endpoints de analytics) com os mesmos
- * filtros do funil -- ex.: dívida por cidade mostra PoA/Caxias/Canoas com os
- * totais reais de toda a seleção.
+ * Panorama da selecao atual do funil, calculado no servidor sobre a base
+ * filtrada inteira (nao sobre a pagina exibida).
+ *
+ * Os graficos medem QUANTAS empresas existem por recorte -- a pergunta de
+ * quem prospecta e "onde estao meus clientes". Valores financeiros ficam
+ * nos indicadores, sem virar o eixo dos graficos.
  */
 export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
   const [resumo, setResumo] = useState<AnalyticsResumo | null>(null);
@@ -31,146 +35,139 @@ export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
   const [setores, setSetores] = useState<SetorAgg[]>([]);
   const [portes, setPortes] = useState<PorteAgg[]>([]);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(false);
 
   useEffect(() => {
     let cancel = false;
     setLoading(true);
+    setErro(false);
     Promise.all([
       getAnalyticsResumo(filtros),
       getAnalyticsPorCidade(filtros, 12),
       getAnalyticsPorSetor(filtros, 10),
       getAnalyticsPorPorte(filtros),
     ])
-      .then(([r, c, s, p]) => { if (!cancel) { setResumo(r); setCidades(c); setSetores(s); setPortes(p); } })
-      .catch(() => {})
+      .then(([r, c, s, p]) => {
+        if (!cancel) { setResumo(r); setCidades(c); setSetores(s); setPortes(p); }
+      })
+      .catch(() => { if (!cancel) setErro(true); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
   }, [filtros]);
 
-  // O banco atual pode nao ter coluna de passivo (ETL legado sem
-  // DIVIDA_TOTAL). Nesse caso os agregados de divida voltam 0 -- e mostrar
-  // "R$ 0" nos KPIs/graficos seria mentir. Escondemos divida e mostramos o
-  // que existe de verdade: contagem, capital, cidades, setores, portes.
-  const temDivida = resumo?.tem_dados_divida === true;
+  const kpis = resumo ? [
+    { label: "Empresas", valor: num(resumo.total_empresas), destaque: true },
+    { label: "Cidades", valor: num(resumo.qtd_cidades) },
+    { label: "Setores", valor: num(resumo.qtd_setores) },
+    { label: "Capital total", valor: brl(resumo.capital_total) },
+    { label: "Capital médio", valor: brl(resumo.capital_medio) },
+    { label: "Dívida ativa", valor: brl(resumo.divida_total) },
+  ] : [];
 
-  const kpis = resumo ? (
-    temDivida ? [
-      { label: "Empresas", valor: resumo.total_empresas.toLocaleString("pt-BR") },
-      { label: "Dívida total", valor: brl(resumo.divida_total) },
-      { label: "Capital total", valor: brl(resumo.capital_total) },
-      { label: "Dívida média", valor: brl(resumo.divida_media) },
-      { label: "Cidades", valor: resumo.qtd_cidades.toLocaleString("pt-BR") },
-      { label: "Setores", valor: resumo.qtd_setores.toLocaleString("pt-BR") },
-    ] : [
-      { label: "Empresas", valor: resumo.total_empresas.toLocaleString("pt-BR") },
-      { label: "Capital total", valor: brl(resumo.capital_total) },
-      { label: "Capital médio", valor: brl(resumo.capital_medio) },
-      { label: "Cidades", valor: resumo.qtd_cidades.toLocaleString("pt-BR") },
-      { label: "Setores", valor: resumo.qtd_setores.toLocaleString("pt-BR") },
-      { label: "Falência/Recup.", valor: resumo.qtd_inativas.toLocaleString("pt-BR") },
-    ]
-  ) : [];
+  const cidadeData = cidades.map(c => ({ name: c.cidade, qtd: c.qtd }));
+  const setorData = setores.map(s => ({
+    name: (s.descricao || s.cnae).slice(0, 30), qtd: s.qtd,
+  }));
+  const porteData = portes.map(p => ({ name: p.porte || "Não informado", value: p.qtd }));
 
-  // Barras ordenadas por volume: qtd quando nao ha passivo, divida quando ha.
-  const cidadeData = [...cidades]
-    .sort((a, b) => temDivida ? b.divida_total - a.divida_total : b.qtd - a.qtd)
-    .map(c => ({
-      name: c.cidade,
-      valor: temDivida ? c.divida_total : c.qtd,
-      qtd: c.qtd,
-      capital: c.capital_total,
-    }));
-  const setorData = [...setores]
-    .sort((a, b) => temDivida ? b.divida_total - a.divida_total : b.qtd - a.qtd)
-    .map(s => ({
-      name: (s.descricao || s.cnae).slice(0, 28),
-      valor: temDivida ? s.divida_total : s.qtd,
-      qtd: s.qtd,
-      capital: s.capital_total,
-    }));
-  // Portes nomeados primeiro; "NAO INFORMADO" vai pro fim e em cinza --
-  // senao ele domina o grafico (quase 100% da base) e esconde as fatias pequenas.
-  const porteData = [...portes]
-    .sort((a, b) => {
-      const naoInfo = (p: PorteAgg) => !p.porte || !p.porte.trim() || p.porte.trim().toUpperCase().startsWith("NAO");
-      return Number(naoInfo(a)) - Number(naoInfo(b)) || b.qtd - a.qtd;
-    })
-    .map(p => ({ name: p.porte && p.porte.trim() ? p.porte : "Não informado", value: p.qtd }));
-  const porteTotal = porteData.reduce((s, p) => s + p.value, 0);
-  const COR_NAO_INFORMADO = "#cbd5e1";
-  const pct = (v: number) => (porteTotal ? ((v / porteTotal) * 100).toFixed(1) : "0");
+  // Base vazia nao e erro: e o estado normal antes da primeira carga de dados.
+  const semDados = !loading && !erro && resumo != null && resumo.total_empresas === 0;
 
+  if (erro) {
     return (
-    <div className="space-y-8">
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        {(loading && !resumo ? Array.from({ length: 6 }) : kpis).map((k, i) => (
-          <div 
-            key={i} 
-            className="rounded-2xl bg-white/80 backdrop-blur-sm border border-slate-200/50 p-5 shadow-lg hover:shadow-xl transition-all duration-300 group"
-          >
-            <div className="text-xs text-slate-500 group-hover:text-slate-700 transition-colors">
-              {(k as { label?: string })?.label ?? "…"}
+      <div className="rounded-lg border border-slate-200 bg-white p-8 text-center">
+        <p className="font-medium text-slate-700">Não foi possível carregar o panorama</p>
+        <p className="mt-1 text-sm text-slate-500">
+          Verifique se o servidor está no ar e recarregue a página.
+        </p>
+      </div>
+    );
+  }
+
+  if (semDados) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
+        <p className="font-medium text-slate-700">Nenhuma empresa nesta seleção</p>
+        <p className="mt-1 text-sm text-slate-500">
+          Ajuste os filtros acima — ou aguarde a próxima carga, se a base ainda
+          não foi populada.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        {(loading && !resumo ? Array.from({ length: 6 }) : kpis).map((k, i) => {
+          const item = k as { label?: string; valor?: string; destaque?: boolean };
+          return (
+            <div
+              key={i}
+              className={`rounded-lg border p-4 ${
+                item?.destaque
+                  ? "border-indigo-200 bg-indigo-50/60"
+                  : "border-slate-200 bg-white"
+              }`}
+            >
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                {item?.label ?? "…"}
+              </div>
+              <div
+                className={`mt-1.5 text-xl font-semibold tabular-nums ${
+                  item?.destaque ? "text-indigo-700" : "text-slate-800"
+                }`}
+              >
+                {item?.valor ?? "—"}
+              </div>
             </div>
-            <div className="text-xl font-bold text-slate-800 mt-2 group-hover:text-indigo-600 transition-colors">
-              {(k as { valor?: string })?.valor ?? "—"}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Dívida por cidade */}
-        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-shadow duration-300">
-          <h3 className="font-semibold text-slate-800 text-lg mb-1">Dívida por cidade</h3>
-          <p className="text-xs text-slate-400 mb-5">Total de passivo por município (base filtrada inteira)</p>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white p-5">
+          <h3 className="font-semibold text-slate-800">Empresas por cidade</h3>
+          <p className="mb-4 mt-0.5 text-xs text-slate-500">
+            Onde está concentrada a sua seleção
+          </p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={cidadeData} layout="vertical" margin={{ left: 8, right: 16 }}>
+              <BarChart data={cidadeData} layout="vertical" margin={{ left: 8, right: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => brl(Number(v))} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={90} />
-                <Tooltip formatter={(v: number, n) => n === "divida" ? brl(Number(v)) : v} />
-                <Bar dataKey="divida" name="Dívida" fill="url(#cityGradient)" radius={[0, 4, 4, 0]} />
-                <defs>
-                  <linearGradient id="cityGradient" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#ef4444" />
-                    <stop offset="100%" stopColor="#f97316" />
-                  </linearGradient>
-                </defs>
+                <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => num(Number(v))} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={95} />
+                <Tooltip formatter={(v) => [num(Number(v)), "Empresas"] as [string, string]} />
+                <Bar dataKey="qtd" name="Empresas" fill="#4f46e5" radius={[0, 3, 3, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Dívida por setor */}
-        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300">
-          <h3 className="font-semibold text-slate-800 text-lg mb-1">Dívida por setor (CNAE)</h3>
-          <p className="text-xs text-slate-400 mb-5">Top setores por passivo</p>
+        <div className="rounded-lg border border-slate-200 bg-white p-5">
+          <h3 className="font-semibold text-slate-800">Empresas por setor</h3>
+          <p className="mb-4 mt-0.5 text-xs text-slate-500">
+            Atividades com mais empresas na seleção
+          </p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={setorData} layout="vertical" margin={{ left: 8, right: 16 }}>
+              <BarChart data={setorData} layout="vertical" margin={{ left: 8, right: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => brl(Number(v))} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={140} />
-                <Tooltip formatter={(v: number, n) => n === "divida" ? brl(Number(v)) : v} />
-                <Bar dataKey="divida" name="Dívida" fill="url(#sectorGradient)" radius={[0, 4, 4, 0]} />
-                <defs>
-                  <linearGradient id="sectorGradient" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#8b5cf6" />
-                    <stop offset="100%" stopColor="#ec4899" />
-                  </linearGradient>
-                </defs>
+                <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => num(Number(v))} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={150} />
+                <Tooltip formatter={(v) => [num(Number(v)), "Empresas"] as [string, string]} />
+                <Bar dataKey="qtd" name="Empresas" fill="#0d9488" radius={[0, 3, 3, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Distribuição por porte */}
-        <div className="rounded-2xl bg-white/80 border border-slate-200/50 p-6 shadow-lg hover:shadow-xl transition-colors duration-300 lg:col-span-2">
-          <h3 className="font-semibold text-slate-800 text-lg mb-1">Distribuição por porte</h3>
-          <p className="text-xs text-slate-400 mb-2">Empresas por porte — percentual sobre a base filtrada</p>
-          <div className="relative h-56">
+        <div className="rounded-lg border border-slate-200 bg-white p-5 lg:col-span-2">
+          <h3 className="font-semibold text-slate-800">Distribuição por porte</h3>
+          <p className="mb-4 mt-0.5 text-xs text-slate-500">
+            Perfil de tamanho das empresas selecionadas
+          </p>
+          <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -181,37 +178,13 @@ export function FunilInsights({ filtros }: { filtros: AnalyticsFiltros }) {
                   outerRadius={85}
                   paddingAngle={2}
                   dataKey="value"
-                  stroke="none"
                 >
-                  {porteData.map((p, i) => (
-                    <Cell
-                      key={i}
-                      fill={p.name === "Não informado" ? COR_NAO_INFORMADO : COLORS[i % COLORS.length]}
-                    />
-                  ))}
+                  {porteData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
-                <Tooltip
-                  formatter={(v: number, name) => [
-                    `${Number(v).toLocaleString("pt-BR")} empresas (${pct(Number(v))}%)`,
-                    String(name),
-                  ]}
-                />
-                <Legend
-                  payload={porteData.map((p, i) => ({
-                    value: `${p.name} · ${p.value.toLocaleString("pt-BR")} (${pct(p.value)}%)`,
-                    type: "square" as const,
-                    color: p.name === "Não informado" ? COR_NAO_INFORMADO : COLORS[i % COLORS.length],
-                    id: String(i),
-                  }))}
-                  wrapperStyle={{ fontSize: 11 }}
-                />
+                <Tooltip formatter={(v) => [num(Number(v)), "Empresas"] as [string, string]} />
+                <Legend />
               </PieChart>
             </ResponsiveContainer>
-            {/* Total no centro do donut (levemente acima, compensando a legenda) */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center pb-10 pointer-events-none">
-              <span className="text-2xl font-bold text-slate-800">{porteTotal.toLocaleString("pt-BR")}</span>
-              <span className="text-xs text-slate-400">empresas</span>
-            </div>
           </div>
         </div>
       </div>

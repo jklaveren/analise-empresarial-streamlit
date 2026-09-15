@@ -10,17 +10,11 @@ on:
   schedule:
     - cron: "0 2 * * 1"
 
-  # Execucao manual pela aba "Actions".
+  # Execucao manual pela aba "Actions". Sem inputs -- a deteccao automatica
+  # do mes RF e do trimestre PGFN sonda os servidores na hora, entao nao
+  # ha o que preencher. Se um dia precisar reprocessar um mes especifico,
+  # temporariamente reintroduza um input aqui (ou passe via 'env:').
   workflow_dispatch:
-    inputs:
-      mes_referencia:
-        description: "Mes/Ano RF (ex: 2026-05). Vazio = detecta automaticamente."
-        required: false
-        default: ""
-      trimestre_pgfn:
-        description: "Trimestre PGFN (ex: 2026_trimestre_01). Vazio = usa o padrao."
-        required: false
-        default: ""
 
 # Nao deixa duas execucoes do ETL rodarem ao mesmo tempo (a nova espera a
 # anterior terminar em vez de competir pelos mesmos arquivos / cache).
@@ -67,15 +61,28 @@ jobs:
       # Receita a cada passo, e todos usam exatamente o mesmo mes.
       # ----------------------------------------------------------------
       - name: Detectar periodo de referencia (RF + PGFN)
-        env:
-          # Prioridade: input manual (workflow_dispatch) > variavel do repo > deteccao automatica.
-          RF_MES_REFERENCIA: ${{ github.event.inputs.mes_referencia || vars.RF_MES_REFERENCIA }}
-          PGFN_TRIMESTRE: ${{ github.event.inputs.trimestre_pgfn || vars.PGFN_TRIMESTRE }}
+        # Sem env: a deteccao automatica sonda os servidores toda vez. O
+        # dispatch nao pergunta mais mes/trimestre pro usuario -- se toparmos
+        # com necessidade real de override, colocar env aqui explicitamente
+        # apontando pra um secret/var, nao pra um input do dispatch.
         run: |
           python whodados/pipeline/pipeline.py detect \
             | grep -E '^(RF_MES_REFERENCIA|PGFN_TRIMESTRE)=' >> "$GITHUB_ENV"
           echo "Referencia fixada para esta execucao:"
           grep -E 'RF_MES_REFERENCIA|PGFN_TRIMESTRE' "$GITHUB_ENV"
+
+      # ----------------------------------------------------------------
+      # Auto-diagnostico: em ~30s testa token RF, URL RF, URL PGFN e
+      # conexao com o Supabase. Se algo estiver errado (token expirado,
+      # servidor fora, trimestre invalido), aborta aqui com mensagem
+      # clara -- em vez de descobrir isso depois de ja ter gastado
+      # 30-60min baixando fantasma.
+      # ----------------------------------------------------------------
+      - name: "Diagnostico rapido (token/URL/banco)"
+        timeout-minutes: 5
+        env:
+          DATABASE_URL: ${{ vars.SUPABASE_CONNECTION_STRING }}
+        run: python whodados/pipeline/pipeline.py diagnose
 
       # ----------------------------------------------------------------
       # Cache dos zips baixados (~3-4 GB). Chave por mes RF + trimestre PGFN:

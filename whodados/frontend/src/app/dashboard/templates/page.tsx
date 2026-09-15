@@ -106,6 +106,19 @@ export default function TemplatesPage() {
   const [form, setForm] = useState<FormState>(VAZIO);
   const [saving, setSaving] = useState(false);
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+  const [busca, setBusca] = useState("");
+  const [filtroCat, setFiltroCat] = useState("todas");
+
+  const templatesFiltrados = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    return templates.filter(t => {
+      const bateCategoria = filtroCat === "todas" || (t.categoria_cnae || "todos") === filtroCat;
+      const bateBusca = !termo
+        || t.nome.toLowerCase().includes(termo)
+        || t.assunto.toLowerCase().includes(termo);
+      return bateCategoria && bateBusca;
+    });
+  }, [templates, busca, filtroCat]);
 
   async function load() {
     try { setTemplates(await listarTemplates()); } catch (e) { setError(e instanceof Error ? e.message : "Erro"); } finally { setLoading(false); }
@@ -119,6 +132,18 @@ export default function TemplatesPage() {
     setEditId(t.id ?? null);
     setTemImagem(!!t.tem_imagem);
     setForm({ nome: t.nome, assunto: t.assunto, corpo_html: t.corpo_html, corpo_texto: t.corpo_texto || "", categoria_cnae: t.categoria_cnae || "todos" });
+    setFb(null);
+    setShowModal(true);
+  }
+  function abrirDuplicar(t: Template) {
+    // editId=null faz o handleSave criar um template novo em vez de
+    // atualizar -- o resto do form vem preenchido com o template de origem.
+    setEditId(null);
+    setTemImagem(false);
+    setForm({
+      nome: `${t.nome} (cópia)`, assunto: t.assunto, corpo_html: t.corpo_html,
+      corpo_texto: t.corpo_texto || "", categoria_cnae: t.categoria_cnae || "todos",
+    });
     setFb(null);
     setShowModal(true);
   }
@@ -218,7 +243,7 @@ export default function TemplatesPage() {
                 <p className="text-sm text-indigo-600 font-medium truncate">{t.assunto}</p>
                 <p className="text-xs text-slate-400 mt-1">{(t.corpo_html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Sem corpo"}</p>
                 <div className="mt-auto pt-3 flex items-center gap-2 flex-wrap">
-                  <button onClick={() => abrirTeste(t)} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✈️ Testar</button>
+                  <button onClick={() => handleTestar(t)} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✈️ Testar</button>
                   <button onClick={() => abrirEdicao(t)} className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✏️ Editar</button>
                   <button onClick={() => abrirDuplicar(t)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-medium transition-colors">⧉ Duplicar</button>
                   <button onClick={() => handleDelete(t.id!)} className="text-xs text-slate-400 hover:text-red-500 px-1.5 py-1.5 transition-colors ml-auto" title="Excluir">🗑️</button>

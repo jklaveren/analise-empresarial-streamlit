@@ -5,6 +5,7 @@ LOCAL: whodados/scripts/sync_data_to_db.py
 Uso:
     DATABASE_URL="<connection-string>" python whodados/scripts/sync_data_to_db.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from database_config import (
     EXPECTED_SOCIO_COLUMNS,
     create_db_engine,
     criar_indices_dados,
+    dtypes_empresas,
+    dtypes_socios,
     ensure_app_tables,
     garantir_colunas_obrigatorias,
     get_data_table_names,
@@ -33,7 +36,10 @@ import json
 from datetime import datetime, timezone
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "pipeline" / "out"
+# WHODADOS_DATA_DIR aponta para onde o pipeline em levas gravou os CSVs
+# (ex.: C:\whodados\nra_etl\dados\out), que nao fica dentro do repo.
+DATA_DIR = (Path(os.environ["WHODADOS_DATA_DIR"]) if os.environ.get("WHODADOS_DATA_DIR")
+            else BASE_DIR / "pipeline" / "out")
 
 ARQ_EMPRESAS = DATA_DIR / "subset_rs_final_completo.csv"
 ARQ_SOCIOS = DATA_DIR / "socios_rs.csv"
@@ -62,39 +68,61 @@ def carregar_csvs():
     empresas = garantir_colunas_obrigatorias(empresas, EXPECTED_EMPRESA_COLUMNS)
     socios = garantir_colunas_obrigatorias(socios, EXPECTED_SOCIO_COLUMNS)
 
+    # Converte tipos ANTES do to_sql pra que os dtypes SQL explicitos (NUMERIC,
+    # DATE) recebam os valores certos e nao tudo como string.
+    for col in ("CAPITAL_SOCIAL", "DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA",
+                "DIVIDA_FGTS", "DIVIDA_TOTAL"):
+        if col in empresas.columns:
+            empresas[col] = pd.to_numeric(
+                empresas[col].astype(str).str.replace(",", "."),
+                errors="coerce",
+            )
+    if "DATA_FUNDACAO" in empresas.columns:
+        # O pipeline em levas grava AAAA-MM-DD; o antigo gravava AAAAMMDD.
+        # Com um formato so, todas as datas do outro virariam NULL em silencio.
+        bruto = empresas["DATA_FUNDACAO"]
+        data = pd.to_datetime(bruto, format="%Y-%m-%d", errors="coerce")
+        data = data.fillna(pd.to_datetime(bruto, format="%Y%m%d", errors="coerce"))
+        empresas["DATA_FUNDACAO"] = data.dt.date
+
     return empresas, socios
 
 
+def _ler_dominio(caminho, renomear, colunas):
+    """Le uma tabela codigo -> descricao. Aceita o formato do pipeline em
+    levas (CODIGO;DESCRICAO, latin1) e o antigo (nomes proprios, utf-8)."""
+    if not caminho.exists():
+        print(f"[AVISO] '{caminho.name}' nao encontrado, pulando.")
+        return None
+    try:
+        df = pd.read_csv(caminho, sep=";", encoding="utf-8", dtype=str)
+    except UnicodeDecodeError:
+        df = pd.read_csv(caminho, sep=";", encoding="latin-1", dtype=str)
+    df = df.rename(columns=renomear)
+    if df.empty or not set(colunas) <= set(df.columns):
+        print(f"[AVISO] '{caminho.name}' vazio ou sem as colunas {colunas} "
+              f"(tem {list(df.columns)}), pulando.")
+        return None
+    df = df[colunas].dropna(subset=[colunas[0]])
+    return df.drop_duplicates(subset=[colunas[0]])
+
+
 def carregar_municipios():
-    """Carrega o CSV de municipios, se existir. Nao e obrigatorio -- se
-    faltar, a sincronizacao das empresas continua normalmente, so a coluna
-    de cidade fica sem nome resolvido (o backend ja trata isso sem quebrar)."""
-    if not ARQ_MUNICIPIOS.exists():
-        print(f"[AVISO] '{ARQ_MUNICIPIOS.name}' nao encontrado, pulando tabela de municipios.")
-        return None
-    df = pd.read_csv(ARQ_MUNICIPIOS, sep=";", encoding="utf-8", dtype=str)
-    if df.empty:
-        print(f"[AVISO] '{ARQ_MUNICIPIOS.name}' esta vazio, pulando tabela de municipios.")
-        return None
-    df = df.rename(columns={"COD_MUNICIPIO": "cod_municipio", "NOME_MUNICIPIO": "nome_municipio"})
-    return df[["cod_municipio", "nome_municipio"]]
+    return _ler_dominio(
+        ARQ_MUNICIPIOS,
+        {"CODIGO": "cod_municipio", "DESCRICAO": "nome_municipio",
+         "COD_MUNICIPIO": "cod_municipio", "NOME_MUNICIPIO": "nome_municipio"},
+        ["cod_municipio", "nome_municipio"],
+    )
 
 
 def carregar_cnaes():
-    """Carrega cnaes.csv (codigo -> descricao da atividade economica), se
-    existir. Nao e obrigatorio -- se faltar, as empresas sincronizam mesmo
-    assim e o backend so mostra o codigo do CNAE, sem a descricao."""
-    if not ARQ_CNAES.exists():
-        print(f"[AVISO] '{ARQ_CNAES.name}' nao encontrado, pulando tabela de cnaes.")
-        return None
-    df = pd.read_csv(ARQ_CNAES, sep=";", encoding="utf-8", dtype=str)
-    if df.empty:
-        print(f"[AVISO] '{ARQ_CNAES.name}' esta vazio, pulando tabela de cnaes.")
-        return None
-    df = df.rename(columns={"CODIGO_CNAE": "codigo_cnae", "DESCRICAO_CNAE": "descricao_cnae"})
-    df = df[["codigo_cnae", "descricao_cnae"]].dropna(subset=["codigo_cnae"])
-    df = df.drop_duplicates(subset=["codigo_cnae"])
-    return df
+    return _ler_dominio(
+        ARQ_CNAES,
+        {"CODIGO": "codigo_cnae", "DESCRICAO": "descricao_cnae",
+         "CODIGO_CNAE": "codigo_cnae", "DESCRICAO_CNAE": "descricao_cnae"},
+        ["codigo_cnae", "descricao_cnae"],
+    )
 
 
 def main():
@@ -108,8 +136,17 @@ def main():
         print(f"Sincronizacao abortada: {erro}", file=sys.stderr)
         sys.exit(1)
 
-    empresas.to_sql(tabelas["empresas"], engine, if_exists="replace", index=False, chunksize=5000)
-    socios.to_sql(tabelas["socios"], engine, if_exists="replace", index=False, chunksize=5000)
+    # dtype=... define o tipo SQL de cada coluna (NUMERIC, DATE, VARCHAR(N))
+    # em vez de tudo TEXT ilimitado. Reduz espaco no disco do Postgres e
+    # deixa queries analiticas (SUM, GROUP BY numerico) mais rapidas.
+    empresas.to_sql(
+        tabelas["empresas"], engine, if_exists="replace", index=False,
+        chunksize=5000, dtype=dtypes_empresas(),
+    )
+    socios.to_sql(
+        tabelas["socios"], engine, if_exists="replace", index=False,
+        chunksize=5000, dtype=dtypes_socios(),
+    )
     print(f"OK Tabela de empresas atualizada: {tabelas['empresas']} ({len(empresas)} linhas)")
     print(f"OK Tabela de socios atualizada: {tabelas['socios']} ({len(socios)} linhas)")
 

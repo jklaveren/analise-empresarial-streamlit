@@ -90,35 +90,3 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         user_id=current_user.get("sub"), organizacao_id=org_id,
     )
     return resultado
-
-
-# ------------------------------------------------------------------
-# PRÉVIA DO PÚBLICO: quantas empresas os filtros da campanha atingem,
-# ANTES de criar/disparar. Usa o mesmo resolver de filtros do funil.
-# ------------------------------------------------------------------
-from typing import Optional
-from .db.service import listar_empresas_db
-
-
-@router.post("/previa-publico")
-def previa_publico_campanha(payload: Optional[dict] = None):
-    filtros = (payload or {}).get("filtros") or {}
-    try:
-        try:
-            res = listar_empresas_db(filtros=filtros, page=1, page_size=500)
-        except TypeError:
-            res = listar_empresas_db(filtros)
-        if not isinstance(res, dict):
-            return {"total": len(res) if hasattr(res, "__len__") else 0}
-        linhas = res.get("empresas") or res.get("items") or []
-        total = int(res.get("total") or len(linhas))
-
-        def _tem_email(e):
-            if isinstance(e, dict):
-                return bool(e.get("email") or e.get("EMAIL"))
-            return bool(getattr(e, "email", None))
-
-        com_email = sum(1 for e in linhas if _tem_email(e))
-        return {"total": total, "com_email_amostra": com_email, "amostra": len(linhas)}
-    except Exception as e:
-        return {"total": 0, "erro": str(e)}
