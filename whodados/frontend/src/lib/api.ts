@@ -77,7 +77,13 @@ export async function login(username: string, password: string, rememberMe = fal
   return res.json();
 }
 
-export async function getMe() {
+export interface MeInfo {
+  username: string;
+  is_admin: boolean;
+  email: string | null;
+}
+
+export async function getMe(): Promise<MeInfo> {
   return request("/api/v1/auth/me");
 }
 
@@ -757,4 +763,77 @@ export async function enviarWhatsApp(
     method: "POST",
     body: JSON.stringify({ telefone, mensagem, cnpj }),
   });
+}
+
+// ==================== CONSULTA EM LINGUAGEM NATURAL ====================
+
+export interface FiltroInterpretado {
+  cidade: string | null;
+  cnae: string | null;
+  busca: string | null;
+  ordenar_por: "capital_social" | "divida_total" | "nenhum";
+  ordem: "asc" | "desc";
+  limite: number;
+}
+
+export interface EmpresaConsultaNatural {
+  cnpj_completo: string;
+  razao_social: string;
+  nome_fantasia?: string;
+  municipio?: string;
+  cnae_principal?: string;
+  capital_social?: number;
+  divida_total?: number;
+  porte_nome?: string;
+}
+
+export interface ConsultaNaturalResposta {
+  pergunta_original: string;
+  filtro_interpretado: FiltroInterpretado;
+  total_encontrado: number;
+  empresas: EmpresaConsultaNatural[];
+  resumo_em_texto: string;
+}
+
+/** Pergunta em portugues livre -> filtro estruturado (via Claude) -> resultado.
+ * O modelo nunca toca o banco: so preenche um filtro validado por Pydantic,
+ * que roda pelo mesmo caminho do /empresas normal. */
+export async function consultaNatural(pergunta: string): Promise<ConsultaNaturalResposta> {
+  return request("/api/v1/empresas/consulta-natural", {
+    method: "POST",
+    body: JSON.stringify({ pergunta }),
+  });
+}
+
+// ==================== ENRIQUECIMENTO DE CONTATO (IA, so admin) ====================
+
+export interface ItemEnriquecimento {
+  id: number;
+  cnpj: string;
+  tipo_alvo: string;
+  nome_alvo: string | null;
+  campo: string;
+  valor: string | null;
+  fonte_url: string | null;
+  fonte_titulo: string | null;
+  coletado_por: string;
+  coletado_em: string;
+  removido_em: string | null;
+}
+
+/** Dispara o agente (Claude + busca na web) pra achar contato publico da
+ * empresa/socios. Restrito a admin no backend (require_admin) -- dispara
+ * custo de LLM por uso, entao nunca chame automaticamente. */
+export async function enriquecerEmpresa(cnpj: string): Promise<{ cnpj: string; itens_encontrados: number; itens: ItemEnriquecimento[] }> {
+  return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}/enriquecer`, { method: "POST" });
+}
+
+export async function listarEnriquecimento(cnpj: string): Promise<ItemEnriquecimento[]> {
+  return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}/enriquecimento`);
+}
+
+/** Direito de exclusao (LGPD): apaga o valor/fonte coletados, mantendo so o
+ * registro de auditoria de que a remocao aconteceu. */
+export async function removerEnriquecimento(cnpj: string): Promise<{ cnpj: string; itens_removidos: number }> {
+  return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}/enriquecimento`, { method: "DELETE" });
 }

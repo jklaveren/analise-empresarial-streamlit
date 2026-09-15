@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { MultiSelect } from "@/components/MultiSelect";
 import { FunilInsights } from "@/components/FunilInsights";
 import { TopEmpresasRanking } from "@/components/TopEmpresasRanking";
+import { ConsultaNaturalBox } from "@/components/ConsultaNaturalBox";
 import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
 
 const PAGE_SIZE = 50;
@@ -163,6 +164,8 @@ export default function DashboardPage() {
         </div>
         <button onClick={limparFiltros} className="text-sm text-slate-500 hover:text-slate-800 underline">Limpar filtros</button>
       </header>
+
+      <ConsultaNaturalBox />
 
       {/* Funil de filtros */}
       <div className="rounded-xl bg-white p-4 shadow-sm border border-slate-200 space-y-4">

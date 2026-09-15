@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "whodados-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "whodados/frontend", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
