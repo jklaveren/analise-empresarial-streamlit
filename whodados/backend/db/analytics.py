@@ -33,10 +33,34 @@ _BASE_FROM = """
     LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
 """
 
-# ::text antes de NULLIF cobre os dois casos: coluna de texto (o normal, o
-# pandas.to_sql grava tudo como texto) e coluna ja numerica.
-_CAPITAL = 'COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0)'
-_DIVIDA = 'COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0)'
+
+def _colunas_empresas(cur) -> set:
+    """Nomes das colunas reais de dados_empresas (o ETL legado pode nao ter
+    criado DIVIDA_TOTAL ainda -- nesse caso tratamos divida como 0)."""
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'dados_empresas'"
+    )
+    return {r["column_name"] for r in cur.fetchall()}
+
+
+def _expr_divida(cols: set) -> str:
+    if "DIVIDA_TOTAL" in cols:
+        return 'COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0)'
+    for alt in ("DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA"):
+        if alt in cols:
+            return f'COALESCE(NULLIF(e."{alt}"::text, \'\')::numeric, 0)'
+    return "0::numeric"
+
+
+def _expr_capital(cols: set) -> str:
+    if "CAPITAL_SOCIAL" in cols:
+        return 'COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0)'
+    return "0::numeric"
+
+
+def _tem_divida(cols: set) -> bool:
+    return "DIVIDA_TOTAL" in cols
 
 
 def _tabela_existe(cur, nome: str) -> bool:
@@ -58,6 +82,9 @@ def _filtros_sql(
     capital_min: Optional[float] = None,
     capital_max: Optional[float] = None,
     incluir_inativas: bool = False,
+    div_expr: str = "0::numeric",
+    cap_expr: str = "0::numeric",
+    tem_divida: bool = False,
 ) -> tuple[str, list]:
     """Monta o trecho ' AND ...' compartilhado por todas as agregacoes.
 
@@ -75,17 +102,18 @@ def _filtros_sql(
     if portes:
         cond.append('e."PORTE_NOME" = ANY(%s)')
         params.append(list(portes))
-    if divida_min is not None:
-        cond.append(f"{_DIVIDA} >= %s")
-        params.append(divida_min)
-    if divida_max is not None:
-        cond.append(f"{_DIVIDA} <= %s")
-        params.append(divida_max)
+    if tem_divida:
+        if divida_min is not None:
+            cond.append(f"{div_expr} >= %s")
+            params.append(divida_min)
+        if divida_max is not None:
+            cond.append(f"{div_expr} <= %s")
+            params.append(divida_max)
     if capital_min is not None:
-        cond.append(f"{_CAPITAL} >= %s")
+        cond.append(f"{cap_expr} >= %s")
         params.append(capital_min)
     if capital_max is not None:
-        cond.append(f"{_CAPITAL} <= %s")
+        cond.append(f"{cap_expr} <= %s")
         params.append(capital_max)
     if not incluir_inativas:
         cond.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s')
@@ -106,23 +134,30 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
         "total_empresas": 0, "divida_total": 0.0, "capital_total": 0.0,
         "divida_media": 0.0, "capital_medio": 0.0, "qtd_cidades": 0,
         "qtd_setores": 0, "qtd_com_divida": 0, "qtd_inativas": 0,
+        "tem_dados_divida": False,
     }
     try:
         with get_db_cursor() as cur:
             if _vazio(cur):
                 return zero
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
+            )
             cur.execute(
                 f"""
                 SELECT
                     COUNT(*) AS total_empresas,
-                    COALESCE(SUM({_DIVIDA}), 0) AS divida_total,
-                    COALESCE(SUM({_CAPITAL}), 0) AS capital_total,
-                    COALESCE(AVG({_DIVIDA}), 0) AS divida_media,
-                    COALESCE(AVG({_CAPITAL}), 0) AS capital_medio,
+                    COALESCE(SUM({div_expr}), 0) AS divida_total,
+                    COALESCE(SUM({cap_expr}), 0) AS capital_total,
+                    COALESCE(AVG({div_expr}), 0) AS divida_media,
+                    COALESCE(AVG({cap_expr}), 0) AS capital_medio,
                     COUNT(DISTINCT e."COD_MUNICIPIO") AS qtd_cidades,
                     COUNT(DISTINCT e."CNAE_PRINCIPAL") AS qtd_setores,
-                    COUNT(*) FILTER (WHERE {_DIVIDA} > 0) AS qtd_com_divida
+                    COUNT(*) FILTER (WHERE {div_expr} > 0) AS qtd_com_divida
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 """,
@@ -131,7 +166,10 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
             row = cur.fetchone() or {}
 
             # contagem separada de inativas (ignora o proprio toggle)
-            where_i, params_i = _filtros_sql(**{**filtros, "incluir_inativas": True})
+            where_i, params_i = _filtros_sql(
+                **{**filtros, "incluir_inativas": True},
+                div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div,
+            )
             cur.execute(
                 f'SELECT COUNT(*) AS n {_BASE_FROM} '
                 f'WHERE COALESCE(e."RAZAO_SOCIAL", \'\') ~* %s {where_i}',
@@ -149,6 +187,9 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
                 "qtd_setores": int(row.get("qtd_setores") or 0),
                 "qtd_com_divida": int(row.get("qtd_com_divida") or 0),
                 "qtd_inativas": int(inativas or 0),
+                # Front usa p/ decidir se mostra graficos de divida ou o aviso
+                # "dados de passivo ainda nao sincronizados".
+                "tem_dados_divida": bool(tem_div),
             }
     except Exception as e:
         log.warning(f"analytics_resumo falhou: {e}")
@@ -162,18 +203,27 @@ def analytics_por_cidade(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
         with get_db_cursor() as cur:
             if _vazio(cur):
                 return []
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            # Ranking util mesmo sem DIVIDA_TOTAL: ordena por capital quando
+            # nao ha passivo, e por qtd como ultimo recurso.
+            ordem = "qtd" if _expr_divida(cols) == "0::numeric" else "divida_total"
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
+            )
             cur.execute(
                 f"""
                 SELECT
                     COALESCE(m.nome_municipio, 'Nao mapeado') AS cidade,
                     COUNT(*) AS qtd,
-                    COALESCE(SUM({_CAPITAL}), 0) AS capital_total,
-                    COALESCE(SUM({_DIVIDA}), 0) AS divida_total
+                    COALESCE(SUM({cap_expr}), 0) AS capital_total,
+                    COALESCE(SUM({div_expr}), 0) AS divida_total
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY cidade
-                ORDER BY divida_total DESC
+                ORDER BY {ordem} DESC
                 LIMIT %s
                 """,
                 [*params, limite],
@@ -199,16 +249,22 @@ def analytics_por_setor(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
         with get_db_cursor() as cur:
             if _vazio(cur):
                 return []
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
+            )
             cur.execute(
                 f"""
                 SELECT
                     e."CNAE_PRINCIPAL" AS cnae,
                     COALESCE(MAX(c.descricao_cnae), 'Outras atividades') AS descricao,
                     COUNT(*) AS qtd,
-                    COALESCE(SUM({_CAPITAL}), 0) AS capital_total,
-                    COALESCE(SUM({_DIVIDA}), 0) AS divida_total,
-                    COALESCE(AVG({_DIVIDA}), 0) AS divida_media
+                    COALESCE(SUM({cap_expr}), 0) AS capital_total,
+                    COALESCE(SUM({div_expr}), 0) AS divida_total,
+                    COALESCE(AVG({div_expr}), 0) AS divida_media
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 GROUP BY e."CNAE_PRINCIPAL"
@@ -238,7 +294,13 @@ def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
         with get_db_cursor() as cur:
             if _vazio(cur):
                 return []
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr,
+                tem_divida=_tem_divida(cols),
+            )
             cur.execute(
                 f"""
                 SELECT COALESCE(NULLIF(e."PORTE_NOME", ''), 'Nao informado') AS porte,
@@ -261,13 +323,24 @@ def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
 def analytics_top_empresas(
     ordenar_por: str = "divida", limite: int = 10, **filtros
 ) -> List[Dict[str, Any]]:
-    """Maiores empresas por 'divida' ou 'capital' (rankings da Home / Passivos)."""
-    coluna = _CAPITAL if ordenar_por == "capital" else _DIVIDA
+    """Maiores empresas por 'divida' ou 'capital' (rankings da Home / Passivos).
+
+    Sem coluna DIVIDA_TOTAL, o ranking de divida degrada para capital
+    (return_capital=True no payload) em vez de falhar."""
     try:
         with get_db_cursor() as cur:
             if _vazio(cur):
                 return []
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            pediu_divida = ordenar_por != "capital"
+            usar_divida = pediu_divida and tem_div
+            coluna = div_expr if usar_divida else cap_expr
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
+            )
             cur.execute(
                 f"""
                 SELECT
@@ -277,8 +350,8 @@ def analytics_top_empresas(
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
                     e."PORTE_NOME" AS porte_nome,
-                    {_CAPITAL} AS capital_social,
-                    {_DIVIDA} AS divida_total
+                    {cap_expr} AS capital_social,
+                    {div_expr} AS divida_total
                 {_BASE_FROM}
                 WHERE 1=1 {where}
                 ORDER BY {coluna} DESC
@@ -296,6 +369,10 @@ def analytics_top_empresas(
                     "porte_nome": r["porte_nome"],
                     "capital_social": float(r["capital_social"]),
                     "divida_total": float(r["divida_total"]),
+                    # Front usa p/ mostrar aviso honesto ("sem PGFN: ranking por
+                    # capital") em vez de fingir que ha passivo.
+                    "sem_divida": not tem_div,
+                    "ordenado_por": "divida" if usar_divida else "capital",
                 }
                 for r in cur.fetchall()
             ]
@@ -309,26 +386,33 @@ def analytics_top_empresas(
 def analytics_socios_ranking(limite: int = 50, **filtros) -> List[Dict[str, Any]]:
     """Ranking de socios pelo passivo acumulado das empresas em que constam
     (join dados_socios x dados_empresas por CNPJ_BASICO). Os filtros valem
-    para o lado das empresas."""
+    para o lado das empresas. Sem DIVIDA_TOTAL, ordena por capital/qtd."""
     try:
         with get_db_cursor() as cur:
             if _vazio(cur) or not _tabela_existe(cur, "dados_socios"):
                 return []
-            where, params = _filtros_sql(**filtros)
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            ordem = "divida_total" if tem_div else "capital_total"
+            where, params = _filtros_sql(
+                **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
+            )
             cur.execute(
                 f"""
                 SELECT
                     s."NOME_SOCIO" AS nome_socio,
                     COUNT(DISTINCT e."CNPJ_BASICO") AS qtd_empresas,
-                    COALESCE(SUM({_DIVIDA}), 0) AS divida_total,
-                    COALESCE(SUM({_CAPITAL}), 0) AS capital_total
+                    COALESCE(SUM({div_expr}), 0) AS divida_total,
+                    COALESCE(SUM({cap_expr}), 0) AS capital_total
                 FROM dados_socios s
                 JOIN dados_empresas e ON e."CNPJ_BASICO" = s."CNPJ_BASICO"
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
                 WHERE COALESCE(s."NOME_SOCIO", '') <> '' {where}
                 GROUP BY s."NOME_SOCIO"
-                ORDER BY divida_total DESC
+                ORDER BY {ordem} DESC
                 LIMIT %s
                 """,
                 [*params, limite],
@@ -355,6 +439,11 @@ def analytics_socio_detalhe(nome_socio: str) -> List[Dict[str, Any]]:
         with get_db_cursor() as cur:
             if _vazio(cur) or not _tabela_existe(cur, "dados_socios"):
                 return []
+            cols = _colunas_empresas(cur)
+            div_expr = _expr_divida(cols)
+            cap_expr = _expr_capital(cols)
+            tem_div = _tem_divida(cols)
+            ordem = "divida_total" if tem_div else "capital_social"
             cur.execute(
                 f"""
                 SELECT DISTINCT
@@ -363,14 +452,14 @@ def analytics_socio_detalhe(nome_socio: str) -> List[Dict[str, Any]]:
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    {_CAPITAL} AS capital_social,
-                    {_DIVIDA} AS divida_total
+                    {cap_expr} AS capital_social,
+                    {div_expr} AS divida_total
                 FROM dados_socios s
                 JOIN dados_empresas e ON e."CNPJ_BASICO" = s."CNPJ_BASICO"
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
                 WHERE s."NOME_SOCIO" = %s
-                ORDER BY divida_total DESC
+                ORDER BY {ordem} DESC
                 """,
                 (nome_socio,),
             )

@@ -179,6 +179,14 @@ def _run_ensure_multiempresa(os):
         cur.execute("ALTER TABLE crm DROP CONSTRAINT IF EXISTS crm_cnpj_key")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_org_cnpj ON crm(organizacao_id, cnpj)")
 
+        # --- CRM: classificacao de perfil (ideal / possivel / fora do perfil) ---
+        # Criado automaticamente no boot; nao perde dados nem quebra nada.
+        cur.execute("ALTER TABLE crm ADD COLUMN IF NOT EXISTS classificacao VARCHAR(30)")
+        cur.execute("ALTER TABLE crm ADD COLUMN IF NOT EXISTS motivo VARCHAR(255)")
+        cur.execute("ALTER TABLE crm ADD COLUMN IF NOT EXISTS parceiro BOOLEAN DEFAULT FALSE")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_classificacao ON crm(classificacao)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_parceiro ON crm(parceiro)")
+
         # --- Migra o SMTP global (.env) para a NRA como valor inicial ---
         smtp_host = os.getenv("SMTP_HOST", "").strip()
         if smtp_host:

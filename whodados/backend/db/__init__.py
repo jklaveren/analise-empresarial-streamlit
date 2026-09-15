@@ -3,6 +3,7 @@ from .service import (
     create_user_record, get_user_by_username, get_user_by_email, get_user_by_username_or_email,
     create_audit_log, record_login_attempt, is_account_locked, get_audit_logs,
     create_or_update_crm, get_crm_by_cnpj, get_crm_all,
+    classificar_base, estatisticas_classificacao, listar_crm_classificados, classificar_empresa,
     create_template, get_template, get_all_templates, update_template, delete_template, get_templates_by_categoria,
     set_template_imagem, get_template_imagem, clear_template_imagem,
     salvar_enriquecimento, listar_enriquecimento, remover_enriquecimento,
@@ -31,6 +32,7 @@ from .analytics import (
 __all__ = [
     "create_user_record", "get_user_by_username", "get_user_by_email", "get_user_by_username_or_email",
     "create_or_update_crm", "get_crm_by_cnpj", "get_crm_all",
+    "classificar_base", "estatisticas_classificacao", "listar_crm_classificados", "classificar_empresa",
     "create_template", "get_template", "get_all_templates", "update_template", "delete_template", "get_templates_by_categoria",
     "set_template_imagem", "get_template_imagem", "clear_template_imagem",
     "salvar_enriquecimento", "listar_enriquecimento", "remover_enriquecimento",

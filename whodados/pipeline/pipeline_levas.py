@@ -1,0 +1,565 @@
+# =================================================================
+# PIPELINE RS MASTER — PROCESSAMENTO EM LEVAS
+# =================================================================
+# Baixa -> filtra -> apaga, um arquivo por vez.
+# Pico de disco ~2GB em vez de 27GB, entao roda no Colab sem encher o
+# Drive e cabe nos 14GB do runner do GitHub Actions.
+#
+# Retomavel: guarda o progresso em _progresso.json. Se a sessao cair,
+# rodar de novo continua de onde parou em vez de recomecar.
+# =================================================================
+
+import json
+import os
+import re
+import time
+import zipfile
+from pathlib import Path
+
+import pandas as pd
+import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ----------------------------------------------------------------
+# CONFIGURACAO
+# ----------------------------------------------------------------
+TOKEN_RF = os.environ.get("RF_SHARE_TOKEN", "").strip() or "gn672Ad4CF8N6TK"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+# Identifica quem esta baixando, em vez do "python-requests/2.x" generico.
+# Um cliente que se identifica e um download de dados abertos; e o oposto
+# do padrao que dispara defesa anti-abuso.
+UA = ("WhoDados-ETL/1.0 (dados abertos CNPJ; "
+      "https://github.com/jklaveren/analise-empresarial-streamlit)")
+
+# True mantem os zips (cache entre execucoes, precisa dos 27GB).
+# False apaga cada zip apos processar -- este e o modo "em levas".
+MANTER_ZIPS = os.environ.get("MANTER_ZIPS", "").lower() in ("1", "true", "sim")
+
+NO_COLAB = Path("/content").exists()
+if NO_COLAB:
+    from google.colab import drive
+    drive.mount("/content/drive")
+    BASE_DIR = Path("/content/drive/MyDrive/NRA_PROJETO")
+else:
+    BASE_DIR = Path(os.environ.get("BASE_DIR", "./NRA_PROJETO"))
+
+RAW = BASE_DIR / "raw"
+OUT = BASE_DIR / "out"
+RAW.mkdir(parents=True, exist_ok=True)
+OUT.mkdir(parents=True, exist_ok=True)
+
+AUX_ESTAB = OUT / "aux_estab_rs.csv"
+AUX_SOCIOS = OUT / "socios_rs.csv"
+AUX_EMPRESAS = OUT / "empresas_rs.csv"
+AUX_DIVIDAS = OUT / "dividas.csv"
+AUX_SIMPLES = OUT / "simples_rs.csv"
+ARQUIVO_FINAL = OUT / "subset_rs_final_completo.csv"
+ESTADO = OUT / "_progresso.json"
+
+CHUNK_SIZE = 500_000
+MB = 1024 * 1024
+
+DAV_RF = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/{TOKEN_RF}"
+PASTA_CNPJ = "Dados/Cadastros/CNPJ"
+PGFN_INDEX = "https://dadosabertos.pgfn.gov.br/"
+
+PGFN_ARQUIVOS = {
+    "Dados_abertos_Nao_Previdenciario.zip": "DIVIDA_FEDERAL",
+    "Dados_abertos_Previdenciario.zip": "DIVIDA_PREVIDENCIARIA",
+    "Dados_abertos_FGTS.zip": "DIVIDA_FGTS",
+}
+COLS_DIVIDA = ["DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS"]
+
+print("=" * 70)
+print("PIPELINE RS — PROCESSAMENTO EM LEVAS")
+print(f"Modo: {'mantendo zips' if MANTER_ZIPS else 'apagando zip apos processar'}")
+print("=" * 70)
+
+
+# ----------------------------------------------------------------
+# CHECKPOINT
+# ----------------------------------------------------------------
+def ler_estado():
+    if ESTADO.exists():
+        return json.loads(ESTADO.read_text(encoding="utf-8"))
+    return {"feitos": []}
+
+
+def marcar_feito(estado, chave):
+    estado["feitos"].append(chave)
+    ESTADO.write_text(json.dumps(estado, indent=2), encoding="utf-8")
+
+
+# ----------------------------------------------------------------
+# DOWNLOAD
+# ----------------------------------------------------------------
+def listar_dav(caminho, tentativas=5):
+    """Lista uma pasta do WebDAV. Repete com espera crescente: numa execucao
+    de horas, uma conexao recusada e rotina, e sem retry ela derruba o
+    pipeline inteiro antes de baixar um byte."""
+    for n in range(1, tentativas + 1):
+        try:
+            r = requests.request("PROPFIND", f"{DAV_RF}/{caminho}/",
+                                 headers={"Depth": "1", "User-Agent": UA},
+                                 timeout=60, verify=False)
+            r.raise_for_status()
+            hrefs = re.findall(r"<d:href>([^<]*)</d:href>", r.text, re.IGNORECASE)
+            return [h.rstrip("/").split("/")[-1] for h in hrefs
+                    if h.rstrip("/").split("/")[-1]]
+        except Exception as e:
+            if n == tentativas:
+                raise SystemExit(
+                    f"❌ Nao consegui listar {caminho} apos {tentativas} tentativas.\n"
+                    f"   Ultimo erro: {type(e).__name__}: {e}\n"
+                    f"   Se for 'RemoteDisconnected', o servidor esta recusando "
+                    f"este IP -- tente de outra rede.")
+            espera = 5 * n
+            print(f"   ⏳ listagem falhou ({type(e).__name__}), "
+                  f"tentativa {n}/{tentativas}, esperando {espera}s...")
+            time.sleep(espera)
+
+
+def baixar(url, destino, rotulo, tentativas=6):
+    """Baixa com stream e retomada, repetindo em erro de rede.
+
+    Numa execucao de horas a conexao cai; como cada tentativa retoma do
+    ponto em que parou (header Range), repetir custa pouco e evita perder
+    o que ja foi baixado."""
+    for n in range(1, tentativas + 1):
+        try:
+            _baixar_uma_vez(url, destino, rotulo)
+            return
+        except requests.RequestException as e:
+            if n == tentativas:
+                raise SystemExit(
+                    f"❌ {rotulo}: desisti apos {tentativas} tentativas.\n"
+                    f"   Ultimo erro: {type(e).__name__}: {e}\n   URL: {url}")
+            espera = min(10 * n, 60)
+            baixado = destino.stat().st_size / MB if destino.exists() else 0
+            print(f"\n   ⏳ {type(e).__name__} — tentativa {n}/{tentativas}, "
+                  f"retomando de {baixado:,.0f} MB em {espera}s...")
+            time.sleep(espera)
+
+
+def _baixar_uma_vez(url, destino, rotulo):
+    if destino.exists() and zipfile.is_zipfile(destino):
+        print(f"   ⏭️  {rotulo} (já baixado)")
+        return
+
+    parcial = destino.stat().st_size if destino.exists() else 0
+    headers = {"User-Agent": UA}
+    if parcial:
+        headers["Range"] = f"bytes={parcial}-"
+
+    # stream=True e obrigatorio: Estabelecimentos0.zip tem 2GB e sem isso
+    # o requests carrega tudo na RAM antes de gravar.
+    # RequestException aqui sobe pro retry em baixar().
+    with requests.get(url, headers=headers, stream=True,
+                      timeout=(30, 300), verify=False) as r:
+        if r.status_code not in (200, 206):
+            raise SystemExit(f"❌ {rotulo}: HTTP {r.status_code}\n   URL: {url}")
+
+        total = int(r.headers.get("Content-Length", 0))
+        modo = "ab" if (r.status_code == 206 and parcial) else "wb"
+        if modo == "ab":
+            total += parcial
+        feito = parcial if modo == "ab" else 0
+
+        with open(destino, modo) as f:
+            for bloco in r.iter_content(chunk_size=8 * MB):
+                f.write(bloco)
+                feito += len(bloco)
+                if total:
+                    print(f"\r   ⬇️  {rotulo}: {feito/MB:,.0f}/{total/MB:,.0f} MB "
+                          f"({feito*100//total}%)", end="", flush=True)
+        print()
+
+    # Uma pagina de erro tambem chega com status 200; o teste de zip pega isso.
+    if not zipfile.is_zipfile(destino):
+        tamanho = destino.stat().st_size
+        destino.unlink(missing_ok=True)
+        raise SystemExit(f"❌ {rotulo}: resposta não é um ZIP ({tamanho/MB:,.1f} MB)\n"
+                         f"   URL: {url}")
+
+
+def ler_zip_em_chunks(caminho, header=None):
+    """Itera os chunks de todos os CSVs dentro do zip. Os arquivos da RF vem
+    sem cabecalho; os da PGFN tem (header=0)."""
+    with zipfile.ZipFile(caminho) as z:
+        for nome in z.namelist():
+            with z.open(nome) as f:
+                yield from pd.read_csv(f, sep=";", encoding="latin1", header=header,
+                                       dtype=str, chunksize=CHUNK_SIZE,
+                                       low_memory=False)
+
+
+def em_levas(arquivos, url_base, rotulo, processar):
+    """Baixa -> processa -> apaga, um por vez. Retoma pelo checkpoint."""
+    estado = ler_estado()
+    print(f"\n{'='*70}\n{rotulo}\n{'='*70}")
+
+    for i, arquivo in enumerate(arquivos, 1):
+        chave = f"{rotulo}:{arquivo}"
+        if chave in estado["feitos"]:
+            print(f"   ✔️  [{i}/{len(arquivos)}] {arquivo} (já processado)")
+            continue
+
+        caminho = RAW / arquivo
+        baixar(f"{url_base}/{arquivo}", caminho, f"[{i}/{len(arquivos)}] {arquivo}")
+
+        linhas = processar(caminho)
+        print(f"   ✅ {arquivo}: {linhas:,} linhas aproveitadas")
+
+        if not MANTER_ZIPS:
+            caminho.unlink(missing_ok=True)
+
+        marcar_feito(estado, chave)
+
+
+def anexar_csv(df, destino, encoding="utf-8"):
+    """Grava com header na primeira vez, depois so anexa."""
+    novo = not destino.exists()
+    df.to_csv(destino, sep=";", index=False, encoding=encoding,
+              mode="w" if novo else "a", header=novo)
+
+
+# ----------------------------------------------------------------
+# DETECCAO DE FONTES
+# ----------------------------------------------------------------
+print("\n🔍 Detectando versões disponíveis...")
+
+meses = sorted(m for m in listar_dav(PASTA_CNPJ) if re.fullmatch(r"\d{4}-\d{2}", m))
+if not meses:
+    raise SystemExit("❌ Nenhuma pasta AAAA-MM no compartilhamento da RF.")
+MES_RF = meses[-1]
+URL_RF = f"{DAV_RF}/{PASTA_CNPJ}/{MES_RF}"
+print(f"✅ Receita Federal: {MES_RF}")
+
+try:
+    html = requests.get(PGFN_INDEX, verify=False, timeout=30).text
+    trimestres = sorted(set(re.findall(r"(\d{4}_trimestre_\d{2})/", html)))
+    if not trimestres:
+        raise ValueError("nenhum trimestre listado")
+    TRIMESTRE = trimestres[-1]
+except Exception as e:
+    raise SystemExit(f"❌ Não consegui detectar o trimestre da PGFN: {e}")
+URL_PGFN = f"{PGFN_INDEX}{TRIMESTRE}"
+print(f"✅ PGFN: {TRIMESTRE}")
+
+
+# ----------------------------------------------------------------
+# ETAPA 1 — ESTABELECIMENTOS (define quais CNPJs sao do RS)
+# ----------------------------------------------------------------
+# Layout de ESTABELECIMENTOS (30 colunas), conferido contra o arquivo real:
+#   0 cnpj_basico   1 ordem       2 dv          3 matriz/filial  4 nome_fantasia
+#   5 situacao      6 dt_situacao 7 motivo      8 cidade_ext     9 pais
+#  10 dt_inicio    11 cnae_princ 12 cnae_sec   13 TIPO_LOGRAD   14 LOGRADOURO
+#  15 NUMERO       16 COMPLEMENTO 17 BAIRRO    18 cep           19 uf
+#  20 municipio    21 ddd_1      22 telefone_1 23 ddd_2         24 TELEFONE_2
+#  25 ddd_fax      26 fax        27 email      28 sit_especial  29 dt_sit_especial
+#
+# O mapeamento anterior lia 13/14/16 como logradouro/numero/bairro, o que
+# desloca tudo: logradouro virava "RUA", numero virava o nome da rua e o
+# bairro vinha vazio (16 e complemento).
+COLS_ESTAB = ["CNPJ_BASICO", "CNPJ_COMPLETO", "NOME_FANTASIA", "DATA_FUNDACAO",
+              "CNAE_PRINCIPAL", "LOGRADOURO", "NUMERO", "COMPLEMENTO", "BAIRRO",
+              "CEP", "COD_MUNICIPIO", "DDD", "TELEFONE", "TELEFONE_2", "EMAIL",
+              "CNAE_SECUNDARIA"]
+
+
+def processar_estabelecimentos(caminho):
+    total = 0
+    for chunk in ler_zip_em_chunks(caminho):
+        # col 19 = UF, col 5 = situacao cadastral (02 = ativa), col 3 = matriz/filial (1 = matriz)
+        res = chunk[(chunk[19] == "RS") & (chunk[5] == "02") & (chunk[3] == "1")].copy()
+        if res.empty:
+            continue
+        res["CNPJ_BASICO"] = res[0].str.zfill(8)
+        res["CNPJ_COMPLETO"] = res["CNPJ_BASICO"] + res[1].str.zfill(4) + res[2].str.zfill(2)
+        # Tipo e nome vem separados ("RUA" + "CAROLINA SUCUPIRA"); juntar da o
+        # logradouro como aparece num endereco.
+        res["_LOGRADOURO"] = (res[13].fillna("").str.strip() + " " +
+                              res[14].fillna("").str.strip()).str.strip()
+        # col 12 traz as CNAEs secundarias separadas por virgula. Uma empresa
+        # costuma atuar em mais de uma atividade, e segmentar so pela principal
+        # perde quem exerce a atividade-alvo como secundaria.
+        sel = res[["CNPJ_BASICO", "CNPJ_COMPLETO", 4, 10, 11,
+                   "_LOGRADOURO", 15, 16, 17, 18, 20, 21, 22, 24, 27, 12]]
+        sel.columns = COLS_ESTAB
+        anexar_csv(sel, AUX_ESTAB, encoding="latin1")
+        total += len(sel)
+    return total
+
+
+em_levas([f"Estabelecimentos{i}.zip" for i in range(10)], URL_RF,
+         "ETAPA 1 — Estabelecimentos (matrizes ativas no RS)",
+         processar_estabelecimentos)
+
+if not AUX_ESTAB.exists():
+    raise SystemExit("❌ Nenhuma matriz do RS encontrada — o layout da RF pode ter mudado.")
+
+df_estab = pd.read_csv(AUX_ESTAB, sep=";", encoding="latin1", dtype=str)
+# Os aux CSVs sao gravados por acrescimo e o checkpoint so marca um zip depois
+# de processado. Se o processo cair no meio de um zip, o reinicio acrescenta
+# esse zip de novo -- sem este dedup a empresa sairia duplicada no banco.
+df_estab = df_estab.drop_duplicates(subset="CNPJ_COMPLETO")
+cnpjs_rs = set(df_estab["CNPJ_BASICO"].unique())
+print(f"\n📍 {len(df_estab):,} matrizes ativas no RS | {len(cnpjs_rs):,} CNPJs únicos")
+
+
+# ----------------------------------------------------------------
+# ETAPA 2 — EMPRESAS
+# ----------------------------------------------------------------
+def processar_empresas(caminho):
+    total = 0
+    for chunk in ler_zip_em_chunks(caminho):
+        chunk[0] = chunk[0].str.zfill(8)
+        res = chunk[chunk[0].isin(cnpjs_rs)]
+        if res.empty:
+            continue
+        sel = res[[0, 1, 4, 5, 2, 3]].copy()
+        sel.columns = ["CNPJ_BASICO", "RAZAO_SOCIAL", "CAPITAL_SOCIAL",
+                       "PORTE_EMPRESA", "NATUREZA_JURIDICA", "QUALIF_RESPONSAVEL"]
+        anexar_csv(sel, AUX_EMPRESAS, encoding="latin1")
+        total += len(sel)
+    return total
+
+
+em_levas([f"Empresas{i}.zip" for i in range(10)], URL_RF,
+         "ETAPA 2 — Empresas (razão social e capital)", processar_empresas)
+
+
+# ----------------------------------------------------------------
+# ETAPA 3 — SOCIOS
+# ----------------------------------------------------------------
+def processar_socios(caminho):
+    total = 0
+    for chunk in ler_zip_em_chunks(caminho):
+        chunk[0] = chunk[0].str.zfill(8)
+        res = chunk[chunk[0].isin(cnpjs_rs)]
+        if res.empty:
+            continue
+        # Layout de SOCIOS (11 colunas). Alem dos identificadores, duas
+        # colunas valem por si: 5 (entrada na sociedade) marca reorganizacao
+        # societaria recente, e 10 (faixa etaria) aponta socio em idade de
+        # sucessao -- os dois principais gatilhos de assessoria societaria.
+        sel = res[[0, 1, 2, 3, 4, 5, 10]].copy()
+        sel.columns = ["CNPJ_BASICO", "IDENTIFICADOR_SOCIO", "NOME_SOCIO",
+                       "CPF_CNPJ_SOCIO", "QUALIF_SOCIO", "DATA_ENTRADA",
+                       "FAIXA_ETARIA"]
+        anexar_csv(sel, AUX_SOCIOS)
+        total += len(sel)
+    return total
+
+
+em_levas([f"Socios{i}.zip" for i in range(10)], URL_RF,
+         "ETAPA 3 — Sócios", processar_socios)
+
+
+# ----------------------------------------------------------------
+# ETAPA 4 — PGFN (dividas)
+# ----------------------------------------------------------------
+# Cada zip da PGFN e um tipo de divida. Agrega por CNPJ ja filtrando pelo RS,
+# senao carregaria os ~6,7M de devedores do Brasil inteiro na memoria.
+#
+# Os CSVs da PGFN tem cabecalho, e a posicao do valor muda entre arquivos
+# (col 12 no SIDA/PREV, 14 no FGTS). Ler pelo nome evita o bug antigo, que
+# lia a col 4 (UF_DEVEDOR, "RS") como valor e zerava todas as dividas.
+def fazer_processador_pgfn(coluna):
+    def processar(caminho):
+        parciais = []
+        for chunk in ler_zip_em_chunks(caminho, header=0):
+            if "CPF_CNPJ" not in chunk.columns or "VALOR_CONSOLIDADO" not in chunk.columns:
+                raise SystemExit(f"❌ {caminho.name}: layout da PGFN mudou, colunas: "
+                                 f"{list(chunk.columns)}")
+            digitos = chunk["CPF_CNPJ"].fillna("").str.replace(r"\D", "", regex=True)
+            # CPF vem mascarado ("XXX735.623XX"); completar com zeros faria ele
+            # casar com um CNPJ por acaso. So CNPJ tem 14 digitos.
+            pj = digitos.str.len() == 14
+            valor = pd.to_numeric(chunk.loc[pj, "VALOR_CONSOLIDADO"]
+                                  .str.replace(",", ".", regex=False),
+                                  errors="coerce").fillna(0.0)
+            bloco = pd.DataFrame({"CNPJ_BASICO": digitos[pj].str[:8], coluna: valor})
+            bloco = bloco[bloco["CNPJ_BASICO"].isin(cnpjs_rs)]
+            if not bloco.empty:
+                parciais.append(bloco.groupby("CNPJ_BASICO", as_index=False)[coluna].sum())
+
+        if not parciais:
+            return 0
+        agregado = pd.concat(parciais, ignore_index=True)
+        agregado = agregado.groupby("CNPJ_BASICO", as_index=False)[coluna].sum()
+        agregado.to_csv(OUT / f"_divida_{coluna}.csv", sep=";", index=False)
+        return len(agregado)
+
+    return processar
+
+
+for arquivo_pgfn, coluna in PGFN_ARQUIVOS.items():
+    em_levas([arquivo_pgfn], URL_PGFN, f"ETAPA 4 — {coluna}",
+             fazer_processador_pgfn(coluna))
+
+df_dividas = pd.DataFrame({"CNPJ_BASICO": sorted(cnpjs_rs)})
+for coluna in COLS_DIVIDA:
+    parcial = OUT / f"_divida_{coluna}.csv"
+    if parcial.exists():
+        df_dividas = df_dividas.merge(
+            pd.read_csv(parcial, sep=";", dtype={"CNPJ_BASICO": str}),
+            on="CNPJ_BASICO", how="left")
+    else:
+        df_dividas[coluna] = 0.0
+df_dividas[COLS_DIVIDA] = df_dividas[COLS_DIVIDA].fillna(0.0)
+df_dividas["DIVIDA_TOTAL"] = df_dividas[COLS_DIVIDA].sum(axis=1)
+df_dividas.to_csv(AUX_DIVIDAS, sep=";", index=False)
+
+com_divida = int((df_dividas["DIVIDA_TOTAL"] > 0).sum())
+print(f"\n💰 {com_divida:,} empresas do RS com dívida ativa")
+
+
+# ----------------------------------------------------------------
+# ETAPA 4b - SIMPLES / MEI
+# ----------------------------------------------------------------
+# Regime tributario separa MEI de empresa estruturada melhor que o campo
+# porte, que so tem tres faixas. Util pra qualificar o tamanho real do lead.
+def processar_simples(caminho):
+    total = 0
+    for chunk in ler_zip_em_chunks(caminho):
+        chunk[0] = chunk[0].str.zfill(8)
+        res = chunk[chunk[0].isin(cnpjs_rs)]
+        if res.empty:
+            continue
+        sel = res[[0, 1, 4]].copy()
+        sel.columns = ["CNPJ_BASICO", "OPCAO_SIMPLES", "OPCAO_MEI"]
+        anexar_csv(sel, AUX_SIMPLES)
+        total += len(sel)
+    return total
+
+
+em_levas(["Simples.zip"], URL_RF, "ETAPA 4b - Simples / MEI", processar_simples)
+
+
+# ----------------------------------------------------------------
+# ETAPA 4c - TABELAS DE DOMINIO
+# ----------------------------------------------------------------
+# Arquivos de menos de 1 MB que traduzem os codigos (CNAE, municipio,
+# natureza juridica, qualificacao do socio). Sem eles a tela mostra
+# "6201500" em vez de "Desenvolvimento de programas de computador".
+TABELAS_DOMINIO = {
+    "Cnaes.zip": "cnaes.csv",
+    "Municipios.zip": "municipios.csv",
+    "Naturezas.zip": "naturezas.csv",
+    "Qualificacoes.zip": "qualificacoes.csv",
+}
+
+
+def baixar_tabelas_dominio():
+    print()
+    print("=" * 70)
+    print("ETAPA 4c - Tabelas de dominio")
+    print("=" * 70)
+    estado = ler_estado()
+    for arquivo, saida in TABELAS_DOMINIO.items():
+        chave = "dominio:" + arquivo
+        destino_csv = OUT / saida
+        if chave in estado["feitos"] and destino_csv.exists():
+            print("   ja gerado: " + saida)
+            continue
+        zip_local = RAW / arquivo
+        baixar(URL_RF + "/" + arquivo, zip_local, arquivo)
+        partes = list(ler_zip_em_chunks(zip_local))
+        if partes:
+            tab = pd.concat(partes, ignore_index=True).iloc[:, :2]
+            tab.columns = ["CODIGO", "DESCRICAO"]
+            tab.to_csv(destino_csv, sep=";", index=False, encoding="latin1")
+            print("   OK " + saida + ": " + format(len(tab), ",") + " codigos")
+        if not MANTER_ZIPS:
+            zip_local.unlink(missing_ok=True)
+        marcar_feito(estado, chave)
+
+
+baixar_tabelas_dominio()
+
+
+# ----------------------------------------------------------------
+# ETAPA 5 — CONSOLIDACAO
+# ----------------------------------------------------------------
+print(f"\n{'='*70}\nETAPA 5 — Consolidação\n{'='*70}")
+
+df_emp = pd.read_csv(AUX_EMPRESAS, sep=";", encoding="latin1", dtype=str)
+df_emp = df_emp.drop_duplicates(subset="CNPJ_BASICO")
+master = df_estab.merge(df_emp, on="CNPJ_BASICO", how="left")
+master = master.merge(df_dividas, on="CNPJ_BASICO", how="left")
+
+if AUX_SIMPLES.exists():
+    df_simples = pd.read_csv(AUX_SIMPLES, sep=";", dtype=str)
+    df_simples = df_simples.drop_duplicates(subset="CNPJ_BASICO")
+    master = master.merge(df_simples, on="CNPJ_BASICO", how="left")
+
+master["CAPITAL_SOCIAL"] = pd.to_numeric(
+    master["CAPITAL_SOCIAL"].str.replace(",", ".", regex=False), errors="coerce").fillna(0.0)
+master["DATA_FUNDACAO"] = pd.to_datetime(master["DATA_FUNDACAO"], format="%Y%m%d",
+                                         errors="coerce")
+for coluna in COLS_DIVIDA + ["DIVIDA_TOTAL"]:
+    master[coluna] = master[coluna].fillna(0.0)
+
+if AUX_SOCIOS.exists():
+    df_s = pd.read_csv(AUX_SOCIOS, sep=";", dtype=str)
+    antes = len(df_s)
+    df_s = df_s.drop_duplicates()
+    if len(df_s) != antes:
+        df_s.to_csv(AUX_SOCIOS, sep=";", index=False)
+        print(f"   socios: {antes - len(df_s):,} linhas duplicadas removidas")
+
+master.to_csv(ARQUIVO_FINAL, sep=";", index=False, encoding="latin1")
+print(f"✅ {len(master):,} empresas consolidadas -> {ARQUIVO_FINAL}")
+
+
+# ----------------------------------------------------------------
+# ETAPA 6 — SUPABASE
+# ----------------------------------------------------------------
+if DATABASE_URL:
+    print(f"\n{'='*70}\nETAPA 6 — Supabase\n{'='*70}")
+    import sys
+    from sqlalchemy import create_engine
+
+    # database_config vive na raiz do repo; o pipeline roda de whodados/pipeline.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from database_config import (criar_indices_dados, dtypes_empresas,
+                                 dtypes_socios)
+
+    # Sem dtype= o to_sql grava toda coluna como TEXT ilimitado -- foi o que
+    # inflou a base pra ~700 MB. Os tipos explicitos (NUMERIC/DATE/CHAR)
+    # cortam isso. E replace recria a tabela, entao os indices vem depois.
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    master.to_sql("dados_empresas", engine, if_exists="replace",
+                  index=False, chunksize=5000, method="multi",
+                  dtype=dtypes_empresas())
+    print(f"✅ dados_empresas: {len(master):,} linhas")
+
+    if AUX_SOCIOS.exists():
+        df_socios = pd.read_csv(AUX_SOCIOS, sep=";", dtype=str)
+        df_socios.to_sql("dados_socios", engine, if_exists="replace",
+                         index=False, chunksize=5000, method="multi",
+                         dtype=dtypes_socios())
+        print(f"✅ dados_socios: {len(df_socios):,} linhas")
+
+    criar_indices_dados()
+    print("✅ indices recriados")
+else:
+    print("\n⚠️  DATABASE_URL não definida — dados ficaram só em CSV.")
+
+
+# ----------------------------------------------------------------
+# RESUMO
+# ----------------------------------------------------------------
+print(f"\n{'='*70}\n✅ CONCLUÍDO\n{'='*70}")
+print(f"  Fonte RF ............. {MES_RF}")
+print(f"  Fonte PGFN ........... {TRIMESTRE}")
+print(f"  Matrizes ativas RS ... {len(master):,}")
+print(f"  Com dívida ........... {com_divida:,}")
+for coluna in COLS_DIVIDA + ["DIVIDA_TOTAL"]:
+    print(f"  {coluna:.<21} R$ {master[coluna].sum():,.2f}")
+print(f"  Arquivo .............. {ARQUIVO_FINAL}")
+print("\n  Para reprocessar do zero, apague:", ESTADO)

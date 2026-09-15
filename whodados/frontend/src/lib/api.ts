@@ -196,7 +196,7 @@ export async function getEmpresaDetalhe(cnpj: string): Promise<EmpresaDetalhe> {
   return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}`);
 }
 
-export async function atualizarCrm(cnpj: string, data: { status?: string; notas?: string }) {
+export async function atualizarCrm(cnpj: string, data: { status?: string; notas?: string; classificacao?: string; motivo?: string; parceiro?: boolean }) {
   return request(`/api/v1/crm/${encodeURIComponent(cnpj)}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -206,6 +206,7 @@ export async function atualizarCrm(cnpj: string, data: { status?: string; notas?
 // ==================== CRM (KANBAN) ====================
 
 export type CrmStatus = "novo" | "em_contato" | "negociando" | "convertido" | "descartado";
+export type CrmClassificacao = "perfil_ideal" | "perfil_possivel" | "fora_perfil" | "parceiro" | "";
 
 export interface CrmKanbanRecord {
   id: number;
@@ -214,12 +215,56 @@ export interface CrmKanbanRecord {
   notas: string | null;
   criado_por?: string | null;
   data_atualizacao?: string | null;
+  classificacao?: string | null;
+  motivo?: string | null;
+  parceiro?: boolean;
 }
 
 export type CrmKanban = Record<CrmStatus, CrmKanbanRecord[]>;
 
 export async function listarCrmKanban(): Promise<CrmKanban> {
   return request("/api/v1/crm");
+}
+
+// ==================== CLASSIFICACAO DE PERFIL ====================
+
+export interface CrmClassificado {
+  cnpj: string;
+  classificacao: string | null;
+  motivo: string | null;
+  status: string | null;
+  parceiro: boolean;
+  data_atualizacao: string | null;
+  notas: string | null;
+  razao_social: string;
+  capital_social: number;
+  email: string;
+  contato_fone: string;
+  municipio: string;
+}
+
+export interface ClassificacaoEstatisticas {
+  perfil_ideal: number;
+  perfil_possivel: number;
+  fora_perfil: number;
+  parceiro: number;
+  sem_classificacao: number;
+  total_crm: number;
+}
+
+/** Roda a regra de perfil na base inteira (lote). Retorna contadores. */
+export async function classificarBase(limite?: number): Promise<{ ok: boolean; processadas: number; totais: Record<string, number>; erro?: string }> {
+  const q = limite ? `?limite=${limite}` : "";
+  return request(`/api/v1/crm/classificar${q}`, { method: "POST" });
+}
+
+export async function listarCrmClassificados(filtro?: CrmClassificacao | "sem_classificacao"): Promise<CrmClassificado[]> {
+  const q = filtro ? `?filtro=${filtro}` : "";
+  return request(`/api/v1/crm/classificacao${q}`);
+}
+
+export async function getCrmClassificacaoEstatisticas(): Promise<ClassificacaoEstatisticas> {
+  return request("/api/v1/crm/classificacao/estatisticas");
 }
 
 export async function getMetricas() {
@@ -577,6 +622,8 @@ export interface AnalyticsResumo {
   qtd_setores: number;
   qtd_com_divida: number;
   qtd_inativas: number;
+  /** false quando o banco ainda nao tem coluna de passivo (ETL legado). */
+  tem_dados_divida?: boolean;
 }
 
 export interface CidadeAgg {
@@ -609,6 +656,9 @@ export interface TopEmpresa {
   porte_nome: string | null;
   capital_social: number;
   divida_total: number;
+  /** true quando o banco ainda nao tem passivo (ranking degradou p/ capital). */
+  sem_divida?: boolean;
+  ordenado_por?: "divida" | "capital";
 }
 
 export interface SocioAgg {

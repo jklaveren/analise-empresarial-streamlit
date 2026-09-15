@@ -89,19 +89,198 @@ def get_crm_all(organizacao_id: int) -> List[Dict[str, Any]]:
         cur.execute("SELECT * FROM crm WHERE organizacao_id = %s ORDER BY data_atualizacao DESC", (organizacao_id,))
         return cur.fetchall()
 
-def create_or_update_crm(cnpj: str, organizacao_id: int, status: Optional[str] = None, notas: Optional[str] = None, criado_por: Optional[str] = None) -> Dict[str, Any]:
+def create_or_update_crm(cnpj: str, organizacao_id: int, status: Optional[str] = None, notas: Optional[str] = None, criado_por: Optional[str] = None,
+                         classificacao: Optional[str] = None, motivo: Optional[str] = None, parceiro: Optional[bool] = None) -> Dict[str, Any]:
     with get_db_cursor() as cur:
         cur.execute(
-            """INSERT INTO crm (cnpj, organizacao_id, status, notas, criado_por, data_atualizacao)
-               VALUES (%s, %s, %s, %s, %s, NOW())
+            """INSERT INTO crm (cnpj, organizacao_id, status, notas, criado_por,
+                               classificacao, motivo, parceiro, data_atualizacao)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                ON CONFLICT (organizacao_id, cnpj) DO UPDATE
                    SET status = COALESCE(EXCLUDED.status, crm.status),
                        notas = COALESCE(EXCLUDED.notas, crm.notas),
+                       classificacao = COALESCE(EXCLUDED.classificacao, crm.classificacao),
+                       motivo = COALESCE(EXCLUDED.motivo, crm.motivo),
+                       parceiro = COALESCE(EXCLUDED.parceiro, crm.parceiro, FALSE),
                        data_atualizacao = NOW()
                RETURNING *""",
-            (cnpj, organizacao_id, status, notas, criado_por),
+            (cnpj, organizacao_id, status, notas, criado_por, classificacao, motivo, parceiro),
         )
         return cur.fetchone()
+
+
+# ---------------------------------------------------------------------------
+# CLASSIFICACAO DE PERFIL DA BASE (ideal / possivel / fora do perfil)
+# ---------------------------------------------------------------------------
+_BLACKLIST_CLASSIFICACAO = r"RECUPERACAO|FALIDA|JUDICIAL|MASSA FALIDA|EM LIQUIDACAO|BAIXADA|INAPTA"
+
+
+def classificar_empresa(empresa: Dict[str, Any]) -> Dict[str, Any]:
+    """Aplica as regras de classificacao em UMA empresa (provinda de dados_empresas).
+    Retorna {'classificacao': str, 'motivo': str}."""
+    import re as _re
+    from datetime import datetime
+
+    razao = (empresa.get("razao_social") or "").upper()
+    nome = (empresa.get("nome_fantasia") or "").upper()
+
+    # 1) Eliminatoria: situacao juridica ruim
+    situacao = f"{razao} {nome}"
+    if _re.search(_BLACKLIST_CLASSIFICACAO, situacao):
+        return {"classificacao": "fora_perfil", "motivo": "Situacao juridica desfavoravel (falencia/recuperacao/baixada)"}
+
+    # 2) Eliminatoria: sem contato (sem email E sem telefone)
+    email = (empresa.get("email") or "").strip()
+    fone = (empresa.get("contato_fone") or "").strip()
+    tem_email = bool(email)
+    tem_fone = bool(_re.sub(r"\D", "", fone))
+    if not tem_email and not tem_fone:
+        return {"classificacao": "fora_perfil", "motivo": "Sem dados de contato (e-mail e telefone)"}
+
+    # 3) Eliminatoria: capital social zerado ou sem dados
+    capital = 0.0
+    try:
+        capital = float(empresa.get("capital_social") or 0)
+    except (TypeError, ValueError):
+        capital = 0.0
+    if capital <= 0:
+        return {"classificacao": "fora_perfil", "motivo": "Capital social zerado ou sem dados"}
+
+    # 4) Idade (DATA_FUNDACAO vem YYYYMMDD como texto)
+    anos = 0.0
+    fundacao = (empresa.get("data_fundacao") or "").strip()
+    if len(fundacao) >= 8 and fundacao.isdigit():
+        try:
+            d = datetime(int(fundacao[0:4]), int(fundacao[4:6]), int(fundacao[6:8]))
+            anos = (datetime.utcnow() - d).days / 365.25
+        except ValueError:
+            anos = 0.0
+
+    # 5) PERFIL IDEAL: 3+ anos, capital >= 100k, email E telefone
+    if anos >= 3 and capital >= 100000 and tem_email and tem_fone:
+        return {"classificacao": "perfil_ideal", "motivo": "Empresa ativa, 3+ anos, capital >= R$100k e contato completo"}
+
+    # 6) PERFIL POSSIVEL: nao atingiu o ideal, mas tem pelo menos um contato
+    if tem_email or tem_fone:
+        return {"classificacao": "perfil_possivel", "motivo": "Perfil intermediario (faltam criterios do ideal)"}
+
+    return {"classificacao": "fora_perfil", "motivo": "Nao atende ao perfil prospectavel"}
+
+
+def classificar_base(organizacao_id: int, limite: int = None) -> Dict[str, Any]:
+    """Percorre dados_empresas, aplica a classificacao em lote e grava na tabela
+    crm (cria registro se ainda nao existir; atualiza classificacao/motivo).
+    NAO muda status nem notas existentes. Retorna contadores."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "dados_empresas"):
+                return {"ok": False, "erro": "Tabela de empresas ainda nao existe", "totais": {}}
+            cur.execute(
+                """
+                SELECT
+                    e."CNPJ_COMPLETO" AS cnpj_completo,
+                    e."RAZAO_SOCIAL" AS razao_social,
+                    e."NOME_FANTASIA" AS nome_fantasia,
+                    e."DATA_FUNDACAO" AS data_fundacao,
+                    COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
+                    e."EMAIL" AS email,
+                    e."CONTATO_FONE" AS contato_fone
+                FROM dados_empresas e
+                """
+            )
+            linhas = cur.fetchall()
+
+        selecionadas = linhas[:limite] if limite and limite > 0 else linhas
+        totais = {"perfil_ideal": 0, "perfil_possivel": 0, "fora_perfil": 0}
+        for emp in selecionadas:
+            r = classificar_empresa(emp)
+            if isinstance(r, dict) and r.get("classificacao"):
+                totais[r["classificacao"]] = totais.get(r["classificacao"], 0) + 1
+                _upsert_classificacao(emp["cnpj_completo"], organizacao_id, r["classificacao"], r.get("motivo", ""))
+
+        return {"ok": True, "processadas": len(selecionadas), "totais": totais}
+    except Exception as e:
+        log.warning(f"classificar_base falhou: {e}")
+        return {"ok": False, "erro": str(e), "totais": {}}
+
+
+def _upsert_classificacao(cnpj: str, organizacao_id: int, classificacao: str, motivo: str) -> bool:
+    """INSERT ... ON CONFLICT mantendo status/notas existentes. Usado em lote."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """INSERT INTO crm (cnpj, organizacao_id, classificacao, motivo, data_atualizacao)
+                   VALUES (%s, %s, %s, %s, NOW())
+                   ON CONFLICT (organizacao_id, cnpj) DO UPDATE
+                       SET classificacao = EXCLUDED.classificacao,
+                           motivo = EXCLUDED.motivo,
+                           data_atualizacao = NOW()""",
+                (cnpj, organizacao_id, classificacao, motivo),
+            )
+        return True
+    except Exception as e:
+        log.warning(f"_upsert_classificacao falhou para {cnpj}: {e}")
+        return False
+
+
+def listar_crm_classificados(organizacao_id: int, filtro: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista registros do CRM com classificacao, resolvendo dados da empresa base.
+    Filtro opcional: perfil_ideal / perfil_possivel / fora_perfil / parceiro / sem_classificacao."""
+    permite = {"perfil_ideal", "perfil_possivel", "fora_perfil", "parceiro", "sem_classificacao"}
+    try:
+        with get_db_cursor() as cur:
+            base_sql = """
+                SELECT c.cnpj, c.classificacao, c.motivo, c.status, c.parceiro,
+                       c.data_atualizacao, c.notas,
+                       COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", '') AS razao_social,
+                       COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
+                       COALESCE(e."EMAIL", '') AS email, COALESCE(e."CONTATO_FONE", '') AS contato_fone,
+                       COALESCE(m.nome_municipio, '') AS municipio
+                FROM crm c
+                LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = c.cnpj
+                LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                WHERE c.organizacao_id = %s
+            """
+            params: list = [organizacao_id]
+            if filtro == "sem_classificacao":
+                base_sql += " AND (c.classificacao IS NULL OR c.classificacao = '')"
+            elif filtro in permite:
+                base_sql += " AND c.classificacao = %s"
+                params.append(filtro)
+            base_sql += " ORDER BY c.data_atualizacao DESC NULLS LAST LIMIT 1000"
+            cur.execute(base_sql, params)
+            return cur.fetchall()
+    except Exception as e:
+        log.warning(f"listar_crm_classificados falhou: {e}")
+        return []
+
+
+def estatisticas_classificacao(organizacao_id: int) -> Dict[str, Any]:
+    """Contadores por classificacao (para a aba Classificacao)."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """SELECT classificacao, COUNT(*) AS total FROM crm
+                   WHERE organizacao_id = %s AND classificacao IS NOT NULL
+                   GROUP BY classificacao""",
+                (organizacao_id,),
+            )
+            linhas = cur.fetchall()
+            total_crm = 0
+            cur.execute("SELECT COUNT(*) AS total FROM crm WHERE organizacao_id = %s", (organizacao_id,))
+            r = cur.fetchone()
+            total_crm = int(r["total"]) if r and r.get("total") else 0
+        resultado = {"perfil_ideal": 0, "perfil_possivel": 0, "fora_perfil": 0, "parceiro": 0,
+                     "sem_classificacao": 0, "total_crm": total_crm}
+        for r in linhas:
+            chave = r["classificacao"] or "sem_classificacao"
+            if chave in resultado:
+                resultado[chave] = int(r["total"])
+        return resultado
+    except Exception as e:
+        log.warning(f"estatisticas_classificacao falhou: {e}")
+        return {"perfil_ideal": 0, "perfil_possivel": 0, "fora_perfil": 0, "parceiro": 0,
+                "sem_classificacao": 0, "total_crm": 0}
 
 # Colunas do template retornadas nas listagens (NUNCA inclui imagem_data -- ela e' pesada
 # e so' e' buscada de fato pelo endpoint /templates/{id}/imagem).

@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  listarCrmKanban,
+    listarCrmKanban,
   atualizarCrm,
   getEmpresaDetalhe,
   CrmKanban,
   CrmStatus,
+  ClientesClassificacao,
   listarEmailsMonitor,
   getMonitorStats,
   getEmailsVermelhos,
@@ -15,9 +16,14 @@ import {
   MonitorEmail,
   MonitorStats,
   Campanha,
+  classificarBase,
+  getClientesClassificacaoEstatisticas,
+  listarClientesClassificados,
+  ClientesClassificado,
+  ClassificacaoEstatisticas,
 } from "@/lib/api";
 
-const COLUNAS: { status: CrmStatus; label: string; cor: string }[] = [
+const COLUNAS: { status: ClientesStatus; label: string; cor: string }[] = [
   { status: "novo", label: "Novo", cor: "border-slate-300 bg-slate-50" },
   { status: "em_contato", label: "Em contato", cor: "border-sky-300 bg-sky-50" },
   { status: "negociando", label: "Negociando", cor: "border-amber-300 bg-amber-50" },
@@ -25,12 +31,40 @@ const COLUNAS: { status: CrmStatus; label: string; cor: string }[] = [
   { status: "descartado", label: "Descartado", cor: "border-rose-300 bg-rose-50" },
 ];
 
-const KANBAN_VAZIO: CrmKanban = {
+const KANBAN_VAZIO: ClientesKanban = {
   novo: [],
   em_contato: [],
   negociando: [],
   convertido: [],
   descartado: [],
+};
+
+const CLASSIFICACAO_CONFIG: Record<string, { label: string; badge: string; desc: string }> = {
+  perfil_ideal: {
+    label: "Perfil ideal",
+    badge: "bg-emerald-100 text-emerald-700",
+    desc: "Empresa ativa, 3+ anos, capital ≥ R$100k e contato completo",
+  },
+  perfil_possivel: {
+    label: "Perfil possível",
+    badge: "bg-amber-100 text-amber-700",
+    desc: "Não atingiu todos os critérios do ideal",
+  },
+  fora_perfil: {
+    label: "Fora do perfil",
+    badge: "bg-rose-100 text-rose-700",
+    desc: "Não atende ao perfil prospectável",
+  },
+  parceiro: {
+    label: "Parceiro",
+    badge: "bg-sky-100 text-sky-700",
+    desc: "Empresa parceira",
+  },
+  sem_classificacao: {
+    label: "Sem classificação",
+    badge: "bg-slate-100 text-slate-600",
+    desc: "Ainda não classificada",
+  },
 };
 
 const SEMAFORO_CONFIG = {
@@ -74,8 +108,166 @@ const SEMAFORO_CONFIG = {
 
 type SemaforoKey = keyof typeof SEMAFORO_CONFIG;
 
+function ClassificacaoTab() {
+  const [stats, setStats] = useState<ClassificacaoEstatisticas | null>(null);
+  const [filtro, setFiltro] = useState<ClientesClassificacao | "sem_classificacao" | "">("");
+  const [registros, setRegistros] = useState<ClientesClassificado[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [classificando, setClassificando] = useState(false);
+  const [feedback, setFeedback] = useState<{ tipo: "s" | "e"; msg: string } | null>(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [st, lista] = await Promise.all([
+        getClientesClassificacaoEstatisticas(),
+        listarClientesClassificados(filtro || undefined),
+      ]);
+      setStats(st);
+      setRegistros(lista);
+    } catch {
+      setFeedback({ tipo: "e", msg: "Erro ao carregar classificacao." });
+    } finally {
+      setLoading(false);
+    }
+  }, [filtro]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const rodarClassificacao = async () => {
+    if (!confirm("Classificar a base inteira agora? Pode demorar alguns segundos.")) return;
+    setClassificando(true);
+    setFeedback(null);
+    try {
+      const r = await classificarBase();
+      setFeedback({
+        tipo: "s",
+        msg: `Classificacao concluida: ${r.processadas} empresas — ideal ${r.totais?.perfil_ideal ?? 0}, possivel ${r.totais?.perfil_possivel ?? 0}, fora ${r.totais?.fora_perfil ?? 0}`,
+      });
+      await carregar();
+    } catch (e: any) {
+      setFeedback({ tipo: "e", msg: e.message || "Erro ao classificar." });
+    } finally {
+      setClassificando(false);
+    }
+  };
+
+  const reclassificar = async (cnpj: string, classificacao: ClientesClassificacao, motivo?: string) => {
+    try {
+      if (classificacao === "fora_perfil") {
+        const motivoManual = prompt("Motivo do descarte (ou Enter para usar o padrao):");
+        await atualizarClientes(cnpj, { classificacao, motivo: motivoManual || motivo || "Descartado manualmente" });
+      } else {
+        await atualizarClientes(cnpj, { classificacao, motivo });
+      }
+      await carregar();
+    } catch {
+      setFeedback({ tipo: "e", msg: "Erro ao reclassificar empresa." });
+    }
+  };
+
+  const cards = stats ? [
+    { k: "perfil_ideal", label: "Perfil ideal", cor: "bg-emerald-50 border-emerald-200 text-emerald-700", icone: "✅" },
+    { k: "perfil_possivel", label: "Perfil possivel", cor: "bg-amber-50 border-amber-200 text-amber-700", icone: "🟡" },
+    { k: "fora_perfil", label: "Fora do perfil", cor: "bg-rose-50 border-rose-200 text-rose-700", icone: "🚷" },
+    { k: "parceiro", label: "Parceiros", cor: "bg-sky-50 border-sky-200 text-sky-700", icone: "🤝" },
+    { k: "sem_classificacao", label: "Sem classificacao", cor: "bg-slate-50 border-slate-200 text-slate-600", icone: "❔" },
+          ] : [];
+
+  return (
+    <div className="space-y-6">
+      {feedback && (
+        <div className={`rounded-lg border px-4 py-3 text-sm ${
+          feedback.tipo === "s" 
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-rose-200 bg-rose-50 text-rose-700"
+        }`}>
+          {feedback.msg}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-4">
+        {cards.map((c) => {
+          const dados = stats ? stats[c.k] : undefined;
+          const valor = dados ? dados.total : 0;
+          const cor = dados ? dados.cor : "bg-slate-100";
+          return (
+            <div key={c.k} className={`rounded-xl border ${c.cor} p-4 min-w-[160px]`}>
+              <div className="flex items-center gap-2">
+                <span className={`w-3 h-3 rounded-full ${cor}`} />
+                <span className="text-xs font-medium text-slate-600">{c.label}</span>
+              </div>
+              <div className="text-2xl font-bold text-slate-800 mt-2">
+                {valor.toLocaleString("pt-BR")}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex gap-2">
+        <select
+          value={filtro}
+          onChange={(e) => setFiltro(e.target.value as typeof filtro)}
+          className="text-xs border border-slate-200 rounded-md px-2 py-1"
+        >
+          <option value="">Todas as classificações</option>
+          <option value="sem_classificacao">Sem classificação</option>
+          <option value="perfil_ideal">Perfil ideal</option>
+          <option value="perfil_possivel">Perfil possível</option>
+          <option value="fora_perfil">Fora do perfil</option>
+        </select>
+
+        <button
+          onClick={rodarClassificacao}
+          disabled={classificando}
+          className={`text-xs border border-indigo-200 rounded-md px-2 py-1 disabled:opacity-50 ${
+            classificando ? "bg-indigo-50 text-indigo-600" : "bg-white text-indigo-700 hover:bg-indigo-50"
+          }`}
+        >
+          {classificando ? "Classificando..." : "🔍 Classificar base"}
+        </button>
+      </div>
+
+      {registros.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">CNPJ</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Razão Social</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Classificação</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Motivo</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {registros.map((r) => (
+                <tr key={r.cnpj}>
+                  <td className="px-4 py-2 text-xs text-slate-600">{r.cnpj}</td>
+                  <td className="px-4 py-2 text-sm text-slate-800">{r.razao_social}</td>
+                  <td className="px-4 py-2">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${CLASSIFICACAO_CONFIG[r.classificacao]?.badge || "bg-slate-100 text-slate-600"}`}>
+                      {CLASSIFICACAO_CONFIG[r.classificacao]?.icon || "❔"} {CLASSIFICACAO_CONFIG[r.classificacao]?.label || r.classificacao}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-xs text-slate-500">{r.motivo_descarte || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {registros.length === 0 && !loading && (
+        <p className="text-sm text-slate-500">Nenhuma empresa classificada.</p>
+      )}
+    </div>
+  );
+}
+
 function FunilTab() {
-  const [kanban, setKanban] = useState<CrmKanban>(KANBAN_VAZIO);
+
+  const [kanban, setKanban] = useState<ClientesKanban>(KANBAN_VAZIO);
   const [nomes, setNomes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -83,7 +275,7 @@ function FunilTab() {
 
   const carregar = async () => {
     try {
-      const data = await listarCrmKanban();
+      const data = await listarClientesKanban();
       setKanban(data);
 
       const cnpjs = Array.from(
@@ -101,14 +293,13 @@ function FunilTab() {
             }
           })
         );
-        setNomes((prev) => {
-          const novo = { ...prev };
-          for (const [cnpj, nome] of resultados) novo[cnpj] = nome;
-          return novo;
-        });
+        setNomes(
+          Object.fromEntries(resultados.map(([cnpj, nome]) => [cnpj, nome]))
+        );
       }
     } catch (err) {
-      setError("Erro ao carregar os clientes. Tente novamente.");
+      setError("Erro ao carregar clientes");
+      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -116,13 +307,12 @@ function FunilTab() {
 
   useEffect(() => {
     carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }, []);
 
-  const moverPara = async (cnpj: string, novoStatus: CrmStatus) => {
+  const moverPara = async (cnpj: string, novoStatus: ClientesStatus) => {
     setMovendo(cnpj);
     try {
-      await atualizarCrm(cnpj, { status: novoStatus });
+      await atualizarClientes(cnpj, { status: novoStatus });
       await carregar();
     } catch {
       setError("Não foi possível mover esse registro. Tente novamente.");
@@ -131,67 +321,67 @@ function FunilTab() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="text-center py-12">
-        <p className="text-slate-500">Carregando clientes...</p>
-      </div>
-    );
-  }
-
   return (
-    <div>
+    <div className="space-y-5">
       {error && (
         <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {COLUNAS.map((coluna) => {
-          const registros = kanban[coluna.status] || [];
-          return (
-            <div key={coluna.status} className={`rounded-xl border ${coluna.cor} p-3 flex flex-col gap-2 min-h-[200px]`}>
-              <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-semibold text-slate-700">{coluna.label}</h2>
-                <span className="text-xs font-medium text-slate-500 bg-white rounded-full px-2 py-0.5">
-                  {registros.length}
-                </span>
-              </div>
+      {loading && (
+        <div className="text-center py-12">
+          <p className="text-slate-500">Carregando clientes...</p>
+        </div>
+      )}
 
-              {registros.length === 0 && (
-                <p className="text-xs text-slate-400 px-1 py-4 text-center">Nenhuma empresa aqui</p>
-              )}
-
-              {registros.map((r) => (
-                <div key={r.cnpj} className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm">
-                  <Link
-                    href={`/dashboard/empresa/${encodeURIComponent(r.cnpj)}`}
-                    className="text-sm font-medium text-slate-800 hover:text-indigo-600 line-clamp-2"
-                  >
-                    {nomes[r.cnpj] || r.cnpj}
-                  </Link>
-                  {r.notas && (
-                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">{r.notas}</p>
-                  )}
-                  <select
-                    className="mt-2 w-full text-xs border border-slate-200 rounded-md px-2 py-1 text-slate-600 disabled:opacity-50"
-                    value={r.status}
-                    disabled={movendo === r.cnpj}
-                    onChange={(e) => moverPara(r.cnpj, e.target.value as CrmStatus)}
-                  >
-                    {COLUNAS.map((c) => (
-                      <option key={c.status} value={c.status}>
-                        Mover para: {c.label}
-                      </option>
-                    ))}
-                  </select>
+      {!loading && (
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {COLUNAS.map((coluna) => {
+            const registros = kanban[coluna.status] || [];
+            return (
+              <div key={coluna.status} className={`rounded-xl border ${coluna.cor} p-3 flex flex-col gap-2 min-h-[200px]`}>
+                <div className="flex items-center justify-between px-1">
+                  <h2 className="text-sm font-semibold text-slate-700">{coluna.label}</h2>
+                  <span className="text-xs font-medium text-slate-500 bg-white rounded-full px-2 py-0.5">
+                    {registros.length}
+                  </span>
                 </div>
-              ))}
-            </div>
-          );
-        })}
-      </div>
+
+                {registros.length === 0 && (
+                  <p className="text-xs text-slate-400 px-1 py-4 text-center">Nenhuma empresa aqui</p>
+                )}
+
+                {registros.map((r) => (
+                  <div key={r.cnpj} className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm">
+                    <Link
+                      href={`/dashboard/empresa/${encodeURIComponent(r.cnpj)}`}
+                      className="text-sm font-medium text-slate-800 hover:text-indigo-600 line-clamp-2"
+                    >
+                      {nomes[r.cnpj] || r.cnpj}
+                    </Link>
+                    {r.notas && (
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{r.notas}</p>
+                    )}
+                    <select
+                      className="mt-2 w-full text-xs border border-slate-200 rounded-md px-2 py-1 text-slate-600 disabled:opacity-50"
+                      value={r.status}
+                      disabled={movendo === r.cnpj}
+                      onChange={(e) => moverPara(r.cnpj, e.target.value as ClientesStatus)}
+                    >
+                      {COLUNAS.map((c) => (
+                        <option key={c.status} value={c.status}>
+                          Mover para: {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -470,7 +660,7 @@ function MonitorTab() {
   );
 }
 
-export default function CrmPage() {
+export default function ClientesPage() {
   const [aba, setAba] = useState<"funil" | "monitor">("funil");
 
   return (

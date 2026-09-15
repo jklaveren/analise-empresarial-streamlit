@@ -1,13 +1,99 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listarTemplates, criarTemplate, atualizarTemplate, deletarTemplate, enviarTesteTemplate, uploadTemplateImagem, Template } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const CATEGORIAS = ["todos", "tecnologia", "comercio", "industria", "servicos"];
 
+const CAT_COR: Record<string, string> = {
+  todos: "bg-slate-100 text-slate-600",
+  tecnologia: "bg-indigo-50 text-indigo-700",
+  comercio: "bg-amber-50 text-amber-700",
+  industria: "bg-sky-50 text-sky-700",
+  servicos: "bg-emerald-50 text-emerald-700",
+};
+
+// Variaveis suportadas pelo mailer (backend/mailer/service.py::_render_template)
+const VARIAVEIS: { key: string; desc: string }[] = [
+  { key: "empresa", desc: "Razão social da empresa" },
+  { key: "nome_fantasia", desc: "Nome fantasia" },
+  { key: "cnpj", desc: "CNPJ completo" },
+  { key: "cidade", desc: "Município da empresa" },
+  { key: "cnae", desc: "Código CNAE" },
+  { key: "cnae_descricao", desc: "Descrição do CNAE" },
+  { key: "tema", desc: "Tema por categoria (ex.: transformação digital)" },
+  { key: "categoria", desc: "Descrição da categoria" },
+  { key: "porte", desc: "Porte da empresa" },
+  { key: "imagem", desc: "Imagem do template (card)" },
+];
+
+// Mesmos valores de exemplo usados no envio de teste do backend
+const EXEMPLO: Record<string, string> = {
+  empresa: "Empresa Exemplo LTDA",
+  nome_fantasia: "Exemplo",
+  cnpj: "00000000000000",
+  cidade: "Porto Alegre",
+  cnae: "6201-5/01",
+  cnae_descricao: "Desenvolvimento de software",
+  tema: "inteligência comercial e oportunidades de negócio",
+  categoria: "soluções de negócio",
+  porte: "DEMAIS",
+  imagem: "",
+};
+
 type FormState = { nome: string; assunto: string; corpo_html: string; corpo_texto: string; categoria_cnae: string };
 const VAZIO: FormState = { nome: "", assunto: "", corpo_html: "", corpo_texto: "", categoria_cnae: "todos" };
+
+// Modelos prontos: o usuario comeca de um deles e edita livremente.
+const PRESETS: { nome: string; assunto: string; categoria_cnae: string; corpo_html: string }[] = [
+  {
+    nome: "Primeiro contato",
+    assunto: "{{empresa}}: análise sem compromisso para {{cidade}}",
+    categoria_cnae: "todos",
+    corpo_html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+  <div style="background:#4f46e5;padding:20px 32px"><p style="margin:0;color:#ffffff;font-size:18px;font-weight:bold">WhoDados</p></div>
+  <div style="padding:32px">
+    <p style="margin:0 0 16px;color:#0f172a;font-size:16px">Olá, time da <strong>{{empresa}}</strong>!</p>
+    <p style="margin:0 0 16px;color:#334155;font-size:14px;line-height:1.6">Acompanhamos o mercado de {{cnae_descricao}} em {{cidade}} e identificamos oportunidades que podem impactar diretamente o resultado da {{empresa}}.</p>
+    {{imagem}}
+    <p style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6">Nosso escritório atua exatamente nesse ponto: {{tema}}. Posso te enviar uma análise rápida, sem compromisso?</p>
+    <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;text-decoration:none;font-size:14px;font-weight:bold;padding:12px 24px;border-radius:8px">Quero a análise</a>
+    <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;line-height:1.5">Você recebeu este e-mail por constar na base pública de empresas ativas. Para não receber mais, responda com &quot;sair&quot;.</p>
+  </div>
+</div>`,
+  },
+  {
+    nome: "Follow-up (2º toque)",
+    assunto: "Chegou a ver, {{empresa}}?",
+    categoria_cnae: "todos",
+    corpo_html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto">
+  <p style="margin:0 0 16px;color:#0f172a;font-size:16px">Olá, <strong>{{empresa}}</strong>!</p>
+  <p style="margin:0 0 12px;color:#334155;font-size:14px;line-height:1.6">Passando para saber se chegou a ver minha mensagem sobre {{tema}}.</p>
+  <p style="margin:0 0 16px;color:#334155;font-size:14px;line-height:1.6">Sei que a rotina em {{cnae_descricao}} é corrida, então vou direto ao ponto: <strong>empresas do seu porte em {{cidade}} estão deixando dinheiro na mesa</strong> — e a análise leva menos de 5 minutos.</p>
+  {{imagem}}
+  <p style="margin:0 0 20px;color:#334155;font-size:14px;line-height:1.6">Faz sentido você dar uma olhada essa semana?</p>
+  <a href="#" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-size:14px;font-weight:bold;padding:12px 24px;border-radius:8px">Sim, me envie a análise</a>
+  <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;line-height:1.5">Se não fizer sentido agora, me avise e não insisto mais.</p>
+</div>`,
+  },
+  {
+    nome: "Reativação de inativos",
+    assunto: "Ainda dá tempo de resolver isso, {{empresa}}",
+    categoria_cnae: "todos",
+    corpo_html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+  <div style="padding:24px 32px;background:#f8fafc;border-bottom:1px solid #e2e8f0"><p style="margin:0;color:#0f172a;font-size:16px;font-weight:bold">Vale a pena reabrir essa conversa</p></div>
+  <div style="padding:32px">
+    <p style="margin:0 0 16px;color:#0f172a;font-size:16px">Olá, <strong>{{empresa}}</strong>!</p>
+    <p style="margin:0 0 16px;color:#334155;font-size:14px;line-height:1.6">Há um tempo falamos sobre {{tema}} e como isso afeta empresas de {{cnae_descricao}}.</p>
+    <p style="margin:0 0 16px;color:#334155;font-size:14px;line-height:1.6">Desde então o cenário em {{cidade}} mudou bastante — e a janela para agir com tranquilidade está aberta agora.</p>
+    {{imagem}}
+    <p style="margin:0 0 20px"><a href="#" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;font-size:14px;font-weight:bold;padding:12px 24px;border-radius:8px">Retomar conversa</a></p>
+    <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;line-height:1.5">Não quer mais ouvir sobre isso? Responda &quot;cancelar&quot; e te tiro da lista.</p>
+  </div>
+</div>`,
+  },
+];
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -87,36 +173,57 @@ export default function TemplatesPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
-        <div><h1 className="text-2xl font-bold text-slate-800">Templates de Email</h1><p className="text-sm text-slate-500 mt-1">Gerencie seus modelos de comunicação</p></div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Templates de Email</h1>
+          <p className="text-sm text-slate-500 mt-1">Modelos com pré-visualização ao vivo, variáveis automáticas e teste antes do disparo</p>
+        </div>
         <button onClick={abrirNovo} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">+ Novo Template</button>
       </div>
+
+      {/* Busca + filtro por categoria */}
+      {templates.length > 0 && (
+        <div className="flex gap-2 mb-4 flex-wrap">
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por nome ou assunto…" className="flex-1 min-w-[200px] rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none" />
+          <select value={filtroCat} onChange={e => setFiltroCat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+            <option value="todas">Todas as categorias</option>
+            {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+      )}
+
       {loading && <div className="text-center py-12 text-slate-500">Carregando...</div>}
       {error && <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700 mb-4">{error}</div>}
       {!loading && templates.length === 0 && (
-        <div className="text-center py-16 text-slate-400"><div className="text-5xl mb-4">📝</div><p className="text-lg font-medium">Nenhum template cadastrado</p><p className="text-sm mt-1">Clique em &quot;Novo Template&quot; para criar o primeiro.</p></div>
+        <div className="text-center py-16 text-slate-400">
+          <div className="text-5xl mb-4">📝</div>
+          <p className="text-lg font-medium">Nenhum template cadastrado</p>
+          <p className="text-sm mt-1">Clique em &quot;Novo Template&quot; — você pode começar de um modelo pronto.</p>
+        </div>
       )}
-      {templates.length > 0 && (
-        <div className="grid gap-4">
-          {templates.map(t => (
-            <div key={t.id} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <h3 className="font-semibold text-slate-800 truncate">{t.nome}</h3>
-                    <span className="text-xs text-slate-400">#{t.id}</span>
-                    {t.categoria_cnae && t.categoria_cnae !== "todos" && <span className="text-[10px] uppercase bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{t.categoria_cnae}</span>}
-                    {t.tem_imagem && <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">🖼️ imagem</span>}
-                  </div>
-                  <p className="text-sm text-indigo-600 font-medium truncate">{t.assunto}</p>
-                  {t.created_at && <p className="text-xs text-slate-400 mt-1">Criado em {new Date(t.created_at).toLocaleDateString("pt-BR")}</p>}
+      {!loading && templates.length > 0 && templatesFiltrados.length === 0 && (
+        <div className="text-center py-12 text-slate-400 text-sm">Nenhum template encontrado para os filtros atuais.</div>
+      )}
+      {templatesFiltrados.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {templatesFiltrados.map(t => (
+            <div key={t.id} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow flex gap-4">
+              {t.tem_imagem
+                ? <img src={`${API_BASE}/api/v1/templates/${t.id}/imagem?v=${logoV}`} alt="" className="w-16 h-16 rounded-lg object-cover border border-slate-200 shrink-0" />
+                : <div className="w-16 h-16 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-2xl shrink-0">📝</div>}
+              <div className="flex-1 min-w-0 flex flex-col">
+                <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                  <h3 className="font-semibold text-slate-800 truncate">{t.nome}</h3>
+                  <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${CAT_COR[t.categoria_cnae || "todos"] || CAT_COR.todos}`}>{t.categoria_cnae || "todos"}</span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => handleTestar(t)} className="text-xs text-green-600 hover:underline px-1" title="Enviar teste">Testar</button>
-                  <button onClick={() => abrirEdicao(t)} className="text-xs text-indigo-600 hover:underline px-1" title="Editar">Editar</button>
-                  <button onClick={() => handleDelete(t.id!)} className="text-slate-400 hover:text-red-500 transition-colors p-1" title="Excluir">🗑️</button>
+                <p className="text-sm text-indigo-600 font-medium truncate">{t.assunto}</p>
+                <p className="text-xs text-slate-400 mt-1">{(t.corpo_html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Sem corpo"}</p>
+                <div className="mt-auto pt-3 flex items-center gap-2 flex-wrap">
+                  <button onClick={() => abrirTeste(t)} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✈️ Testar</button>
+                  <button onClick={() => abrirEdicao(t)} className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✏️ Editar</button>
+                  <button onClick={() => abrirDuplicar(t)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-medium transition-colors">⧉ Duplicar</button>
+                  <button onClick={() => handleDelete(t.id!)} className="text-xs text-slate-400 hover:text-red-500 px-1.5 py-1.5 transition-colors ml-auto" title="Excluir">🗑️</button>
                 </div>
               </div>
-              {t.corpo_html && <div className="mt-3 p-3 bg-slate-50 rounded-lg text-sm text-slate-600 max-h-24 overflow-hidden">{t.corpo_html.replace(/<[^>]+>/g, "").slice(0, 200)}...</div>}
             </div>
           ))}
         </div>
