@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import AcompanhamentoAtividade from "@/components/AcompanhamentoAtividade";
+import { useAuth } from "@/lib/auth-context";
 import {
   listarTodasAtividades, moverAtividadeCrm, deletarAtividadeCrm,
   criarAtividadeAvulsa, buscarEmpresaRapido, listarUsuariosOrg,
@@ -18,6 +20,41 @@ const TIPO_ICONE: Record<string, string> = {
   tarefa: "📋", ligacao: "📞", reuniao: "🗓️", email: "📧", outro: "•",
 };
 
+// Toda atividade ja' nasce com prazo (2 dias a frente) -- sem prazo ela nunca
+// fica vermelha e some do radar. Da' pra limpar ou trocar no formulario.
+function formVazio() {
+  return { titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: emDias(2), descricao: "" };
+}
+
+const SEMAFORO: Record<string, { ponto: string; barra: string; rotulo: string }> = {
+  verde:    { ponto: "bg-emerald-500", barra: "bg-emerald-500", rotulo: "No prazo" },
+  amarelo:  { ponto: "bg-amber-500",   barra: "bg-amber-500",   rotulo: "Vence logo" },
+  vermelho: { ponto: "bg-red-500",     barra: "bg-red-500",     rotulo: "Atrasada" },
+  cinza:    { ponto: "bg-slate-300",   barra: "bg-slate-300",   rotulo: "Concluída" },
+};
+
+function textoTempo(a: AtividadeCrm): string {
+  if (a.status === "concluida") return a.dias_aberta != null ? `fechada em ${a.dias_aberta}d` : "concluída";
+  if (a.dias_para_prazo != null) {
+    if (a.dias_para_prazo < 0) return `${Math.abs(a.dias_para_prazo)}d atrasada`;
+    if (a.dias_para_prazo === 0) return "vence hoje";
+    if (a.dias_para_prazo === 1) return "vence amanhã";
+    return `vence em ${a.dias_para_prazo}d`;
+  }
+  if (a.dias_aberta == null) return "";
+  return a.dias_aberta === 0 ? "aberta hoje" : `aberta há ${a.dias_aberta}d`;
+}
+
+function hojeISO(): string {
+  return emDias(0);
+}
+
+function emDias(dias: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + dias);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function formatPrazo(prazo: string | null): { texto: string; atrasado: boolean } {
   if (!prazo) return { texto: "", atrasado: false };
   const d = new Date(prazo + "T00:00:00");
@@ -29,12 +66,16 @@ export default function AtividadesPage() {
   const [atividades, setAtividades] = useState<AtividadeCrm[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState("");
+  const [aberta, setAberta] = useState<number | null>(null);
+  const { activeOrg } = useAuth();
+  // Empresa com base propria: nao ha o que buscar pra vincular.
+  const temBaseReceita = activeOrg?.usa_base_receita !== false;
   const [movendo, setMovendo] = useState<number | null>(null);
   const [filtroResp, setFiltroResp] = useState<string>("");
   const [usuarios, setUsuarios] = useState<UsuarioOrg[]>([]);
   const [formAberto, setFormAberto] = useState(false);
   const [salvando, setSalvando] = useState(false);
-  const [form, setForm] = useState({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+  const [form, setForm] = useState(() => formVazio());
   const [buscaEmpresa, setBuscaEmpresa] = useState("");
   const [sugestoes, setSugestoes] = useState<EmpresaBusca[]>([]);
   const [empresaVinculada, setEmpresaVinculada] = useState<EmpresaBusca | null>(null);
@@ -64,7 +105,7 @@ export default function AtividadesPage() {
   }, [buscaEmpresa]);
 
   const limparForm = () => {
-    setForm({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+    setForm(formVazio());
     setBuscaEmpresa(""); setSugestoes([]); setEmpresaVinculada(null);
   };
 
@@ -161,9 +202,41 @@ export default function AtividadesPage() {
               <option value="">Responsável...</option>
               {usuarios.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
             </select>
-            <input type="date" value={form.prazo} onChange={e => setForm({ ...form, prazo: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Prazo</label>
+              <input
+                type="date"
+                value={form.prazo}
+                min={hojeISO()}
+                onChange={e => setForm({ ...form, prazo: e.target.value })}
+                onClick={e => { try { (e.target as HTMLInputElement & { showPicker?: () => void }).showPicker?.(); } catch { /* navegador sem showPicker: abre pelo icone mesmo */ } }}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm cursor-pointer focus:border-indigo-500 outline-none"
+              />
+              <div className="flex gap-1 flex-wrap">
+                {[["Hoje", 0], ["Amanhã", 1], ["+7 dias", 7], ["+30 dias", 30]].map(([rotulo, dias]) => (
+                  <button
+                    key={rotulo as string}
+                    type="button"
+                    onClick={() => setForm({ ...form, prazo: emDias(dias as number) })}
+                    className={`text-[11px] px-2 py-0.5 rounded-full border transition ${
+                      form.prazo === emDias(dias as number)
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-white border-slate-200 text-slate-500 hover:border-indigo-400 hover:text-indigo-600"
+                    }`}
+                  >
+                    {rotulo as string}
+                  </button>
+                ))}
+                {form.prazo && (
+                  <button type="button" onClick={() => setForm({ ...form, prazo: "" })} className="text-[11px] px-2 py-0.5 text-slate-400 hover:text-red-600">
+                    limpar
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
+          {temBaseReceita && (
           <div className="relative">
             {empresaVinculada ? (
               <div className="flex items-center gap-2 text-sm bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
@@ -195,6 +268,7 @@ export default function AtividadesPage() {
               </div>
             )}
           </div>
+          )}
 
           <textarea
             placeholder="Detalhes (opcional)"
@@ -234,7 +308,9 @@ export default function AtividadesPage() {
                 {itens.map(a => {
                   const prazo = formatPrazo(a.prazo);
                   return (
-                    <div key={a.id} className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm">
+                    <div key={a.id} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                      <div className={`h-1 ${(SEMAFORO[a.semaforo] || SEMAFORO.cinza).barra}`} />
+                      <div className="p-3">
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-sm font-medium text-slate-800">
                           {TIPO_ICONE[a.tipo] || "•"} {a.titulo}
@@ -255,6 +331,13 @@ export default function AtividadesPage() {
                             {prazo.atrasado && a.status !== "concluida" ? "⚠️ " : ""}{prazo.texto}
                           </span>
                         )}
+                        <span
+                          className="text-xs text-slate-500 inline-flex items-center gap-1"
+                          title={(SEMAFORO[a.semaforo] || SEMAFORO.cinza).rotulo}
+                        >
+                          <span className={`inline-block w-2 h-2 rounded-full ${(SEMAFORO[a.semaforo] || SEMAFORO.cinza).ponto}`} />
+                          {textoTempo(a)}
+                        </span>
                       </div>
                       <select
                         value={a.status}
@@ -266,6 +349,15 @@ export default function AtividadesPage() {
                           <option key={c.status} value={c.status}>Mover para: {c.label}</option>
                         ))}
                       </select>
+                      <button
+                        type="button"
+                        onClick={() => setAberta(aberta === a.id ? null : a.id)}
+                        className="mt-1.5 w-full text-xs text-slate-500 hover:text-indigo-600 text-left"
+                      >
+                        {aberta === a.id ? "▾ Fechar acompanhamento" : `▸ Acompanhamento${a.n_historico ? ` (${a.n_historico})` : ""}`}
+                      </button>
+                      {aberta === a.id && <AcompanhamentoAtividade atividade={a} onMudou={carregar} />}
+                      </div>
                     </div>
                   );
                 })}

@@ -47,6 +47,19 @@ def get_active_org(
     return orgs[0]["id"]
 
 
+
+def require_base_receita(org_id: int = Depends(get_active_org)) -> int:
+    """Bloqueia os endpoints de prospeccao para empresas que nao usam a base
+    da Receita Federal (ex.: JehJuh, que tem base propria). E' flag da
+    EMPRESA, nao do usuario: qualquer um que entrar nela nao ve a base."""
+    from ..db.service import org_usa_base_receita
+    if not org_usa_base_receita(org_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta empresa nao usa a base da Receita Federal",
+        )
+    return org_id
+
 def get_papel_ativo(
     current_user: Dict = Depends(get_current_user),
     org_id: int = Depends(get_active_org),

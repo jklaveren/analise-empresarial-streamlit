@@ -185,6 +185,54 @@ def _rodape_descadastro(email_dest: str) -> Dict[str, str]:
     return {"html": html, "texto": texto}
 
 
+def montar_email_para_cnpj(
+    template: Dict, cnpj: str, email_dest: str,
+    dados: Optional[Dict[str, str]] = None, organizacao_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Monta o e-mail FINAL de um destinatario: variaveis substituidas +
+    assinatura da empresa + rodape de descadastro (LGPD).
+
+    E' o mesmo caminho usado no envio real -- o preview chama esta funcao
+    justamente pra mostrar o que vai sair, e nao uma aproximacao."""
+    dados = dados or {}
+    cnae = dados.get("cnae_principal") or dados.get("cnae")
+    categoria = classificar_cnae(cnae) if cnae else "servicos"
+
+    template_id_base = template.get("id") or template.get("template_id")
+    tpl = (_obter_template_para_cnpj(template_id_base, cnae) if template_id_base else template) or template
+
+    empresa = dados.get("razao_social") or dados.get("nome_fantasia") or cnpj
+    nome_socio = (dados.get("nome_socio") or "").strip()
+    # Saudacao inteligente: primeiro nome do socio responsavel (mais
+    # pessoal -- "Oi, Joao!") quando existir, senao cai pro nome da
+    # empresa. Nome da RF vem em CAIXA ALTA; .title() deixa apresentavel.
+    saudacao = nome_socio.split()[0].title() if nome_socio else empresa
+    vars_dict = {
+        "empresa": empresa,
+        "saudacao": saudacao,
+        "nome_socio": nome_socio.title() if nome_socio else "",
+        "cnpj": cnpj,
+        "cidade": dados.get("municipio") or "",
+        "cnae": cnae or "",
+        "cnae_descricao": dados.get("cnae_descricao") or cnae or "",
+        "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
+        "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
+        "nome_fantasia": dados.get("nome_fantasia") or "",
+        "porte": dados.get("porte_nome") or "",
+        "imagem": tpl.get("imagem_url") or "",
+    }
+    rendered = _render_template(tpl, vars_dict)
+    rodape = _rodape_descadastro(email_dest)
+    return {
+        "assunto": rendered.get("assunto", ""),
+        "corpo_html": rendered.get("corpo_html", "") + _assinatura_da_org(organizacao_id) + rodape["html"],
+        "corpo_texto": (rendered.get("corpo_texto") or "") + rodape["texto"],
+        "template_usado": tpl.get("nome", ""),
+        "categoria_cnae": categoria,
+        "variaveis": vars_dict,
+    }
+
+
 def enviar_template_para_cnpjs(
     campanha_id: Optional[int],
     template: Dict,
@@ -215,49 +263,19 @@ def enviar_template_para_cnpjs(
             resultados["descadastrados"] += 1
             continue
         dados = dados_map.get(cnpj, {})
-        cnae = dados.get("cnae_principal") or dados.get("cnae")
-        categoria = classificar_cnae(cnae) if cnae else "servicos"
-
-        tpl = _obter_template_para_cnpj(template_id_base, cnae) if template_id_base else template
-        if not tpl:
-            tpl = template
-
-        empresa = dados.get("razao_social") or dados.get("nome_fantasia") or cnpj
-        cidade = dados.get("municipio") or ""
-        nome_socio = (dados.get("nome_socio") or "").strip()
-        # Saudacao inteligente: primeiro nome do socio responsavel (mais
-        # pessoal -- "Oi, Joao!") quando existir, senao cai pro nome da
-        # empresa. Nome da RF vem em CAIXA ALTA; .title() deixa apresentavel
-        # ("JOAO CARLOS" -> "Joao").
-        saudacao = nome_socio.split()[0].title() if nome_socio else empresa
-        vars_dict = {
-            "empresa": empresa,
-            "saudacao": saudacao,
-            "nome_socio": nome_socio.title() if nome_socio else "",
-            "cnpj": cnpj,
-            "cidade": cidade,
-            "cnae": cnae or "",
-            "cnae_descricao": dados.get("cnae_descricao") or cnae or "",
-            "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
-            "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
-            "nome_fantasia": dados.get("nome_fantasia") or "",
-            "porte": dados.get("porte_nome") or "",
-            "imagem": tpl.get("imagem_url") or "",
-        }
-        rendered = _render_template(tpl, vars_dict)
+        montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id)
+        categoria = montado["categoria_cnae"]
+        tpl = {"nome": montado["template_usado"]}
 
         email_rec = None
         if campanha_id:
             try:
-                email_rec = create_email_enviado(campanha_id, cnpj, email_dest, rendered.get("assunto", ""))
+                email_rec = create_email_enviado(campanha_id, cnpj, email_dest, montado["assunto"])
             except Exception:
                 pass
 
-        rodape = _rodape_descadastro(email_dest)
         result = enviar_email(
-            email_dest, rendered.get("assunto", ""),
-            rendered.get("corpo_html", "") + assinatura + rodape["html"],
-            (rendered.get("corpo_texto") or "") + rodape["texto"],
+            email_dest, montado["assunto"], montado["corpo_html"], montado["corpo_texto"],
             smtp=smtp_cfg,
         )
         if result.get("sucesso"):
@@ -303,6 +321,43 @@ def enviar_campanha(
     organizacao_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     return enviar_template_para_cnpjs(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=organizacao_id)
+
+
+
+def notificar_tarefa_por_email(
+    para: str, titulo: str, mensagem: str, organizacao_id: Optional[int] = None,
+    prazo: Optional[str] = None, atribuida_por: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Manda o aviso de tarefa pro e-mail cadastrado do usuario, usando o SMTP
+    da propria empresa. Sem e-mail cadastrado (ou SMTP nao configurado), a
+    notificacao no app continua valendo -- isto aqui e' um extra, nunca pode
+    derrubar a criacao da tarefa."""
+    if not para:
+        return {"sucesso": False, "motivo": "usuario sem e-mail cadastrado"}
+    detalhes = []
+    if atribuida_por:
+        detalhes.append(f"<p style='margin:4px 0;color:#475569'>Atribuída por <b>{atribuida_por}</b></p>")
+    if prazo:
+        detalhes.append(f"<p style='margin:4px 0;color:#475569'>Prazo: <b>{prazo}</b></p>")
+    html = f"""
+    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px">
+      <p style="color:#64748b;font-size:13px;margin:0 0 12px">WhoDados · nova tarefa pra você</p>
+      <h2 style="margin:0 0 8px;color:#1e293b;font-size:18px">{titulo}</h2>
+      {''.join(detalhes)}
+      <p style="margin:12px 0;color:#334155;white-space:pre-wrap">{mensagem or ''}</p>
+      <p style="margin-top:20px;font-size:12px;color:#94a3b8">
+        Você recebeu este aviso porque é o responsável por esta atividade no WhoDados.
+      </p>
+    </div>"""
+    partes = [titulo, "", mensagem or ""]
+    if prazo:
+        partes.append(f"Prazo: {prazo}")
+    texto = "\n".join(partes)
+    try:
+        return enviar_email(para, f"[WhoDados] {titulo}", html, texto, smtp=_smtp_da_org(organizacao_id))
+    except Exception as e:  # nunca deixa o e-mail quebrar a criacao da tarefa
+        log.warning(f"Falha ao notificar tarefa por e-mail para {para}: {e}")
+        return {"sucesso": False, "erro": str(e)}
 
 
 def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None, dados_empresa: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

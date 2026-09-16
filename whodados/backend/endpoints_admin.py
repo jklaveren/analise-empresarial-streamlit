@@ -11,6 +11,7 @@ from .db import (
     get_pipeline_metadata, get_sla_config, set_sla_config,
     list_all_users, update_user_flags, delete_user, update_user_email,
     listar_todas_organizacoes, get_orgs_do_user_id, definir_acesso_usuario_orgs,
+    criar_organizacao, renomear_organizacao,
     get_org_smtp_config, set_org_smtp_config, set_org_logo,
 )
 from .auth import criar_usuario, hash_senha
@@ -113,6 +114,22 @@ async def update_sla(data: Dict, current_user: Dict = Depends(require_admin)) ->
 
 
 # ==================== EMPRESAS (ORGANIZACOES) ====================
+
+@router.post("/organizacoes")
+async def admin_criar_organizacao(data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Cria uma empresa nova. O nome pode ser trocado depois; o slug fica."""
+    try:
+        return criar_organizacao(data.get("nome", ""), data.get("slug"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/organizacoes/{organizacao_id}")
+async def admin_renomear_organizacao(organizacao_id: int, data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    if not renomear_organizacao(organizacao_id, data.get("nome", "")):
+        raise HTTPException(status_code=400, detail="Nome invalido ou empresa nao encontrada")
+    return {"ok": True}
+
 
 @router.get("/organizacoes")
 async def admin_listar_organizacoes(current_user: Dict = Depends(require_admin)) -> List[Dict[str, Any]]:

@@ -11,9 +11,10 @@ from .db import (
     create_template, get_template, get_all_templates,
     update_template, delete_template, get_templates_by_categoria,
     set_template_imagem, get_template_imagem, clear_template_imagem,
-    get_empresa_by_cnpj_db,
+    get_empresa_by_cnpj_db, listar_empresas_db, buscar_socios_principais,
+    org_usa_base_receita,
 )
-from .mailer import enviar_email_teste
+from .mailer import enviar_email_teste, montar_email_para_cnpj
 
 router = APIRouter(prefix="/api/v1")
 
@@ -96,6 +97,69 @@ async def enviar_teste(template_id: int, data: Dict, current_user: Dict = Depend
 
 _IMAGEM_MAX_BYTES = 3 * 1024 * 1024  # 3 MB
 _IMAGEM_TIPOS_OK = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
+
+
+@router.post("/templates/{template_id}/preview")
+async def preview_template(
+    template_id: int, data: Dict = None,
+    current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org),
+):
+    """Mostra o e-mail EXATAMENTE como vai sair: variaveis ja' substituidas
+    com dados de uma empresa real, assinatura da empresa e rodape de
+    descadastro (LGPD) incluidos.
+
+    Usa montar_email_para_cnpj -- a mesma funcao do envio -- justamente pra
+    o que aparece aqui nao ser uma aproximacao do que o destinatario recebe.
+    Sem 'cnpj' no corpo, pega uma empresa da base pra servir de amostra.
+    """
+    data = data or {}
+    template = get_template(template_id, organizacao_id=org_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template nao encontrado")
+
+    # Empresa com base propria nao pode ver dado da Receita nem de amostra --
+    # o preview usaria uma empresa real da base compartilhada. Ai o exemplo e'
+    # ficticio: serve pra conferir o texto, sem vazar dado de outra empresa.
+    if not org_usa_base_receita(org_id):
+        exemplo = {
+            "cnpj_completo": "00000000000000",
+            "razao_social": "Empresa Exemplo Ltda",
+            "municipio": "Porto Alegre", "cnae_principal": "", "porte_nome": "",
+        }
+        montado = montar_email_para_cnpj(
+            template, exemplo["cnpj_completo"], "contato@exemplo.com.br",
+            {k: v for k, v in exemplo.items() if k != "cnpj_completo"}, organizacao_id=org_id,
+        )
+        montado.update({"destinatario": "contato@exemplo.com.br",
+                        "empresa": exemplo["razao_social"], "cnpj": exemplo["cnpj_completo"]})
+        return montado
+
+    cnpj = (data.get("cnpj") or "").strip()
+    empresa = get_empresa_by_cnpj_db(cnpj) if cnpj else None
+    if not empresa:
+        # Amostra: primeira empresa com e-mail no filtro padrao, pra o
+        # preview ter nome, cidade e CNAE de verdade.
+        amostra = listar_empresas_db(limit=1, offset=0)
+        empresa = amostra[0] if amostra else None
+    if not empresa:
+        raise HTTPException(status_code=400, detail="Sem empresa de amostra para o preview")
+
+    cnpj = empresa.get("cnpj_completo") or cnpj
+    socios = buscar_socios_principais([cnpj[:8]]) if cnpj else {}
+    dados = {
+        "razao_social": empresa.get("razao_social", ""),
+        "nome_fantasia": empresa.get("nome_fantasia", ""),
+        "municipio": empresa.get("municipio", ""),
+        "cnae_principal": empresa.get("cnae_principal", ""),
+        "porte_nome": empresa.get("porte_nome", ""),
+        "nome_socio": socios.get(cnpj[:8], ""),
+    }
+    email_dest = (empresa.get("email") or "").strip() or f"contato@{cnpj[:8]}.com.br"
+    montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id=org_id)
+    montado["destinatario"] = email_dest
+    montado["empresa"] = empresa.get("razao_social") or cnpj
+    montado["cnpj"] = cnpj
+    return montado
 
 
 @router.post("/templates/{template_id}/imagem")

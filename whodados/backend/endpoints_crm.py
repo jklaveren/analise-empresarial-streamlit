@@ -21,7 +21,10 @@ from .db import (
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,
     listar_todas_atividades, mover_atividade_crm, buscar_empresas_rapido,
+    registrar_historico_atividade, listar_historico_atividade,
+    atualizar_prazo_atividade, get_status_atividade,
 )
+from .mailer import notificar_tarefa_por_email
 
 router = APIRouter(prefix="/api/v1")
 
@@ -100,13 +103,20 @@ def _criar_atividade(data: Dict, cnpj: Optional[str], current_user: Dict, org_id
         responsavel_user_id=data.get("responsavel_user_id"), prazo=data.get("prazo"),
     )
     if data.get("responsavel_user_id"):
-        usuarios = {u["id"]: u["username"] for u in listar_usuarios_da_org(org_id)}
-        responsavel_username = usuarios.get(data["responsavel_user_id"])
-        if responsavel_username:
+        usuarios = {u["id"]: u for u in listar_usuarios_da_org(org_id)}
+        responsavel = usuarios.get(data["responsavel_user_id"])
+        if responsavel:
+            corpo = data.get("descricao") or f"Atribuida por {current_user.get('sub')}"
             create_notificacao(
-                "tarefa_atribuida", f"Nova tarefa: {titulo}",
-                data.get("descricao") or f"Atribuida por {current_user.get('sub')}",
-                cnpj=cnpj, user_id=responsavel_username, organizacao_id=org_id,
+                "tarefa_atribuida", f"Nova tarefa: {titulo}", corpo,
+                cnpj=cnpj, user_id=responsavel["username"], organizacao_id=org_id,
+            )
+            # Aviso tambem no e-mail cadastrado do usuario -- quem recebe
+            # tarefa nem sempre esta' com o app aberto. Falha aqui nao
+            # derruba a criacao: a notificacao no app ja' foi gravada.
+            notificar_tarefa_por_email(
+                responsavel.get("email"), titulo, corpo, organizacao_id=org_id,
+                prazo=data.get("prazo"), atribuida_por=current_user.get("sub"),
             )
     return atividade
 
@@ -120,8 +130,13 @@ async def crm_criar_atividade_avulsa(data: Dict, current_user: Dict = Depends(ge
 
 @router.post("/crm/atividades/{atividade_id}/concluir")
 async def crm_concluir_atividade(atividade_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    anterior = get_status_atividade(atividade_id, org_id)
     if not concluir_atividade_crm(atividade_id, org_id):
         raise HTTPException(status_code=404, detail="Atividade nao encontrada")
+    if anterior != "concluida":
+        registrar_historico_atividade(
+            atividade_id, "status", current_user.get("sub"), de=anterior, para="concluida"
+        )
     return {"ok": True}
 
 
@@ -129,8 +144,43 @@ async def crm_concluir_atividade(atividade_id: int, current_user: Dict = Depends
 async def crm_mover_atividade(atividade_id: int, data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
     """Move a atividade entre colunas do board (pendente / em_andamento / concluida)."""
     status = data.get("status")
+    anterior = get_status_atividade(atividade_id, org_id)
     if not mover_atividade_crm(atividade_id, org_id, status):
         raise HTTPException(status_code=400, detail="Atividade nao encontrada ou status invalido")
+    if anterior != status:
+        registrar_historico_atividade(
+            atividade_id, "status", current_user.get("sub"), de=anterior, para=status
+        )
+    return {"ok": True}
+
+
+@router.get("/crm/atividades/{atividade_id}/historico")
+async def crm_historico_atividade(atividade_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Acompanhamento da tarefa: comentarios + mudancas de status/prazo."""
+    return listar_historico_atividade(atividade_id, org_id)
+
+
+@router.post("/crm/atividades/{atividade_id}/comentario")
+async def crm_comentar_atividade(atividade_id: int, data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    texto = (data.get("texto") or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="Comentario vazio")
+    if get_status_atividade(atividade_id, org_id) is None:
+        raise HTTPException(status_code=404, detail="Atividade nao encontrada")
+    return registrar_historico_atividade(atividade_id, "comentario", current_user.get("sub"), texto=texto)
+
+
+@router.post("/crm/atividades/{atividade_id}/prazo")
+async def crm_alterar_prazo_atividade(atividade_id: int, data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Novo prazo (YYYY-MM-DD, ou vazio pra tirar). Fica no historico."""
+    novo = (data.get("prazo") or "").strip() or None
+    anterior = atualizar_prazo_atividade(atividade_id, org_id, novo)
+    if anterior is None:
+        raise HTTPException(status_code=404, detail="Atividade nao encontrada")
+    if anterior != (novo or ""):
+        registrar_historico_atividade(
+            atividade_id, "prazo", current_user.get("sub"), de=anterior or None, para=novo
+        )
     return {"ok": True}
 
 

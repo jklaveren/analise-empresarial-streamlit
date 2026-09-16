@@ -1,4 +1,6 @@
 ﻿"use client";
+
+import PreviewTemplate from "@/components/PreviewTemplate";
 import { useEffect, useState } from "react";
 import {
   listarCampanhas, criarCampanha, executarCampanha, deletarCampanha,
@@ -96,6 +98,7 @@ function resumoFiltros(f: any): string[] {
 export default function CampanhasPage() {
   const [campanhas, setCampanhas] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
+  const [previewId, setPreviewId] = useState<number | null>(null);
   const [opcoes, setOpcoes] = useState<{ cidades: string[]; cnaes: string[]; portes: string[] }>({ cidades: [], cnaes: [], portes: [] });
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState("");
@@ -306,6 +309,12 @@ export default function CampanhasPage() {
                     <option value={0}>Selecione…</option>
                     {templates.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
                   </select>
+                  {form.template_id > 0 && (
+                    <button type="button" onClick={() => setPreviewId(form.template_id)}
+                      className="mt-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                      👁️ Ver como o e-mail vai chegar
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div>
@@ -377,6 +386,7 @@ export default function CampanhasPage() {
           </div>
         </div>
       )}
+      {previewId !== null && <PreviewTemplate templateId={previewId} onFechar={() => setPreviewId(null)} />}
     </div>
   );
 }

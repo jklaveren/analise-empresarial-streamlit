@@ -13,7 +13,7 @@ Todos os endpoints aceitam os mesmos filtros via query string (repetiveis):
 from fastapi import APIRouter, Depends, Query
 from typing import Any, Dict, List, Optional
 
-from .auth import get_current_user
+from .auth import get_current_user, require_base_receita
 from .db import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
     analytics_top_empresas, analytics_socios_ranking, analytics_socio_detalhe,
@@ -52,6 +52,7 @@ def filtros_comuns(
 async def resumo(
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> Dict[str, Any]:
     """Indicadores-chave da base filtrada (os KPIs da Home)."""
     return analytics_resumo(**filtros)
@@ -62,6 +63,7 @@ async def por_cidade(
     limite: int = Query(20, ge=1, le=200),
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Ranking por municipio: qtd de empresas, capital e divida."""
     return analytics_por_cidade(limite=limite, **filtros)
@@ -72,6 +74,7 @@ async def por_setor(
     limite: int = Query(20, ge=1, le=200),
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Ranking por CNAE (com descricao): qtd, capital, divida, divida media."""
     return analytics_por_setor(limite=limite, **filtros)
@@ -81,6 +84,7 @@ async def por_setor(
 async def por_porte(
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Distribuicao por porte da empresa."""
     return analytics_por_porte(**filtros)
@@ -92,6 +96,7 @@ async def top_empresas(
     limite: int = Query(10, ge=1, le=100),
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Maiores empresas por divida ou capital social."""
     return analytics_top_empresas(ordenar_por=ordenar_por, limite=limite, **filtros)
@@ -102,6 +107,7 @@ async def socios_ranking(
     limite: int = Query(50, ge=1, le=200),
     filtros: Dict = Depends(filtros_comuns),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Ranking de socios pelo passivo acumulado das empresas vinculadas."""
     return analytics_socios_ranking(limite=limite, **filtros)
@@ -111,6 +117,7 @@ async def socios_ranking(
 async def socio_detalhe(
     nome: str = Query(..., min_length=2),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> List[Dict[str, Any]]:
     """Empresas vinculadas a um socio especifico (drill-down)."""
     return analytics_socio_detalhe(nome)
@@ -119,6 +126,7 @@ async def socio_detalhe(
 @router.get("/opcoes-filtro")
 async def opcoes_filtro(
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ) -> Dict[str, Any]:
     """Valores para popular os multiselects (cidades, portes, cnaes)."""
     return analytics_opcoes_filtro()

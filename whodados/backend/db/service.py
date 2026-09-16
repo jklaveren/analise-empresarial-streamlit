@@ -971,7 +971,7 @@ def listar_organizacoes_do_usuario(username: str) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT o.id, o.nome, o.slug, o.ativo, uo.papel
+            SELECT o.id, o.nome, o.slug, o.ativo, o.usa_base_receita, uo.papel
             FROM organizacoes o
             JOIN usuario_organizacoes uo ON uo.organizacao_id = o.id
             JOIN app_users u ON u.id = uo.user_id
@@ -1024,6 +1024,47 @@ def usuario_tem_acesso_org(username: str, organizacao_id: int) -> bool:
             (username, organizacao_id),
         )
         return cur.fetchone() is not None
+
+
+def org_usa_base_receita(organizacao_id: int) -> bool:
+    """True quando a empresa prospecta sobre a base da Receita Federal.
+    Default TRUE -- so' quem for marcado explicitamente fica de fora."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COALESCE(usa_base_receita, TRUE) AS usa FROM organizacoes WHERE id = %s", (organizacao_id,))
+        row = cur.fetchone()
+        return bool(row["usa"]) if row else True
+
+
+def criar_organizacao(nome: str, slug: Optional[str] = None) -> Dict[str, Any]:
+    """Cria uma empresa (organizacao). Slug e' derivado do nome quando nao
+    informado -- e' o identificador estavel, o nome pode mudar depois."""
+    nome = (nome or "").strip()
+    if not nome:
+        raise ValueError("Nome e' obrigatorio")
+    if not slug:
+        slug = re.sub(r"[^a-z0-9]+", "-", nome.lower()).strip("-")[:60] or "empresa"
+    with get_db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO organizacoes (nome, slug) VALUES (%s, %s) "
+            "ON CONFLICT (slug) DO NOTHING RETURNING id, nome, slug, ativo",
+            (nome, slug),
+        )
+        row = cur.fetchone()
+        if row:
+            return row
+        cur.execute("SELECT id, nome, slug, ativo FROM organizacoes WHERE slug = %s", (slug,))
+        return cur.fetchone()
+
+
+def renomear_organizacao(organizacao_id: int, nome: str) -> bool:
+    """Muda so' o nome exibido. O slug continua o mesmo de proposito: e' o
+    que amarra os dados (CRM, campanhas) a empresa."""
+    nome = (nome or "").strip()
+    if not nome:
+        return False
+    with get_db_cursor() as cur:
+        cur.execute("UPDATE organizacoes SET nome = %s WHERE id = %s", (nome, organizacao_id))
+        return cur.rowcount > 0
 
 
 def listar_todas_organizacoes() -> List[Dict[str, Any]]:
@@ -1552,7 +1593,7 @@ def listar_usuarios_da_org(organizacao_id: int) -> List[Dict[str, Any]]:
     mesma organizacao ativa -- ex.: os socios da SVYP)."""
     with get_db_cursor() as cur:
         cur.execute(
-            """SELECT u.id, u.username
+            """SELECT u.id, u.username, u.email
                FROM app_users u
                JOIN usuario_organizacoes uo ON uo.user_id = u.id
                WHERE uo.organizacao_id = %s AND u.is_active = TRUE
@@ -1577,13 +1618,38 @@ def criar_atividade_crm(
         return cur.fetchone()
 
 
+# Semaforo das atividades -- mesma ideia do monitor de e-mails (verde/amarelo/
+# vermelho), mas medindo o prazo da tarefa em vez do tempo sem resposta:
+#   cinza    = concluida
+#   vermelho = venceu (ou, sem prazo, esta' aberta ha' mais de 14 dias)
+#   amarelo  = vence hoje ou amanha (ou aberta ha' mais de 7 dias sem prazo)
+#   verde    = no prazo
+ATIVIDADE_SEMAFORO_SQL = """
+    CASE
+        WHEN a.status = 'concluida' THEN 'cinza'
+        WHEN a.prazo IS NOT NULL AND a.prazo < CURRENT_DATE THEN 'vermelho'
+        WHEN a.prazo IS NOT NULL AND a.prazo <= CURRENT_DATE + 1 THEN 'amarelo'
+        WHEN a.prazo IS NOT NULL THEN 'verde'
+        WHEN a.criado_em < NOW() - INTERVAL '14 days' THEN 'vermelho'
+        WHEN a.criado_em < NOW() - INTERVAL '7 days' THEN 'amarelo'
+        ELSE 'verde'
+    END AS semaforo"""
+
+# Tempo decorrido: dias em aberto e dias ate'/desde o prazo (negativo = atrasada)
+ATIVIDADE_TEMPO_SQL = """
+    FLOOR(EXTRACT(EPOCH FROM (COALESCE(a.concluido_em, NOW()) - a.criado_em)) / 86400.0)::int AS dias_aberta,
+    CASE WHEN a.prazo IS NULL THEN NULL ELSE (a.prazo - CURRENT_DATE) END AS dias_para_prazo"""
+
+
 def listar_todas_atividades(organizacao_id: int) -> List[Dict[str, Any]]:
     """Todas as atividades da organizacao, com nome da empresa resolvido --
     base do board tipo Trello (visao agregada, nao so' por empresa)."""
     with get_db_cursor() as cur:
         cur.execute(
-            """SELECT a.*, u.username AS responsavel_username,
-                      COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", a.cnpj) AS razao_social
+            f"""SELECT a.*, u.username AS responsavel_username,
+                      COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", a.cnpj) AS razao_social,
+                      {ATIVIDADE_SEMAFORO_SQL}, {ATIVIDADE_TEMPO_SQL},
+                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico
                FROM crm_atividades a
                LEFT JOIN app_users u ON u.id = a.responsavel_user_id
                LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = a.cnpj
@@ -1592,6 +1658,63 @@ def listar_todas_atividades(organizacao_id: int) -> List[Dict[str, Any]]:
             (organizacao_id,),
         )
         return cur.fetchall()
+
+
+def registrar_historico_atividade(
+    atividade_id: int, tipo: str, autor: str,
+    texto: Optional[str] = None, de: Optional[str] = None, para: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Uma linha do acompanhamento. tipo: 'comentario' | 'status' | 'prazo'."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO crm_atividade_historico (atividade_id, tipo, texto, de, para, autor)
+               VALUES (%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (atividade_id, tipo, texto, de, para, autor),
+        )
+        return cur.fetchone()
+
+
+def listar_historico_atividade(atividade_id: int, organizacao_id: int) -> List[Dict[str, Any]]:
+    """Historico em ordem cronologica. Passa pela organizacao de proposito --
+    ninguem le' o acompanhamento de uma tarefa de outra empresa."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT h.* FROM crm_atividade_historico h
+               JOIN crm_atividades a ON a.id = h.atividade_id
+               WHERE h.atividade_id = %s AND a.organizacao_id = %s
+               ORDER BY h.criado_em ASC""",
+            (atividade_id, organizacao_id),
+        )
+        return cur.fetchall()
+
+
+def atualizar_prazo_atividade(atividade_id: int, organizacao_id: int, prazo: Optional[str]) -> Optional[str]:
+    """Troca o prazo e devolve o prazo ANTERIOR (pra registrar no historico).
+    Devolve None quando a atividade nao e' da organizacao."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT prazo FROM crm_atividades WHERE id = %s AND organizacao_id = %s",
+            (atividade_id, organizacao_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        anterior = row["prazo"].isoformat() if row["prazo"] else ""
+        cur.execute(
+            "UPDATE crm_atividades SET prazo = %s WHERE id = %s AND organizacao_id = %s",
+            (prazo or None, atividade_id, organizacao_id),
+        )
+        return anterior
+
+
+def get_status_atividade(atividade_id: int, organizacao_id: int) -> Optional[str]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT status FROM crm_atividades WHERE id = %s AND organizacao_id = %s",
+            (atividade_id, organizacao_id),
+        )
+        row = cur.fetchone()
+        return row["status"] if row else None
 
 
 def mover_atividade_crm(atividade_id: int, organizacao_id: int, status: str) -> bool:
@@ -1610,7 +1733,9 @@ def mover_atividade_crm(atividade_id: int, organizacao_id: int, status: str) -> 
 def listar_atividades_crm(cnpj: str, organizacao_id: int) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
         cur.execute(
-            """SELECT a.*, u.username AS responsavel_username
+            f"""SELECT a.*, u.username AS responsavel_username,
+                      {ATIVIDADE_SEMAFORO_SQL}, {ATIVIDADE_TEMPO_SQL},
+                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico
                FROM crm_atividades a
                LEFT JOIN app_users u ON u.id = a.responsavel_user_id
                WHERE a.cnpj = %s AND a.organizacao_id = %s

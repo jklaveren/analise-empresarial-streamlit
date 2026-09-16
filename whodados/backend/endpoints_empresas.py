@@ -5,13 +5,14 @@ funil de filtros roda no servidor (server-side), entao o app trabalha a base
 inteira sem baixar tudo para o navegador."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from typing import Any, Dict, List, Optional
-from .auth import get_current_user, get_active_org, get_papel_ativo
+from .auth import get_current_user, require_base_receita, get_active_org, get_papel_ativo
 try:
     from .security import log_access, AuditAction
     HAS_AUDIT = True
 except ImportError:
     HAS_AUDIT = False
 from .db import (
+    org_usa_base_receita,
     get_crm_by_cnpj,
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
 )
@@ -78,6 +79,7 @@ async def listar_empresas(
     offset: int = 0,
     current_user: Dict = Depends(get_current_user),
     papel: str = Depends(get_papel_ativo),
+    _org: int = Depends(require_base_receita),
 ):
     """Uma pagina de empresas para o filtro atual (funil server-side)."""
     empresas = listar_empresas_db(
@@ -108,6 +110,7 @@ async def contar_empresas(
     incluir_inativas: bool = True,
     potencial: Optional[List[str]] = Query(None),
     current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
 ):
     """Quantas empresas batem no filtro atual (para o contador do funil)."""
     total = contar_empresas_db(
@@ -123,7 +126,7 @@ async def contar_empresas(
 @router.get("/empresas/{cnpj}")
 async def get_empresa(
     request: Request, cnpj: str, current_user: Dict = Depends(get_current_user),
-    org_id: int = Depends(get_active_org), papel: str = Depends(get_papel_ativo),
+    org_id: int = Depends(require_base_receita), papel: str = Depends(get_papel_ativo),
 ):
     empresa = get_empresa_by_cnpj_db(cnpj)
     if not empresa:
@@ -142,5 +145,12 @@ async def get_empresa(
 
 
 @router.get("/dashboard/metricas")
-async def metricas(current_user: Dict = Depends(get_current_user)):
+async def metricas(
+    current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
+):
+    # Empresa com base propria (ex.: JehJuh) nao tem numero da Receita pra
+    # mostrar. Devolve vazio em vez de 403 pro dashboard continuar abrindo.
+    if not org_usa_base_receita(org_id):
+        return {"sem_base_receita": True}
     return get_metricas_db()

@@ -1,5 +1,7 @@
 "use client";
 
+import PreviewTemplate from "@/components/PreviewTemplate";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listarTemplates, criarTemplate, atualizarTemplate, deletarTemplate, enviarTesteTemplate, uploadTemplateImagem, Template } from "@/lib/api";
 
@@ -100,6 +102,8 @@ export default function TemplatesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showModal, setShowModal] = useState(false);
+  // Preview do e-mail montado -- ver o que o destinatario recebe antes de enviar.
+  const [previewId, setPreviewId] = useState<number | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [temImagem, setTemImagem] = useState(false);
   const [logoV, setLogoV] = useState(0);
@@ -243,6 +247,7 @@ export default function TemplatesPage() {
                 <p className="text-sm text-indigo-600 font-medium truncate">{t.assunto}</p>
                 <p className="text-xs text-slate-400 mt-1">{(t.corpo_html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Sem corpo"}</p>
                 <div className="mt-auto pt-3 flex items-center gap-2 flex-wrap">
+                  <button onClick={() => setPreviewId(t.id!)} className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">👁️ Preview</button>
                   <button onClick={() => handleTestar(t)} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✈️ Testar</button>
                   <button onClick={() => abrirEdicao(t)} className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors">✏️ Editar</button>
                   <button onClick={() => abrirDuplicar(t)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2.5 py-1.5 rounded-lg font-medium transition-colors">⧉ Duplicar</button>
@@ -289,6 +294,7 @@ export default function TemplatesPage() {
           </div>
         </div>
       )}
+      {previewId !== null && <PreviewTemplate templateId={previewId} onFechar={() => setPreviewId(null)} />}
     </div>
   );
 }

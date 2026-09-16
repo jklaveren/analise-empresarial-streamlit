@@ -1,17 +1,21 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useRequireAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 import OrgSwitcher from "@/components/OrgSwitcher";
 
+// baseReceita: tela que so' faz sentido com a base da Receita Federal
+// carregada. Empresa com base propria (ex.: JehJuh) nao ve nenhuma delas
+// ate' a base dela ser carregada.
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Empresas", icon: "📊" },
-  { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑" },
-  { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
+  { href: "/dashboard", label: "Empresas", icon: "📊", baseReceita: true },
+  { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑", baseReceita: true },
+  { href: "/dashboard/crm", label: "Clientes", icon: "🗂️", baseReceita: true },
   { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
-  { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
+  { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧", baseReceita: true },
   { href: "/dashboard/whatsapp", label: "WhatsApp", icon: "💬" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },
@@ -23,14 +27,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const isVisitante = activeOrg?.papel === "visitante";
-  const navLinks = isVisitante ? NAV_LINKS.filter(l => l.href === "/dashboard") : NAV_LINKS;
+  // usa_base_receita ausente = true (empresas antigas, antes da flag existir).
+  const temBaseReceita = activeOrg?.usa_base_receita !== false;
+  const navLinks = isVisitante
+    ? NAV_LINKS.filter(l => l.href === "/dashboard")
+    : NAV_LINKS.filter(l => temBaseReceita || !l.baseReceita);
 
   // !username inclui o instante entre "terminou de carregar" e o
   // redirect pro /login efetivamente acontecer (useRequireAuth so'
   // dispara o router.replace num efeito, que roda DEPOIS do render) --
   // sem isso, esse instante renderizava o dashboard inteiro (menu,
   // cabecalho) por um frame antes de sair da tela.
-  if (isLoading || !username) {
+  const rotaBloqueada =
+    !temBaseReceita && NAV_LINKS.some(l => l.baseReceita && pathname === l.href);
+
+  useEffect(() => {
+    if (!isLoading && username && rotaBloqueada) router.replace("/dashboard/atividades");
+  }, [isLoading, username, rotaBloqueada, router]);
+
+  if (isLoading || !username || rotaBloqueada) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
@@ -45,7 +60,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex">
       <aside className="w-64 bg-white/70 border-r border-slate-200/50 flex flex-col shadow-sm">
         <div className="p-5 border-b border-slate-200/50 bg-gradient-to-b from-indigo-500 to-purple-600 text-white">
-          <Link href="/dashboard" className="text-xl font-bold flex items-center gap-3">
+          <Link href={temBaseReceita ? "/dashboard" : "/dashboard/atividades"} className="text-xl font-bold flex items-center gap-3">
             <span className="text-2xl">🛡️</span>
             <span>WhoDados</span>
           </Link>

@@ -95,6 +95,8 @@ export interface Organizacao {
   slug: string;
   ativo: boolean;
   papel?: "admin" | "membro" | "visitante";
+  /** false = empresa com base propria; as telas da Receita Federal somem. */
+  usa_base_receita?: boolean;
 }
 
 /** Empresas que o usuario logado pode operar (para o seletor de empresa ativa). */
@@ -251,9 +253,66 @@ export interface UsuarioOrg {
 
 export type StatusAtividade = "pendente" | "em_andamento" | "concluida";
 
+export interface PreviewEmail {
+  assunto: string;
+  corpo_html: string;
+  corpo_texto: string;
+  template_usado: string;
+  categoria_cnae: string;
+  variaveis: Record<string, string>;
+  destinatario: string;
+  empresa: string;
+  cnpj: string;
+}
+
+/**
+ * E-mail montado exatamente como vai ser enviado (variaveis substituidas,
+ * assinatura e rodape de descadastro incluidos). Sem cnpj, o backend usa uma
+ * empresa da base como amostra.
+ */
+export async function previewTemplate(templateId: number, cnpj?: string): Promise<PreviewEmail> {
+  return request(`/api/v1/templates/${templateId}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ cnpj: cnpj || "" }),
+  });
+}
+
+export interface HistoricoAtividade {
+  id: number;
+  atividade_id: number;
+  /** comentario = escrito pelo usuario; status/prazo = registrado automaticamente. */
+  tipo: "comentario" | "status" | "prazo";
+  texto: string | null;
+  de: string | null;
+  para: string | null;
+  autor: string | null;
+  criado_em: string;
+}
+
+export async function listarHistoricoAtividade(id: number): Promise<HistoricoAtividade[]> {
+  return request(`/api/v1/crm/atividades/${id}/historico`);
+}
+
+export async function comentarAtividade(id: number, texto: string): Promise<HistoricoAtividade> {
+  return request(`/api/v1/crm/atividades/${id}/comentario`, {
+    method: "POST",
+    body: JSON.stringify({ texto }),
+  });
+}
+
+/** prazo vazio remove o prazo. A troca fica registrada no historico. */
+export async function alterarPrazoAtividade(id: number, prazo: string) {
+  return request(`/api/v1/crm/atividades/${id}/prazo`, {
+    method: "POST",
+    body: JSON.stringify({ prazo }),
+  });
+}
+
+export type SemaforoAtividade = "verde" | "amarelo" | "vermelho" | "cinza";
+
 export interface AtividadeCrm {
   id: number;
-  cnpj: string;
+  cnpj: string | null;
   titulo: string;
   tipo: string;
   descricao: string | null;
@@ -265,6 +324,13 @@ export interface AtividadeCrm {
   criado_por: string | null;
   criado_em: string;
   concluido_em: string | null;
+  /** Cor de acompanhamento (calculada no banco, igual ao monitor de e-mails). */
+  semaforo: SemaforoAtividade;
+  dias_aberta: number | null;
+  /** Negativo = atrasada. null quando a atividade nao tem prazo. */
+  dias_para_prazo: number | null;
+  /** Quantos eventos de acompanhamento (comentarios + mudancas). */
+  n_historico?: number;
 }
 
 /** Todas as atividades da organizacao (board agregado, tipo Trello). */

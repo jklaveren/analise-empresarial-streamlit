@@ -16,7 +16,7 @@ try:
 except ImportError:
     pd = None
 
-from .auth.dependencies import get_current_user
+from .auth.dependencies import get_current_user, require_base_receita
 from .data import carregar_empresas, filtrar_empresas
 from .nlp.service import interpretar_pergunta, resumir_resultado
 
@@ -31,7 +31,11 @@ class PerguntaRequest(BaseModel):
 
 
 @router.post("/empresas/consulta-natural")
-async def consulta_natural(payload: PerguntaRequest, current_user: Dict = Depends(get_current_user)):
+async def consulta_natural(
+    payload: PerguntaRequest,
+    current_user: Dict = Depends(get_current_user),
+    _org: int = Depends(require_base_receita),
+):
     if not payload.pergunta.strip():
         raise HTTPException(status_code=400, detail="Pergunta vazia")
 

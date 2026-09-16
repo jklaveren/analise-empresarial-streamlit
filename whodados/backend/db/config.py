@@ -201,11 +201,21 @@ def _run_ensure_multiempresa(os):
         # --- Seed das empresas (idempotente por slug) ---
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('SYVP', 'syvp') ON CONFLICT (slug) DO NOTHING")
+        # JehJuh nao usa a base da Receita Federal -- tem base propria. A flag
+        # e' por empresa (nao por usuario): quem entra nela nao ve Prospeccao.
+        cur.execute("ALTER TABLE organizacoes ADD COLUMN IF NOT EXISTS usa_base_receita BOOLEAN DEFAULT TRUE")
+        cur.execute("INSERT INTO organizacoes (nome, slug, usa_base_receita) VALUES ('JehJuh', 'jehjuh', FALSE) ON CONFLICT (slug) DO NOTHING")
 
         # --- jehzinha (admin) tem acesso as duas ---
         cur.execute("""INSERT INTO usuario_organizacoes (user_id, organizacao_id)
             SELECT u.id, o.id FROM app_users u CROSS JOIN organizacoes o
             WHERE u.username = 'jehzinha'
+            ON CONFLICT DO NOTHING""")
+
+        # Juliana opera somente a JehJuh (admin de la' dentro).
+        cur.execute("""INSERT INTO usuario_organizacoes (user_id, organizacao_id, papel)
+            SELECT u.id, o.id, 'admin' FROM app_users u CROSS JOIN organizacoes o
+            WHERE u.username = 'juliana' AND o.slug = 'jehjuh'
             ON CONFLICT DO NOTHING""")
 
         # --- Coluna organizacao_id (nullable) + indice nas tabelas de controle ---
@@ -316,6 +326,22 @@ def _run_ensure_multiempresa(os):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_cnpj ON crm_atividades(cnpj)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_responsavel ON crm_atividades(responsavel_user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_org ON crm_atividades(organizacao_id)")
+
+        # Historico da atividade: comentario escrito pelo usuario E registro
+        # automatico de mudanca de status/prazo ("Juliana moveu para Em
+        # andamento", "Juliana mudou o prazo para 20/09"). Uma linha por
+        # evento -- e' o acompanhamento da tarefa, nao da empresa.
+        cur.execute("""CREATE TABLE IF NOT EXISTS crm_atividade_historico (
+            id SERIAL PRIMARY KEY,
+            atividade_id INTEGER NOT NULL REFERENCES crm_atividades(id) ON DELETE CASCADE,
+            tipo VARCHAR(20) NOT NULL DEFAULT 'comentario',
+            texto TEXT,
+            de VARCHAR(50),
+            para VARCHAR(50),
+            autor VARCHAR(50),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_atv_hist_atividade ON crm_atividade_historico(atividade_id)")
 
         # Descadastro de e-mail (LGPD/opt-out) -- GLOBAL, nao por empresa: se
         # alguem pede pra nao receber mais, isso vale pra NRA e SYVP, nao so'

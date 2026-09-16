@@ -22,7 +22,7 @@ from .service import (
     list_all_users, update_user_flags, delete_user, update_user_email,
     # Multi-empresa (organizacoes)
     listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
-    definir_acesso_usuario_orgs, get_orgs_do_user_id,
+    definir_acesso_usuario_orgs, get_orgs_do_user_id, criar_organizacao, renomear_organizacao, org_usa_base_receita,
     get_papel_usuario_org, definir_papel_usuario_org,
     get_org_smtp_config, set_org_smtp_config, set_org_logo, get_org_logo,
     # WhatsApp (Twilio)
@@ -35,6 +35,8 @@ from .service import (
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,
     listar_todas_atividades, mover_atividade_crm,
+    registrar_historico_atividade, listar_historico_atividade,
+    atualizar_prazo_atividade, get_status_atividade,
     # Descadastro de e-mail (LGPD/opt-out)
     email_esta_descadastrado, descadastrar_email,
     buscar_socios_principais, buscar_empresas_rapido,
@@ -66,7 +68,7 @@ __all__ = [
     "list_all_users", "update_user_flags", "delete_user", "update_user_email",
     # Multi-empresa (organizacoes)
     "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
-    "definir_acesso_usuario_orgs", "get_orgs_do_user_id",
+    "definir_acesso_usuario_orgs", "get_orgs_do_user_id", "criar_organizacao", "renomear_organizacao", "org_usa_base_receita",
     "get_papel_usuario_org", "definir_papel_usuario_org",
     "get_org_smtp_config", "set_org_smtp_config", "set_org_logo", "get_org_logo",
     # WhatsApp (Twilio)
@@ -76,6 +78,8 @@ __all__ = [
     "listar_usuarios_da_org", "criar_atividade_crm", "listar_atividades_crm",
     "contar_atividades_pendentes", "concluir_atividade_crm", "deletar_atividade_crm",
     "listar_todas_atividades", "mover_atividade_crm",
+    "registrar_historico_atividade", "listar_historico_atividade",
+    "atualizar_prazo_atividade", "get_status_atividade",
     "email_esta_descadastrado", "descadastrar_email", "buscar_socios_principais", "buscar_empresas_rapido",
     # Analytics (agregacoes sobre dados_empresas / dados_socios)
     "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
