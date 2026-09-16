@@ -277,11 +277,148 @@ export async function previewTemplate(templateId: number, cnpj?: string): Promis
   });
 }
 
+/** Só o número de não lidas, para o badge do menu. */
+export async function contarNotificacoesNaoLidas(): Promise<{ total: number }> {
+  return request("/api/v1/notificacoes/nao-lidas");
+}
+
+// ==================== GASTOS ====================
+
+export interface Gasto {
+  id: number;
+  organizacao_id: number;
+  descricao: string;
+  valor: number;
+  data: string;
+  categoria: string;
+  forma_pagamento: string | null;
+  observacao: string | null;
+  criado_por: string | null;
+  criado_em: string;
+  /** Preenchido = excluído (fica fora da lista e do total, mas não some). */
+  removido_em: string | null;
+  removido_por: string | null;
+}
+
+export interface ResumoGastos {
+  total: number;
+  quantidade: number;
+  por_categoria: { categoria: string; total: number; quantidade: number }[];
+}
+
+export interface NovoGasto {
+  descricao: string;
+  valor: number;
+  data?: string;
+  categoria?: string;
+  forma_pagamento?: string;
+  observacao?: string;
+}
+
+export async function listarGastos(params?: {
+  de?: string; ate?: string; categoria?: string; incluir_removidos?: boolean;
+}): Promise<Gasto[]> {
+  const q = new URLSearchParams();
+  if (params?.de) q.set("de", params.de);
+  if (params?.ate) q.set("ate", params.ate);
+  if (params?.categoria) q.set("categoria", params.categoria);
+  if (params?.incluir_removidos) q.set("incluir_removidos", "true");
+  const qs = q.toString();
+  return request(`/api/v1/gastos${qs ? `?${qs}` : ""}`);
+}
+
+export async function resumoGastos(de?: string, ate?: string): Promise<ResumoGastos> {
+  const q = new URLSearchParams();
+  if (de) q.set("de", de);
+  if (ate) q.set("ate", ate);
+  const qs = q.toString();
+  return request(`/api/v1/gastos/resumo${qs ? `?${qs}` : ""}`);
+}
+
+export async function listarCategoriasGasto(): Promise<string[]> {
+  return request("/api/v1/gastos/categorias");
+}
+
+export async function criarGasto(gasto: NovoGasto): Promise<Gasto> {
+  return request("/api/v1/gastos", { method: "POST", body: JSON.stringify(gasto) });
+}
+
+/** Exclusão lógica: sai da lista e do total, mas o registro fica. */
+export async function removerGasto(id: number) {
+  return request(`/api/v1/gastos/${id}`, { method: "DELETE" });
+}
+
+export async function restaurarGasto(id: number) {
+  return request(`/api/v1/gastos/${id}/restaurar`, { method: "POST" });
+}
+
+export interface AnexoAtividade {
+  id: number;
+  atividade_id: number;
+  nome: string;
+  mime: string | null;
+  tamanho: number | null;
+  enviado_por: string | null;
+  criado_em: string;
+}
+
+/** Passa a tarefa pra outra pessoa (notifica quem recebe). null tira o responsável. */
+export async function atribuirAtividade(id: number, responsavelUserId: number | null, titulo?: string) {
+  return request(`/api/v1/crm/atividades/${id}/responsavel`, {
+    method: "POST",
+    body: JSON.stringify({ responsavel_user_id: responsavelUserId, titulo }),
+  });
+}
+
+export async function listarAnexosAtividade(atividadeId: number): Promise<AnexoAtividade[]> {
+  return request(`/api/v1/crm/atividades/${atividadeId}/anexos`);
+}
+
+export async function anexarArquivoAtividade(atividadeId: number, file: File): Promise<AnexoAtividade> {
+  const form = new FormData();
+  form.append("arquivo", file);
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgId = getActiveOrgId();
+  if (orgId) headers["X-Org-Id"] = String(orgId);
+  const res = await fetch(`${API_URL}/api/v1/crm/atividades/${atividadeId}/anexos`, {
+    method: "POST", headers, body: form,
+  });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({ detail: "Erro" }));
+    throw new ApiError(res.status, b.detail || "Erro ao anexar arquivo");
+  }
+  return res.json();
+}
+
+export async function removerAnexoAtividade(anexoId: number) {
+  return request(`/api/v1/crm/anexos/${anexoId}`, { method: "DELETE" });
+}
+
+/**
+ * Baixa o anexo como blob e devolve uma URL local pra abrir ou salvar.
+ * Anexo nao e' publico -- so' sai do backend com token, entao nao da' pra
+ * apontar um <a href> direto pra API. Quem chamar precisa dar
+ * URL.revokeObjectURL depois pra nao segurar o arquivo em memoria.
+ */
+export async function baixarAnexoAtividade(anexoId: number): Promise<{ url: string; tipo: string }> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgId = getActiveOrgId();
+  if (orgId) headers["X-Org-Id"] = String(orgId);
+  const res = await fetch(`${API_URL}/api/v1/crm/anexos/${anexoId}`, { headers });
+  if (!res.ok) throw new ApiError(res.status, "Não consegui abrir o anexo");
+  const blob = await res.blob();
+  return { url: URL.createObjectURL(blob), tipo: blob.type };
+}
+
 export interface HistoricoAtividade {
   id: number;
   atividade_id: number;
   /** comentario = escrito pelo usuario; status/prazo = registrado automaticamente. */
-  tipo: "comentario" | "status" | "prazo";
+  tipo: "comentario" | "status" | "prazo" | "anexo" | "anexo_removido" | "responsavel";
   texto: string | null;
   de: string | null;
   para: string | null;
@@ -331,6 +468,7 @@ export interface AtividadeCrm {
   dias_para_prazo: number | null;
   /** Quantos eventos de acompanhamento (comentarios + mudancas). */
   n_historico?: number;
+  n_anexos?: number;
 }
 
 /** Todas as atividades da organizacao (board agregado, tipo Trello). */

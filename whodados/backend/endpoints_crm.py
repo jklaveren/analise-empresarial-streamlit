@@ -10,9 +10,9 @@ IMPORTANTE sobre ordem das rotas: rotas literais de um so segmento
 registro, entao um "/crm/{cnpj}" cadastrado antes intercepta qualquer
 outra rota GET de um segmento so (era exatamente o que travava
 "/crm/classificacao" antes desta reorganizacao)."""
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Dict
+from typing import Dict, Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi.responses import Response
 from .auth import get_current_user, get_active_org
 from .db import (
     create_or_update_crm, get_crm_by_cnpj, get_crm_all,
@@ -21,6 +21,9 @@ from .db import (
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,
     listar_todas_atividades, mover_atividade_crm, buscar_empresas_rapido,
+    salvar_anexo_atividade, listar_anexos_atividade, get_anexo_atividade,
+    deletar_anexo_atividade, contar_anexos_por_atividade,
+    atribuir_atividade,
     registrar_historico_atividade, listar_historico_atividade,
     atualizar_prazo_atividade, get_status_atividade,
 )
@@ -181,6 +184,128 @@ async def crm_alterar_prazo_atividade(atividade_id: int, data: Dict, current_use
         registrar_historico_atividade(
             atividade_id, "prazo", current_user.get("sub"), de=anterior or None, para=novo
         )
+    return {"ok": True}
+
+
+# --- Anexos da atividade (proposta, print, contrato) ---
+
+_ANEXO_MAX_BYTES = 15 * 1024 * 1024  # 15 MB por arquivo
+
+# Tipos aceitos no upload. Lista fechada de proposito: e' mais facil liberar
+# um formato que a equipe pediu do que tirar da frente um executavel que
+# alguem anexou "so' pra testar".
+_ANEXO_TIPOS_OK = {
+    "application/pdf",
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/plain", "text/csv",
+    "application/zip",
+}
+
+# So' estes abrem DENTRO do WhoDados. HTML e SVG ficam de fora mesmo sendo
+# "visualizaveis": servidos inline eles rodariam script na origem do app,
+# com a sessao de quem abriu. Tudo que nao esta aqui vira download.
+_ANEXO_INLINE_OK = {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"}
+
+
+@router.post("/crm/atividades/{atividade_id}/responsavel")
+async def crm_atribuir_atividade(
+    atividade_id: int, data: Dict,
+    current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org),
+):
+    """Passa a tarefa pra outra pessoa. Quem recebe e' notificado no app e no
+    e-mail, igual a atribuicao na criacao."""
+    novo_id = data.get("responsavel_user_id")
+    troca = atribuir_atividade(atividade_id, org_id, novo_id or None)
+    if troca is None:
+        raise HTTPException(status_code=404, detail="Atividade nao encontrada")
+    if troca["de"] != troca["para"]:
+        registrar_historico_atividade(
+            atividade_id, "responsavel", current_user.get("sub"),
+            de=troca["de"], para=troca["para"],
+        )
+        if troca["para"]:
+            titulo = (data.get("titulo") or "").strip() or f"Tarefa #{atividade_id}"
+            corpo = f"Passada por {current_user.get('sub')}"
+            create_notificacao(
+                "tarefa_atribuida", f"Nova tarefa: {titulo}", corpo,
+                user_id=troca["para"], organizacao_id=org_id,
+            )
+            notificar_tarefa_por_email(
+                troca["email"], titulo, corpo, organizacao_id=org_id,
+                atribuida_por=current_user.get("sub"),
+            )
+    return {"ok": True, **troca}
+
+
+@router.get("/crm/atividades/{atividade_id}/anexos")
+async def crm_listar_anexos(atividade_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Metadados dos anexos (sem os bytes) -- o arquivo em si vem de /crm/anexos/{id}."""
+    return listar_anexos_atividade(atividade_id, org_id)
+
+
+@router.post("/crm/atividades/{atividade_id}/anexos")
+async def crm_anexar_arquivo(
+    atividade_id: int, arquivo: UploadFile = File(...),
+    current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org),
+):
+    conteudo = await arquivo.read()
+    if not conteudo:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+    if len(conteudo) > _ANEXO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande (limite de 15 MB)")
+    if arquivo.content_type not in _ANEXO_TIPOS_OK:
+        raise HTTPException(
+            status_code=400,
+            detail="Formato nao aceito. Use PDF, imagem, Word, Excel, PowerPoint, texto, CSV ou ZIP.",
+        )
+    anexo = salvar_anexo_atividade(
+        atividade_id, org_id, arquivo.filename or "arquivo",
+        arquivo.content_type, conteudo, enviado_por=current_user.get("sub"),
+    )
+    if not anexo:
+        raise HTTPException(status_code=404, detail="Atividade nao encontrada")
+    registrar_historico_atividade(
+        atividade_id, "anexo", current_user.get("sub"), texto=anexo["nome"]
+    )
+    return anexo
+
+
+@router.get("/crm/anexos/{anexo_id}")
+async def crm_baixar_anexo(anexo_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Serve o arquivo. PDF e imagem abrem na tela (inline); o resto baixa.
+    Nunca e' publico -- anexo de tarefa e' documento interno."""
+    anexo = get_anexo_atividade(anexo_id, org_id)
+    if not anexo:
+        raise HTTPException(status_code=404, detail="Anexo nao encontrado")
+    mime = anexo.get("mime") or "application/octet-stream"
+    disposicao = "inline" if mime in _ANEXO_INLINE_OK else "attachment"
+    nome = (anexo.get("nome") or "arquivo").replace('"', "")
+    return Response(
+        content=bytes(anexo["conteudo"]),
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'{disposicao}; filename="{nome}"',
+            # sem sniffing: impede o navegador de "corrigir" o tipo de um
+            # arquivo e executar como HTML algo declarado como texto.
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/crm/anexos/{anexo_id}")
+async def crm_remover_anexo(anexo_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    removido = deletar_anexo_atividade(anexo_id, org_id)
+    if not removido:
+        raise HTTPException(status_code=404, detail="Anexo nao encontrado")
+    registrar_historico_atividade(
+        removido["atividade_id"], "anexo_removido", current_user.get("sub"), texto=removido["nome"]
+    )
     return {"ok": True}
 
 

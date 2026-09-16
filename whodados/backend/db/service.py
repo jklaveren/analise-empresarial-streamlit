@@ -497,6 +497,23 @@ def get_notificacoes(user_id: Optional[str] = None, lidas: Optional[bool] = None
         cur.execute(sql, params)
         return cur.fetchall()
 
+def contar_notificacoes_nao_lidas(user_id: Optional[str] = None, organizacao_id: Optional[int] = None) -> int:
+    """So' o numero, pro badge do menu -- puxar a lista inteira a cada
+    poucos segundos so' pra contar sairia caro."""
+    sql = "SELECT COUNT(*)::int AS n FROM notificacoes WHERE lida = FALSE"
+    params: List[Any] = []
+    if organizacao_id is not None:
+        sql += " AND organizacao_id = %s"
+        params.append(organizacao_id)
+    if user_id:
+        sql += " AND (user_id = %s OR user_id IS NULL)"
+        params.append(user_id)
+    with get_db_cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return row["n"] if row else 0
+
+
 def mark_notificacao_lida(notificacao_id: int) -> bool:
     with get_db_cursor() as cur:
         cur.execute("UPDATE notificacoes SET lida = TRUE WHERE id = %s", (notificacao_id,))
@@ -1649,7 +1666,8 @@ def listar_todas_atividades(organizacao_id: int) -> List[Dict[str, Any]]:
             f"""SELECT a.*, u.username AS responsavel_username,
                       COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", a.cnpj) AS razao_social,
                       {ATIVIDADE_SEMAFORO_SQL}, {ATIVIDADE_TEMPO_SQL},
-                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico
+                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico,
+                      (SELECT COUNT(*) FROM crm_atividade_anexos x WHERE x.atividade_id = a.id)::int AS n_anexos
                FROM crm_atividades a
                LEFT JOIN app_users u ON u.id = a.responsavel_user_id
                LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = a.cnpj
@@ -1658,6 +1676,232 @@ def listar_todas_atividades(organizacao_id: int) -> List[Dict[str, Any]]:
             (organizacao_id,),
         )
         return cur.fetchall()
+
+
+# Colunas do anexo SEM o conteudo -- listar anexo nunca deve arrastar os
+# bytes do arquivo junto (uma tarefa com 5 PDFs viraria uma resposta de MBs).
+_ANEXO_COLS = "id, atividade_id, nome, mime, tamanho, enviado_por, criado_em"
+
+
+# ==================== GASTOS (despesas por empresa) ====================
+
+_GASTO_COLS = ("id, organizacao_id, descricao, valor, data, categoria, forma_pagamento, "
+               "observacao, criado_por, criado_em, removido_em, removido_por")
+
+
+def criar_gasto(
+    organizacao_id: int, descricao: str, valor: float, data: Optional[str] = None,
+    categoria: str = "outros", forma_pagamento: Optional[str] = None,
+    observacao: Optional[str] = None, criado_por: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"""INSERT INTO gastos (organizacao_id, descricao, valor, data, categoria,
+                                    forma_pagamento, observacao, criado_por)
+                VALUES (%s,%s,%s,COALESCE(%s::date, CURRENT_DATE),%s,%s,%s,%s)
+                RETURNING {_GASTO_COLS}""",
+            (organizacao_id, descricao, valor, data or None, categoria,
+             forma_pagamento, observacao, criado_por),
+        )
+        return cur.fetchone()
+
+
+def listar_gastos(
+    organizacao_id: int, de: Optional[str] = None, ate: Optional[str] = None,
+    categoria: Optional[str] = None, incluir_removidos: bool = False,
+) -> List[Dict[str, Any]]:
+    where = ["organizacao_id = %s"]
+    params: List[Any] = [organizacao_id]
+    if not incluir_removidos:
+        where.append("removido_em IS NULL")
+    if de:
+        where.append("data >= %s::date"); params.append(de)
+    if ate:
+        where.append("data <= %s::date"); params.append(ate)
+    if categoria:
+        where.append("categoria = %s"); params.append(categoria)
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"SELECT {_GASTO_COLS} FROM gastos WHERE {' AND '.join(where)} "
+            "ORDER BY data DESC, id DESC",
+            params,
+        )
+        return cur.fetchall()
+
+
+def resumo_gastos(organizacao_id: int, de: Optional[str] = None, ate: Optional[str] = None) -> Dict[str, Any]:
+    """Total do periodo e quebra por categoria -- o que a tela mostra em cima."""
+    where = ["organizacao_id = %s", "removido_em IS NULL"]
+    params: List[Any] = [organizacao_id]
+    if de:
+        where.append("data >= %s::date"); params.append(de)
+    if ate:
+        where.append("data <= %s::date"); params.append(ate)
+    cond = " AND ".join(where)
+    with get_db_cursor() as cur:
+        cur.execute(f"SELECT COALESCE(SUM(valor),0) AS total, COUNT(*)::int AS n FROM gastos WHERE {cond}", params)
+        topo = cur.fetchone()
+        cur.execute(
+            f"SELECT categoria, COALESCE(SUM(valor),0) AS total, COUNT(*)::int AS n "
+            f"FROM gastos WHERE {cond} GROUP BY categoria ORDER BY total DESC",
+            params,
+        )
+        return {
+            "total": float(topo["total"] or 0),
+            "quantidade": topo["n"],
+            "por_categoria": [
+                {"categoria": r["categoria"], "total": float(r["total"]), "quantidade": r["n"]}
+                for r in cur.fetchall()
+            ],
+        }
+
+
+def remover_gasto(gasto_id: int, organizacao_id: int, removido_por: Optional[str] = None) -> bool:
+    """Exclusao logica: o registro continua no banco, so' sai da lista e do
+    total. Gasto lancado errado se corrige restaurando ou lancando de novo --
+    nao sumindo com o rastro."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE gastos SET removido_em = NOW(), removido_por = %s "
+            "WHERE id = %s AND organizacao_id = %s AND removido_em IS NULL",
+            (removido_por, gasto_id, organizacao_id),
+        )
+        return cur.rowcount > 0
+
+
+def restaurar_gasto(gasto_id: int, organizacao_id: int) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE gastos SET removido_em = NULL, removido_por = NULL "
+            "WHERE id = %s AND organizacao_id = %s",
+            (gasto_id, organizacao_id),
+        )
+        return cur.rowcount > 0
+
+
+def atualizar_gasto(gasto_id: int, organizacao_id: int, campos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    permitidos = ("descricao", "valor", "data", "categoria", "forma_pagamento", "observacao")
+    sets, params = [], []
+    for campo in permitidos:
+        if campo in campos:
+            sets.append(f"{campo} = %s")
+            params.append(campos[campo])
+    if not sets:
+        return None
+    params += [gasto_id, organizacao_id]
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"UPDATE gastos SET {', '.join(sets)} WHERE id = %s AND organizacao_id = %s "
+            f"RETURNING {_GASTO_COLS}",
+            params,
+        )
+        return cur.fetchone()
+
+
+def salvar_anexo_atividade(
+    atividade_id: int, organizacao_id: int, nome: str, mime: Optional[str],
+    conteudo: bytes, enviado_por: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Anexa um arquivo a uma atividade. Devolve None se a atividade nao for
+    da organizacao -- a checagem e' aqui e nao no endpoint pra nao existir
+    caminho que grave anexo em tarefa de outra empresa."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM crm_atividades WHERE id = %s AND organizacao_id = %s",
+            (atividade_id, organizacao_id),
+        )
+        if not cur.fetchone():
+            return None
+        cur.execute(
+            f"""INSERT INTO crm_atividade_anexos (atividade_id, nome, mime, tamanho, conteudo, enviado_por)
+                VALUES (%s,%s,%s,%s,%s,%s) RETURNING {_ANEXO_COLS}""",
+            (atividade_id, nome, mime, len(conteudo), conteudo, enviado_por),
+        )
+        return cur.fetchone()
+
+
+def listar_anexos_atividade(atividade_id: int, organizacao_id: int) -> List[Dict[str, Any]]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"""SELECT {', '.join('a.' + c for c in _ANEXO_COLS.split(', '))}
+                FROM crm_atividade_anexos a
+                JOIN crm_atividades t ON t.id = a.atividade_id
+                WHERE a.atividade_id = %s AND t.organizacao_id = %s
+                ORDER BY a.criado_em ASC""",
+            (atividade_id, organizacao_id),
+        )
+        return cur.fetchall()
+
+
+def get_anexo_atividade(anexo_id: int, organizacao_id: int) -> Optional[Dict[str, Any]]:
+    """Bytes do anexo, ja' filtrado pela organizacao -- e' o que serve o
+    download/visualizacao."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT a.nome, a.mime, a.conteudo
+               FROM crm_atividade_anexos a
+               JOIN crm_atividades t ON t.id = a.atividade_id
+               WHERE a.id = %s AND t.organizacao_id = %s""",
+            (anexo_id, organizacao_id),
+        )
+        return cur.fetchone()
+
+
+def deletar_anexo_atividade(anexo_id: int, organizacao_id: int) -> Optional[Dict[str, Any]]:
+    """Remove o anexo e devolve {atividade_id, nome} pra registrar no historico."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """DELETE FROM crm_atividade_anexos a
+               USING crm_atividades t
+               WHERE a.id = %s AND t.id = a.atividade_id AND t.organizacao_id = %s
+               RETURNING a.atividade_id, a.nome""",
+            (anexo_id, organizacao_id),
+        )
+        return cur.fetchone()
+
+
+def contar_anexos_por_atividade(organizacao_id: int) -> Dict[int, int]:
+    """atividade_id -> quantidade de anexos, pra badge no card sem uma
+    consulta por card."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT a.atividade_id, COUNT(*)::int AS n
+               FROM crm_atividade_anexos a
+               JOIN crm_atividades t ON t.id = a.atividade_id
+               WHERE t.organizacao_id = %s
+               GROUP BY a.atividade_id""",
+            (organizacao_id,),
+        )
+        return {r["atividade_id"]: r["n"] for r in cur.fetchall()}
+
+
+def atribuir_atividade(atividade_id: int, organizacao_id: int, responsavel_user_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """Troca o responsavel. Devolve {de, para} com os usernames pra registrar
+    no historico -- quem passou a tarefa pra quem fica no acompanhamento.
+    None quando a atividade nao e' da organizacao."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT u.username AS anterior FROM crm_atividades a
+               LEFT JOIN app_users u ON u.id = a.responsavel_user_id
+               WHERE a.id = %s AND a.organizacao_id = %s""",
+            (atividade_id, organizacao_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cur.execute(
+            "UPDATE crm_atividades SET responsavel_user_id = %s WHERE id = %s AND organizacao_id = %s",
+            (responsavel_user_id, atividade_id, organizacao_id),
+        )
+        novo = None
+        if responsavel_user_id:
+            cur.execute("SELECT username, email FROM app_users WHERE id = %s", (responsavel_user_id,))
+            novo = cur.fetchone()
+        return {
+            "de": row["anterior"],
+            "para": novo["username"] if novo else None,
+            "email": novo["email"] if novo else None,
+        }
 
 
 def registrar_historico_atividade(
@@ -1735,7 +1979,8 @@ def listar_atividades_crm(cnpj: str, organizacao_id: int) -> List[Dict[str, Any]
         cur.execute(
             f"""SELECT a.*, u.username AS responsavel_username,
                       {ATIVIDADE_SEMAFORO_SQL}, {ATIVIDADE_TEMPO_SQL},
-                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico
+                      (SELECT COUNT(*) FROM crm_atividade_historico h WHERE h.atividade_id = a.id)::int AS n_historico,
+                      (SELECT COUNT(*) FROM crm_atividade_anexos x WHERE x.atividade_id = a.id)::int AS n_anexos
                FROM crm_atividades a
                LEFT JOIN app_users u ON u.id = a.responsavel_user_id
                WHERE a.cnpj = %s AND a.organizacao_id = %s

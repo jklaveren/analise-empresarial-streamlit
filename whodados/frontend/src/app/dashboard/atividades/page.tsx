@@ -354,7 +354,9 @@ export default function AtividadesPage() {
                         onClick={() => setAberta(aberta === a.id ? null : a.id)}
                         className="mt-1.5 w-full text-xs text-slate-500 hover:text-indigo-600 text-left"
                       >
-                        {aberta === a.id ? "▾ Fechar acompanhamento" : `▸ Acompanhamento${a.n_historico ? ` (${a.n_historico})` : ""}`}
+                        {aberta === a.id
+                          ? "▾ Fechar acompanhamento"
+                          : `▸ Acompanhamento${a.n_historico ? ` (${a.n_historico})` : ""}${a.n_anexos ? ` 📎${a.n_anexos}` : ""}`}
                       </button>
                       {aberta === a.id && <AcompanhamentoAtividade atividade={a} onMudou={carregar} />}
                       </div>

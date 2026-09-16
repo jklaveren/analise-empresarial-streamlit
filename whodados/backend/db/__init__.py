@@ -9,7 +9,7 @@ from .service import (
     salvar_enriquecimento, listar_enriquecimento, remover_enriquecimento,
     create_campanha, get_campanha, get_all_campanhas, update_campanha_status,
     create_email_enviado, update_email_enviado, get_emails_enviados_by_campanha,
-    create_notificacao, get_notificacoes, mark_notificacao_lida,
+    create_notificacao, get_notificacoes, mark_notificacao_lida, contar_notificacoes_nao_lidas,
     # Password reset
     create_password_reset_token, get_password_reset_token, mark_password_reset_token_used, update_user_password,
     # Monitor de emails (follow-up com semaforo)
@@ -35,6 +35,10 @@ from .service import (
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,
     listar_todas_atividades, mover_atividade_crm,
+    criar_gasto, listar_gastos, resumo_gastos, remover_gasto, restaurar_gasto, atualizar_gasto,
+    salvar_anexo_atividade, listar_anexos_atividade, get_anexo_atividade,
+    deletar_anexo_atividade, contar_anexos_por_atividade,
+    atribuir_atividade,
     registrar_historico_atividade, listar_historico_atividade,
     atualizar_prazo_atividade, get_status_atividade,
     # Descadastro de e-mail (LGPD/opt-out)
@@ -55,7 +59,7 @@ __all__ = [
     "salvar_enriquecimento", "listar_enriquecimento", "remover_enriquecimento",
     "create_campanha", "get_campanha", "get_all_campanhas", "update_campanha_status",
     "create_email_enviado", "update_email_enviado", "get_emails_enviados_by_campanha",
-    "create_notificacao", "get_notificacoes", "mark_notificacao_lida",
+    "create_notificacao", "get_notificacoes", "mark_notificacao_lida", "contar_notificacoes_nao_lidas",
     # Password reset
     "create_password_reset_token", "get_password_reset_token", "mark_password_reset_token_used", "update_user_password",
     # Monitor de emails (follow-up com semaforo)
@@ -78,6 +82,10 @@ __all__ = [
     "listar_usuarios_da_org", "criar_atividade_crm", "listar_atividades_crm",
     "contar_atividades_pendentes", "concluir_atividade_crm", "deletar_atividade_crm",
     "listar_todas_atividades", "mover_atividade_crm",
+    "criar_gasto", "listar_gastos", "resumo_gastos", "remover_gasto", "restaurar_gasto", "atualizar_gasto",
+    "salvar_anexo_atividade", "listar_anexos_atividade", "get_anexo_atividade",
+    "deletar_anexo_atividade", "contar_anexos_por_atividade",
+    "atribuir_atividade",
     "registrar_historico_atividade", "listar_historico_atividade",
     "atualizar_prazo_atividade", "get_status_atividade",
     "email_esta_descadastrado", "descadastrar_email", "buscar_socios_principais", "buscar_empresas_rapido",

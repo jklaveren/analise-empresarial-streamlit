@@ -343,6 +343,42 @@ def _run_ensure_multiempresa(os):
         )""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_atv_hist_atividade ON crm_atividade_historico(atividade_id)")
 
+        # Anexos da atividade (proposta em PDF, print, contrato em docx...).
+        # Bytes no proprio banco, mesmo caminho da imagem de template: evita
+        # depender de storage externo e mantem o anexo sob a mesma regra de
+        # isolamento por empresa da atividade que o carrega.
+        cur.execute("""CREATE TABLE IF NOT EXISTS crm_atividade_anexos (
+            id SERIAL PRIMARY KEY,
+            atividade_id INTEGER NOT NULL REFERENCES crm_atividades(id) ON DELETE CASCADE,
+            nome VARCHAR(255) NOT NULL,
+            mime VARCHAR(120),
+            tamanho INTEGER,
+            conteudo BYTEA NOT NULL,
+            enviado_por VARCHAR(50),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_atv_anexo_atividade ON crm_atividade_anexos(atividade_id)")
+
+        # Gastos por empresa. Registro simples de despesa ja' realizada.
+        # Nada e' apagado de verdade: excluir marca removido_em, entao o
+        # historico continua inteiro e da' pra restaurar -- "nada pode se
+        # perder" e' requisito, nao detalhe de implementacao.
+        cur.execute("""CREATE TABLE IF NOT EXISTS gastos (
+            id SERIAL PRIMARY KEY,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            descricao VARCHAR(255) NOT NULL,
+            valor NUMERIC(12,2) NOT NULL,
+            data DATE NOT NULL DEFAULT CURRENT_DATE,
+            categoria VARCHAR(40) DEFAULT 'outros',
+            forma_pagamento VARCHAR(30),
+            observacao TEXT,
+            criado_por VARCHAR(50),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            removido_em TIMESTAMP WITH TIME ZONE,
+            removido_por VARCHAR(50)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_gastos_org_data ON gastos(organizacao_id, data DESC)")
+
         # Descadastro de e-mail (LGPD/opt-out) -- GLOBAL, nao por empresa: se
         # alguem pede pra nao receber mais, isso vale pra NRA e SYVP, nao so'
         # pra quem mandou o e-mail que ela descadastrou. Toda campanha de
