@@ -69,16 +69,16 @@ def _render_template(template: Dict, vars_dict: Dict[str, str]) -> Dict[str, str
 
 
 def _obter_template_para_cnpj(template_base_id: int, cnae: Optional[str]) -> Dict[str, str]:
-    """Escolhe o template correto para um CNPJ baseado no CNAE."""
-    categoria = classificar_cnae(cnae) if cnae else "servicos"
-    templates_categoria = get_templates_by_categoria(categoria)
-    for t in templates_categoria:
-        if t.get("categoria_cnae") == categoria and t.get("id") != template_base_id:
-            return dict(t)
+    """Template que a campanha vai usar para este CNPJ.
+
+    Antes, esta funcao trocava o template escolhido por OUTRO da mesma
+    categoria CNAE (a condicao era literalmente id != template_base_id) --
+    quem montava a campanha escolhia um template e recebia outro, sem
+    aviso. Agora o template escolhido e' respeitado sempre; variar texto
+    por setor se faz com uma campanha por setor, que e' explicito e
+    visivel em vez de acontecer por baixo dos panos."""
     base = get_template(template_base_id)
-    if base:
-        return dict(base)
-    return templates_categoria[0] if templates_categoria else {}
+    return dict(base) if base else {}
 
 def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
     """Config SMTP efetiva: a da empresa (se configurada) ou a global (.env)."""
