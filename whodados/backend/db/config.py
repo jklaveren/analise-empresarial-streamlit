@@ -294,10 +294,13 @@ def _run_ensure_multiempresa(os):
 
         # Atividades/tarefas do CRM -- atribuiveis a um usuario da mesma
         # organizacao (ex.: os socios da SVYP dividindo follow-ups entre si).
+        # cnpj e' OPCIONAL: boa parte das tarefas entre socios nao tem empresa
+        # nenhuma envolvida ("revisar proposta", "ligar pro contador"), e
+        # exigir empresa obrigava a entrar num cliente antes de criar tarefa.
         cur.execute("""CREATE TABLE IF NOT EXISTS crm_atividades (
             id SERIAL PRIMARY KEY,
             organizacao_id INTEGER REFERENCES organizacoes(id) ON DELETE CASCADE,
-            cnpj VARCHAR(18) NOT NULL,
+            cnpj VARCHAR(18),
             titulo VARCHAR(200) NOT NULL,
             tipo VARCHAR(30) DEFAULT 'tarefa',
             descricao TEXT,
@@ -308,6 +311,8 @@ def _run_ensure_multiempresa(os):
             criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             concluido_em TIMESTAMP WITH TIME ZONE
         )""")
+        # A tabela pode ja existir com cnpj NOT NULL (versao anterior).
+        cur.execute("ALTER TABLE crm_atividades ALTER COLUMN cnpj DROP NOT NULL")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_cnpj ON crm_atividades(cnpj)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_responsavel ON crm_atividades(responsavel_user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_org ON crm_atividades(organizacao_id)")

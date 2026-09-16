@@ -20,7 +20,7 @@ from .db import (
     listar_crm_classificados,
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,
-    listar_todas_atividades, mover_atividade_crm,
+    listar_todas_atividades, mover_atividade_crm, buscar_empresas_rapido,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -43,6 +43,16 @@ async def listar_crm(current_user: Dict = Depends(get_current_user), org_id: int
 async def crm_listar_usuarios(current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
     """Usuarios da organizacao ativa, pra popular o seletor de responsavel."""
     return listar_usuarios_da_org(org_id)
+
+
+@router.get("/crm/buscar-empresa")
+async def crm_buscar_empresa(
+    q: str = Query(..., min_length=3, description="Parte do nome ou CNPJ"),
+    current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org),
+):
+    """Busca rapida por nome/CNPJ, pra vincular uma atividade a uma empresa
+    sem precisar sair da tela de Atividades."""
+    return buscar_empresas_rapido(q, limite=10)
 
 
 @router.get("/crm/atividades")
@@ -76,6 +86,36 @@ async def crm_classificar_base(
 ):
     """Roda a regra de perfil na base inteira (lote) e grava ideal/possivel/fora."""
     return classificar_base(org_id, limite) if limite and limite > 0 else classificar_base(org_id)
+
+
+def _criar_atividade(data: Dict, cnpj: Optional[str], current_user: Dict, org_id: int):
+    """Cria a atividade e avisa o responsavel. cnpj opcional -- tarefa entre
+    socios ("revisar proposta") nao precisa de empresa vinculada."""
+    titulo = (data.get("titulo") or "").strip()
+    if not titulo:
+        raise HTTPException(status_code=400, detail="Titulo e' obrigatorio")
+    atividade = criar_atividade_crm(
+        cnpj, org_id, titulo, criado_por=current_user.get("sub"),
+        tipo=data.get("tipo") or "tarefa", descricao=data.get("descricao"),
+        responsavel_user_id=data.get("responsavel_user_id"), prazo=data.get("prazo"),
+    )
+    if data.get("responsavel_user_id"):
+        usuarios = {u["id"]: u["username"] for u in listar_usuarios_da_org(org_id)}
+        responsavel_username = usuarios.get(data["responsavel_user_id"])
+        if responsavel_username:
+            create_notificacao(
+                "tarefa_atribuida", f"Nova tarefa: {titulo}",
+                data.get("descricao") or f"Atribuida por {current_user.get('sub')}",
+                cnpj=cnpj, user_id=responsavel_username, organizacao_id=org_id,
+            )
+    return atividade
+
+
+@router.post("/crm/atividades")
+async def crm_criar_atividade_avulsa(data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    """Cria atividade direto do board, sem precisar abrir uma empresa antes.
+    Aceita "cnpj" no corpo pra vincular a uma empresa (opcional)."""
+    return _criar_atividade(data, (data.get("cnpj") or "").strip() or None, current_user, org_id)
 
 
 @router.post("/crm/atividades/{atividade_id}/concluir")
@@ -128,21 +168,4 @@ async def crm_listar_atividades(cnpj: str, current_user: Dict = Depends(get_curr
 
 @router.post("/crm/{cnpj}/atividades")
 async def crm_criar_atividade(cnpj: str, data: Dict, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
-    titulo = (data.get("titulo") or "").strip()
-    if not titulo:
-        raise HTTPException(status_code=400, detail="Titulo e' obrigatorio")
-    atividade = criar_atividade_crm(
-        cnpj, org_id, titulo, criado_por=current_user.get("sub"),
-        tipo=data.get("tipo") or "tarefa", descricao=data.get("descricao"),
-        responsavel_user_id=data.get("responsavel_user_id"), prazo=data.get("prazo"),
-    )
-    if data.get("responsavel_user_id"):
-        usuarios = {u["id"]: u["username"] for u in listar_usuarios_da_org(org_id)}
-        responsavel_username = usuarios.get(data["responsavel_user_id"])
-        if responsavel_username:
-            create_notificacao(
-                "tarefa_atribuida", f"Nova tarefa: {titulo}",
-                data.get("descricao") or f"Atribuida por {current_user.get('sub')}",
-                cnpj=cnpj, user_id=responsavel_username, organizacao_id=org_id,
-            )
-    return atividade
+    return _criar_atividade(data, cnpj, current_user, org_id)

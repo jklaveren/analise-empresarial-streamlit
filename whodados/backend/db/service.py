@@ -1452,6 +1452,40 @@ def seed_default_templates() -> int:
         return criados
 
 
+def buscar_empresas_rapido(termo: str, limite: int = 10) -> List[Dict[str, Any]]:
+    """Busca por nome ou CNPJ, so' o que precisa pra montar um autocomplete
+    (cnpj + nome + cidade). Limite baixo e sem contagem total de proposito --
+    e' pra escolher uma empresa numa lista curta, nao pra navegar a base."""
+    termo = (termo or "").strip()
+    if len(termo) < 3:
+        return []
+    so_digitos = re.sub(r"\D", "", termo)
+    try:
+        with get_db_cursor() as cur:
+            if so_digitos and len(so_digitos) >= 6:
+                cur.execute(
+                    """SELECT e."CNPJ_COMPLETO" AS cnpj_completo, e."RAZAO_SOCIAL" AS razao_social,
+                              COALESCE(m.nome_municipio, '') AS municipio
+                       FROM dados_empresas e
+                       LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                       WHERE e."CNPJ_COMPLETO" LIKE %s LIMIT %s""",
+                    (so_digitos + "%", limite),
+                )
+            else:
+                cur.execute(
+                    """SELECT e."CNPJ_COMPLETO" AS cnpj_completo, e."RAZAO_SOCIAL" AS razao_social,
+                              COALESCE(m.nome_municipio, '') AS municipio
+                       FROM dados_empresas e
+                       LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                       WHERE e."RAZAO_SOCIAL" LIKE %s LIMIT %s""",
+                    (termo.upper() + "%", limite),
+                )
+            return cur.fetchall()
+    except Exception as e:
+        log.warning(f"buscar_empresas_rapido falhou: {e}")
+        return []
+
+
 def buscar_socios_principais(cnpjs_basicos: List[str]) -> Dict[str, str]:
     """CNPJ_BASICO -> nome do socio 'responsavel' de cada empresa (pra
     personalizar campanha com o nome de uma pessoa, nao so' da empresa).

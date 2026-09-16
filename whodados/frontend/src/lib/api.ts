@@ -296,6 +296,28 @@ export function criarAtividadeCrm(cnpj: string, data: {
   });
 }
 
+export interface EmpresaBusca {
+  cnpj_completo: string;
+  razao_social: string;
+  municipio: string;
+}
+
+/** Busca rapida por nome/CNPJ, pra vincular atividade a uma empresa. */
+export function buscarEmpresaRapido(q: string): Promise<EmpresaBusca[]> {
+  return request(`/api/v1/crm/buscar-empresa?q=${encodeURIComponent(q)}`);
+}
+
+/** Cria atividade direto do board. Empresa (cnpj) e' opcional. */
+export function criarAtividadeAvulsa(data: {
+  titulo: string; tipo?: string; descricao?: string;
+  responsavel_user_id?: number; prazo?: string; cnpj?: string;
+}): Promise<AtividadeCrm> {
+  return request("/api/v1/crm/atividades", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
 export function concluirAtividadeCrm(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/crm/atividades/${id}/concluir`, { method: "POST" });
 }

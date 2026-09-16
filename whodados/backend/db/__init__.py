@@ -37,7 +37,7 @@ from .service import (
     listar_todas_atividades, mover_atividade_crm,
     # Descadastro de e-mail (LGPD/opt-out)
     email_esta_descadastrado, descadastrar_email,
-    buscar_socios_principais,
+    buscar_socios_principais, buscar_empresas_rapido,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
@@ -76,7 +76,7 @@ __all__ = [
     "listar_usuarios_da_org", "criar_atividade_crm", "listar_atividades_crm",
     "contar_atividades_pendentes", "concluir_atividade_crm", "deletar_atividade_crm",
     "listar_todas_atividades", "mover_atividade_crm",
-    "email_esta_descadastrado", "descadastrar_email", "buscar_socios_principais",
+    "email_esta_descadastrado", "descadastrar_email", "buscar_socios_principais", "buscar_empresas_rapido",
     # Analytics (agregacoes sobre dados_empresas / dados_socios)
     "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
     "analytics_top_empresas", "analytics_socios_ranking", "analytics_socio_detalhe",

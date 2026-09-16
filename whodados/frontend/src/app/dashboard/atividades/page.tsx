@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   listarTodasAtividades, moverAtividadeCrm, deletarAtividadeCrm,
-  AtividadeCrm, StatusAtividade,
+  criarAtividadeAvulsa, buscarEmpresaRapido, listarUsuariosOrg,
+  AtividadeCrm, StatusAtividade, UsuarioOrg, EmpresaBusca,
 } from "@/lib/api";
 
 const COLUNAS: { status: StatusAtividade; label: string; cor: string }[] = [
@@ -30,6 +31,13 @@ export default function AtividadesPage() {
   const [erro, setErro] = useState("");
   const [movendo, setMovendo] = useState<number | null>(null);
   const [filtroResp, setFiltroResp] = useState<string>("");
+  const [usuarios, setUsuarios] = useState<UsuarioOrg[]>([]);
+  const [formAberto, setFormAberto] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [form, setForm] = useState({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+  const [buscaEmpresa, setBuscaEmpresa] = useState("");
+  const [sugestoes, setSugestoes] = useState<EmpresaBusca[]>([]);
+  const [empresaVinculada, setEmpresaVinculada] = useState<EmpresaBusca | null>(null);
 
   const carregar = async () => {
     try {
@@ -41,7 +49,47 @@ export default function AtividadesPage() {
     }
   };
 
-  useEffect(() => { carregar(); }, []);
+  useEffect(() => {
+    carregar();
+    listarUsuariosOrg().then(setUsuarios).catch(() => {});
+  }, []);
+
+  // Busca de empresa com atraso -- nao dispara a cada tecla digitada.
+  useEffect(() => {
+    if (buscaEmpresa.trim().length < 3) { setSugestoes([]); return; }
+    const t = setTimeout(() => {
+      buscarEmpresaRapido(buscaEmpresa.trim()).then(setSugestoes).catch(() => setSugestoes([]));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [buscaEmpresa]);
+
+  const limparForm = () => {
+    setForm({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+    setBuscaEmpresa(""); setSugestoes([]); setEmpresaVinculada(null);
+  };
+
+  const criar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.titulo.trim()) return;
+    setSalvando(true);
+    try {
+      await criarAtividadeAvulsa({
+        titulo: form.titulo.trim(),
+        tipo: form.tipo,
+        descricao: form.descricao.trim() || undefined,
+        responsavel_user_id: form.responsavel_user_id ? Number(form.responsavel_user_id) : undefined,
+        prazo: form.prazo || undefined,
+        cnpj: empresaVinculada?.cnpj_completo,
+      });
+      limparForm();
+      setFormAberto(false);
+      await carregar();
+    } catch {
+      setErro("Não foi possível criar a atividade.");
+    } finally {
+      setSalvando(false);
+    }
+  };
 
   const responsaveis = useMemo(
     () => Array.from(new Set(atividades.map(a => a.responsavel_username).filter(Boolean))) as string[],
@@ -70,19 +118,97 @@ export default function AtividadesPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Atividades</h1>
           <p className="text-slate-500 mt-1 text-sm">
-            Todas as tarefas de todos os clientes, num board só. Pra criar uma nova, abra a empresa em{" "}
-            <Link href="/dashboard/crm" className="text-indigo-600 hover:underline">Clientes</Link> e use o "+ Tarefa" no card dela.
+            Tarefas da equipe. Vincular a uma empresa é opcional.
           </p>
         </div>
-        {responsaveis.length > 0 && (
-          <select value={filtroResp} onChange={e => setFiltroResp(e.target.value)} className="text-sm rounded-lg border border-slate-300 px-3 py-2 bg-white">
-            <option value="">Todos os responsáveis</option>
-            {responsaveis.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-        )}
+        <div className="flex items-center gap-2">
+          {responsaveis.length > 0 && (
+            <select value={filtroResp} onChange={e => setFiltroResp(e.target.value)} className="text-sm rounded-lg border border-slate-300 px-3 py-2 bg-white">
+              <option value="">Todos os responsáveis</option>
+              {responsaveis.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          )}
+          <button
+            onClick={() => setFormAberto(v => !v)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            {formAberto ? "Cancelar" : "+ Nova atividade"}
+          </button>
+        </div>
       </header>
 
       {erro && <div className="rounded-lg bg-red-50 p-4 text-red-700 text-sm">{erro}</div>}
+
+      {formAberto && (
+        <form onSubmit={criar} className="rounded-xl bg-white border border-slate-200 p-5 space-y-3 shadow-sm">
+          <input
+            autoFocus
+            type="text"
+            placeholder="O que precisa ser feito?"
+            value={form.titulo}
+            onChange={e => setForm({ ...form, titulo: e.target.value })}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+          />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <select value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="tarefa">📋 Tarefa</option>
+              <option value="ligacao">📞 Ligação</option>
+              <option value="reuniao">🗓️ Reunião</option>
+              <option value="email">📧 E-mail</option>
+              <option value="outro">• Outro</option>
+            </select>
+            <select value={form.responsavel_user_id} onChange={e => setForm({ ...form, responsavel_user_id: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="">Responsável...</option>
+              {usuarios.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+            </select>
+            <input type="date" value={form.prazo} onChange={e => setForm({ ...form, prazo: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+
+          <div className="relative">
+            {empresaVinculada ? (
+              <div className="flex items-center gap-2 text-sm bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+                <span className="text-indigo-800 flex-1 truncate">{empresaVinculada.razao_social}</span>
+                <button type="button" onClick={() => setEmpresaVinculada(null)} className="text-indigo-400 hover:text-indigo-700 text-xs">remover</button>
+              </div>
+            ) : (
+              <input
+                type="text"
+                placeholder="Vincular a uma empresa (opcional) — digite o nome ou CNPJ"
+                value={buscaEmpresa}
+                onChange={e => setBuscaEmpresa(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              />
+            )}
+            {sugestoes.length > 0 && !empresaVinculada && (
+              <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                {sugestoes.map(emp => (
+                  <button
+                    key={emp.cnpj_completo}
+                    type="button"
+                    onClick={() => { setEmpresaVinculada(emp); setBuscaEmpresa(""); setSugestoes([]); }}
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 border-b border-slate-100 last:border-0"
+                  >
+                    <span className="text-slate-800">{emp.razao_social}</span>
+                    {emp.municipio && <span className="text-slate-400 text-xs"> · {emp.municipio}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <textarea
+            placeholder="Detalhes (opcional)"
+            value={form.descricao}
+            onChange={e => setForm({ ...form, descricao: e.target.value })}
+            rows={2}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+          />
+
+          <button type="submit" disabled={salvando || !form.titulo.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-lg">
+            {salvando ? "Criando..." : "Criar atividade"}
+          </button>
+        </form>
+      )}
 
       {loading ? (
         <p className="text-center text-slate-400 py-12">Carregando...</p>
@@ -90,7 +216,7 @@ export default function AtividadesPage() {
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
           <div className="text-5xl mb-3">📋</div>
           <p className="text-slate-600 font-medium">Nenhuma atividade ainda</p>
-          <p className="text-sm text-slate-400 mt-1">Crie a primeira tarefa a partir do card de um cliente.</p>
+          <p className="text-sm text-slate-400 mt-1">Use o botão "+ Nova atividade" acima para criar a primeira.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -115,9 +241,11 @@ export default function AtividadesPage() {
                         </p>
                         <button onClick={() => remover(a.id)} className="text-slate-300 hover:text-red-500 text-xs shrink-0" title="Excluir">✕</button>
                       </div>
-                      <Link href={`/dashboard/empresa/${encodeURIComponent(a.cnpj)}`} className="text-xs text-indigo-600 hover:underline line-clamp-1 block mt-1">
-                        {a.razao_social || a.cnpj}
-                      </Link>
+                      {a.cnpj && (
+                        <Link href={`/dashboard/empresa/${encodeURIComponent(a.cnpj)}`} className="text-xs text-indigo-600 hover:underline line-clamp-1 block mt-1">
+                          {a.razao_social || a.cnpj}
+                        </Link>
+                      )}
                       <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                         {a.responsavel_username && (
                           <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full">{a.responsavel_username}</span>
