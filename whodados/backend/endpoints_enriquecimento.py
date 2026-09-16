@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .auth.dependencies import require_admin
+from .auth.dependencies import require_admin, get_active_org
 from .data import carregar_empresa_detalhe, carregar_socios
 from .agents.enriquecimento_service import enriquecer_empresa
 from .db import salvar_enriquecimento, listar_enriquecimento, remover_enriquecimento
@@ -40,7 +40,7 @@ def _socios_da_empresa(cnpj: str) -> List[str]:
 
 
 @router.post("/empresas/{cnpj}/enriquecer")
-async def enriquecer(cnpj: str, current_user: Dict = Depends(require_admin)):
+async def enriquecer(cnpj: str, current_user: Dict = Depends(require_admin), org_id: int = Depends(get_active_org)):
     empresa = carregar_empresa_detalhe(cnpj)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
@@ -56,19 +56,19 @@ async def enriquecer(cnpj: str, current_user: Dict = Depends(require_admin)):
     except Exception as exc:  # falha do LLM/rede vira 502, nao 500
         raise HTTPException(status_code=502, detail=f"Falha ao enriquecer: {exc}")
 
-    salvos = salvar_enriquecimento(cnpj, itens, coletado_por=f"agente:{_MODELO_LABEL}")
+    salvos = salvar_enriquecimento(cnpj, itens, coletado_por=f"agente:{_MODELO_LABEL}", organizacao_id=org_id)
     return {"cnpj": cnpj, "itens_encontrados": len(salvos), "itens": salvos}
 
 
 
 @router.get("/empresas/{cnpj}/enriquecimento")
-async def listar(cnpj: str, current_user: Dict = Depends(require_admin)):
-    return listar_enriquecimento(cnpj)
+async def listar(cnpj: str, current_user: Dict = Depends(require_admin), org_id: int = Depends(get_active_org)):
+    return listar_enriquecimento(cnpj, organizacao_id=org_id)
 
 
 @router.delete("/empresas/{cnpj}/enriquecimento")
-async def remover(cnpj: str, current_user: Dict = Depends(require_admin)):
+async def remover(cnpj: str, current_user: Dict = Depends(require_admin), org_id: int = Depends(get_active_org)):
     """Direito de exclusao (LGPD): remove o dado pessoal coletado para este
     CNPJ, mantendo so o registro de auditoria de que a remocao ocorreu."""
-    total = remover_enriquecimento(cnpj)
+    total = remover_enriquecimento(cnpj, organizacao_id=org_id)
     return {"cnpj": cnpj, "itens_removidos": total}

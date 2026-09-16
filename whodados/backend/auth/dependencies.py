@@ -1,5 +1,5 @@
 """Auth Dependencies."""
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Request, Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from typing import Dict, Optional
 
@@ -26,39 +26,45 @@ def require_admin(current_user: Dict = Depends(get_current_user)) -> Dict:
     return current_user
 
 
+# Metodos que gravam. Pra estes, adivinhar a empresa e' pior que falhar: o
+# registro nasce na empresa errada e ninguem percebe na hora.
+_METODOS_ESCRITA = {"POST", "PUT", "PATCH", "DELETE"}
+
+
 def get_active_org(
+    request: Request,
     current_user: Dict = Depends(get_current_user),
     x_org_id: Optional[int] = Header(None, alias="X-Org-Id"),
 ) -> int:
     """Empresa (organizacao) ativa da requisicao. O frontend manda o header
-    'X-Org-Id'; validamos que o usuario tem acesso a ela. Se o header nao vier,
-    cai na primeira empresa do usuario. Levanta 403 se o usuario nao tiver
-    acesso aquela empresa (ou nenhuma). Centraliza a checagem de isolamento
-    entre empresas -- todo endpoint de controle depende disto."""
+    'X-Org-Id'; validamos que o usuario tem acesso a ela. Levanta 403 se o
+    usuario nao tiver acesso aquela empresa (ou nenhuma). Centraliza a
+    checagem de isolamento entre empresas -- todo endpoint de controle
+    depende disto.
+
+    Sem o header, so' cai na primeira empresa do usuario em LEITURA, e ainda
+    assim so' quando ele tem uma empresa so' (nao ha' o que escolher errado).
+    Em escrita, ou com varias empresas, devolve 400 em vez de adivinhar:
+    esse chute silencioso gravava tarefa e notificacao na primeira empresa
+    da lista (a NRA) quando o header nao chegava."""
     from ..db.service import listar_organizacoes_do_usuario, usuario_tem_acesso_org
     username = current_user["sub"]
     if x_org_id is not None:
         if not usuario_tem_acesso_org(username, x_org_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem acesso a esta empresa")
         return x_org_id
+
     orgs = listar_organizacoes_do_usuario(username)
     if not orgs:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario sem empresa vinculada")
-    return orgs[0]["id"]
+    if len(orgs) == 1 and request.method not in _METODOS_ESCRITA:
+        return orgs[0]["id"]
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Empresa nao informada na requisicao (X-Org-Id). Recarregue a pagina e selecione a empresa.",
+    )
 
 
-
-def require_base_receita(org_id: int = Depends(get_active_org)) -> int:
-    """Bloqueia os endpoints de prospeccao para empresas que nao usam a base
-    da Receita Federal (ex.: JehJuh, que tem base propria). E' flag da
-    EMPRESA, nao do usuario: qualquer um que entrar nela nao ve a base."""
-    from ..db.service import org_usa_base_receita
-    if not org_usa_base_receita(org_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Esta empresa nao usa a base da Receita Federal",
-        )
-    return org_id
 
 def get_papel_ativo(
     current_user: Dict = Depends(get_current_user),

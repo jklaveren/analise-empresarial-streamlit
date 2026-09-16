@@ -17,12 +17,14 @@ from .service import (
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
     atualizar_potencial_empresas,
+    org_escopo_base, listar_carteira_db, contar_carteira_db, get_carteira_by_cnpj,
+    categorias_da_carteira, salvar_na_carteira, remover_da_carteira,
     seed_default_templates, get_pipeline_metadata,
     get_app_config, set_app_config, get_sla_config, set_sla_config,
     list_all_users, update_user_flags, delete_user, update_user_email,
     # Multi-empresa (organizacoes)
     listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
-    definir_acesso_usuario_orgs, get_orgs_do_user_id, criar_organizacao, renomear_organizacao, org_usa_base_receita,
+    definir_acesso_usuario_orgs, get_orgs_do_user_id, criar_organizacao, renomear_organizacao,
     get_papel_usuario_org, definir_papel_usuario_org,
     get_org_smtp_config, set_org_smtp_config, set_org_logo, get_org_logo,
     # WhatsApp (Twilio)
@@ -67,12 +69,14 @@ __all__ = [
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "contar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
     "atualizar_potencial_empresas",
+    "org_escopo_base", "listar_carteira_db", "contar_carteira_db", "get_carteira_by_cnpj",
+    "categorias_da_carteira", "salvar_na_carteira", "remover_da_carteira",
     "seed_default_templates", "get_pipeline_metadata",
     "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
     "list_all_users", "update_user_flags", "delete_user", "update_user_email",
     # Multi-empresa (organizacoes)
     "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
-    "definir_acesso_usuario_orgs", "get_orgs_do_user_id", "criar_organizacao", "renomear_organizacao", "org_usa_base_receita",
+    "definir_acesso_usuario_orgs", "get_orgs_do_user_id", "criar_organizacao", "renomear_organizacao",
     "get_papel_usuario_org", "definir_papel_usuario_org",
     "get_org_smtp_config", "set_org_smtp_config", "set_org_logo", "get_org_logo",
     # WhatsApp (Twilio)

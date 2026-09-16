@@ -5,14 +5,14 @@ funil de filtros roda no servidor (server-side), entao o app trabalha a base
 inteira sem baixar tudo para o navegador."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from typing import Any, Dict, List, Optional
-from .auth import get_current_user, require_base_receita, get_active_org, get_papel_ativo
+from .auth import get_current_user, get_active_org, get_papel_ativo
 try:
     from .security import log_access, AuditAction
     HAS_AUDIT = True
 except ImportError:
     HAS_AUDIT = False
 from .db import (
-    org_usa_base_receita,
+    org_escopo_base, contar_carteira_db,
     get_crm_by_cnpj,
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
 )
@@ -79,9 +79,13 @@ async def listar_empresas(
     offset: int = 0,
     current_user: Dict = Depends(get_current_user),
     papel: str = Depends(get_papel_ativo),
-    _org: int = Depends(require_base_receita),
+    org_id: int = Depends(get_active_org),
 ):
-    """Uma pagina de empresas para o filtro atual (funil server-side)."""
+    """Uma pagina de empresas para o filtro atual (funil server-side).
+
+    organizacao_id NAO e' opcional aqui: e' o que decide se a listagem sai da
+    base da Receita ou da carteira propria da empresa. Sem ele, toda empresa
+    cairia na base publica."""
     empresas = listar_empresas_db(
         cidade=cidade, cnae=cnae, porte=porte, busca=busca,
         divida_min=divida_min, divida_max=divida_max,
@@ -89,6 +93,7 @@ async def listar_empresas(
         fundacao_de=fundacao_de, fundacao_ate=fundacao_ate,
         incluir_inativas=incluir_inativas, potencial=potencial,
         ordenar_por=ordenar_por, limit=limit, offset=offset,
+        organizacao_id=org_id,
     )
     if papel == "visitante":
         empresas = [_mascarar_empresa(e) for e in empresas]
@@ -110,10 +115,11 @@ async def contar_empresas(
     incluir_inativas: bool = True,
     potencial: Optional[List[str]] = Query(None),
     current_user: Dict = Depends(get_current_user),
-    _org: int = Depends(require_base_receita),
+    org_id: int = Depends(get_active_org),
 ):
     """Quantas empresas batem no filtro atual (para o contador do funil)."""
     total = contar_empresas_db(
+        organizacao_id=org_id,
         cidade=cidade, cnae=cnae, porte=porte, busca=busca,
         divida_min=divida_min, divida_max=divida_max,
         capital_min=capital_min, capital_max=capital_max,
@@ -126,9 +132,9 @@ async def contar_empresas(
 @router.get("/empresas/{cnpj}")
 async def get_empresa(
     request: Request, cnpj: str, current_user: Dict = Depends(get_current_user),
-    org_id: int = Depends(require_base_receita), papel: str = Depends(get_papel_ativo),
+    org_id: int = Depends(get_active_org), papel: str = Depends(get_papel_ativo),
 ):
-    empresa = get_empresa_by_cnpj_db(cnpj)
+    empresa = get_empresa_by_cnpj_db(cnpj, organizacao_id=org_id)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
     if papel == "visitante":
@@ -149,8 +155,8 @@ async def metricas(
     current_user: Dict = Depends(get_current_user),
     org_id: int = Depends(get_active_org),
 ):
-    # Empresa com base propria (ex.: JehJuh) nao tem numero da Receita pra
-    # mostrar. Devolve vazio em vez de 403 pro dashboard continuar abrindo.
-    if not org_usa_base_receita(org_id):
-        return {"sem_base_receita": True}
+    # Empresa que prospecta sobre carteira propria nao tem numero da Receita
+    # pra mostrar -- o painel dela se apoia na carteira, nao na base publica.
+    if org_escopo_base(org_id) == "carteira":
+        return {"escopo_base": "carteira", "total_empresas": contar_carteira_db(org_id)}
     return get_metricas_db()

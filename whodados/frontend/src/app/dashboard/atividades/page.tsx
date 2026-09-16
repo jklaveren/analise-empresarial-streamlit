@@ -69,7 +69,7 @@ export default function AtividadesPage() {
   const [aberta, setAberta] = useState<number | null>(null);
   const { activeOrg } = useAuth();
   // Empresa com base propria: nao ha o que buscar pra vincular.
-  const temBaseReceita = activeOrg?.usa_base_receita !== false;
+  const temBaseReceita = activeOrg?.escopo_base !== "carteira";
   const [movendo, setMovendo] = useState<number | null>(null);
   const [filtroResp, setFiltroResp] = useState<string>("");
   const [usuarios, setUsuarios] = useState<UsuarioOrg[]>([]);
@@ -137,7 +137,20 @@ export default function AtividadesPage() {
     [atividades]
   );
 
-  const filtradas = filtroResp ? atividades.filter(a => a.responsavel_username === filtroResp) : atividades;
+  const filtradas = useMemo(() => {
+    const base = filtroResp ? atividades.filter(a => a.responsavel_username === filtroResp) : atividades;
+    // Ordem cronológica: prazo mais próximo primeiro; sem prazo vai pro fim
+    // (não tem data pra comparar, não pode furar a fila de quem tem).
+    // Empate no prazo desempata pela ordem em que foram criadas.
+    return [...base].sort((a, b) => {
+      if (a.prazo !== b.prazo) {
+        if (!a.prazo) return 1;
+        if (!b.prazo) return -1;
+        return a.prazo < b.prazo ? -1 : 1;
+      }
+      return a.criado_em < b.criado_em ? -1 : 1;
+    });
+  }, [atividades, filtroResp]);
 
   const mover = async (id: number, status: StatusAtividade) => {
     setMovendo(id);

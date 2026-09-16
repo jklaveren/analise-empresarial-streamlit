@@ -50,6 +50,11 @@ export default function NotificacoesPage() {
                 {n.mensagem && <p className="text-sm text-slate-600 mb-1">{n.mensagem}</p>}
                 <div className="flex items-center gap-3 text-xs text-slate-400">
                   <span>{new Date(n.created_at).toLocaleString("pt-BR")}</span>
+                  {n.organizacao_nome && (
+                    <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-medium">
+                      {n.organizacao_nome}
+                    </span>
+                  )}
                   {n.cnpj && <Link href={`/dashboard/empresa/${encodeURIComponent(n.cnpj)}`} className="text-indigo-600 hover:underline">ver empresa</Link>}
                 </div>
               </div>

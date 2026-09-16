@@ -8,16 +8,16 @@ import { useRouter } from "next/navigation";
 import OrgSwitcher from "@/components/OrgSwitcher";
 import { contarNotificacoesNaoLidas } from "@/lib/api";
 
-// baseReceita: tela que so' faz sentido com a base da Receita Federal
-// carregada. Empresa com base propria (ex.: JehJuh) nao ve nenhuma delas
-// ate' a base dela ser carregada.
+// socios: so' existe sobre a base da Receita (o quadro societario vem de la').
+// O resto das telas serve as duas fontes -- empresa com carteira propria ve
+// as mesmas telas, com os dados dela.
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Empresas", icon: "📊", baseReceita: true },
+  { href: "/dashboard", label: "Empresas", icon: "📊" },
   { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑", baseReceita: true },
-  { href: "/dashboard/crm", label: "Clientes", icon: "🗂️", baseReceita: true },
+  { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
   { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
   { href: "/dashboard/gastos", label: "Gastos", icon: "🧾" },
-  { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧", baseReceita: true },
+  { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
   { href: "/dashboard/whatsapp", label: "WhatsApp", icon: "💬" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },
@@ -29,8 +29,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const isVisitante = activeOrg?.papel === "visitante";
-  // usa_base_receita ausente = true (empresas antigas, antes da flag existir).
-  const temBaseReceita = activeOrg?.usa_base_receita !== false;
+  // Empresa que prospecta sobre carteira propria nao tem quadro societario
+  // (isso so' existe na base da Receita). Todo o resto ela ve normalmente.
+  const temBaseReceita = activeOrg?.escopo_base !== "carteira";
   const navLinks = isVisitante
     ? NAV_LINKS.filter(l => l.href === "/dashboard")
     : NAV_LINKS.filter(l => temBaseReceita || !l.baseReceita);

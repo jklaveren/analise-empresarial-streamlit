@@ -14,6 +14,7 @@ from .endpoints_notificacoes import router as notificacoes_router
 from .endpoints_monitor import router as monitor_router
 from .endpoints_admin import router as admin_router
 from .endpoints_gastos import router as gastos_router
+from .endpoints_carteira import router as carteira_router
 from .endpoints_nlp import router as nlp_router
 from .endpoints_enriquecimento import router as enriquecimento_router
 from .endpoints_analytics import router as analytics_router
@@ -31,6 +32,7 @@ router.include_router(notificacoes_router)
 router.include_router(monitor_router)
 router.include_router(admin_router)
 router.include_router(gastos_router)
+router.include_router(carteira_router)
 router.include_router(nlp_router)
 router.include_router(enriquecimento_router)
 router.include_router(analytics_router)

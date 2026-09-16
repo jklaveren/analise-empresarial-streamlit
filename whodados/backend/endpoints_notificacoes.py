@@ -20,8 +20,8 @@ async def contar_nao_lidas(current_user: Dict = Depends(get_current_user), org_i
 
 
 @router.post("/notificacoes/{notificacao_id}/ler")
-async def marcar_lida(notificacao_id: int, current_user: Dict = Depends(get_current_user)):
-    success = mark_notificacao_lida(notificacao_id)
+async def marcar_lida(notificacao_id: int, current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
+    success = mark_notificacao_lida(notificacao_id, user_id=current_user.get("sub"), organizacao_id=org_id)
     if not success:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
     return {"ok": True}

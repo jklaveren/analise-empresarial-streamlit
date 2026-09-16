@@ -36,6 +36,13 @@ export function clearActiveOrgId(): void {
   localStorage.removeItem("org_id");
 }
 
+/**
+ * Rotas que legitimamente nao tem empresa: o login e a propria listagem de
+ * empresas (que e' o que DEFINE a empresa ativa). Todo o resto e' dado de
+ * uma empresa e nao pode sair daqui sem dizer qual.
+ */
+const ROTAS_SEM_EMPRESA = ["/api/v1/auth/", "/api/v1/organizacoes", "/api/v1/descadastro"];
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -45,6 +52,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const orgId = getActiveOrgId();
   if (orgId) headers["X-Org-Id"] = String(orgId);
+  else if (token && !ROTAS_SEM_EMPRESA.some(r => path.startsWith(r))) {
+    // Sem isto, a requisicao ia sem X-Org-Id e o backend caia na primeira
+    // empresa do usuario -- uma tarefa criada "na SYVP" nascia na NRA.
+    throw new ApiError(400, "Empresa ativa ainda não carregou. Recarregue a página.");
+  }
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "Erro desconhecido" }));
@@ -95,8 +107,8 @@ export interface Organizacao {
   slug: string;
   ativo: boolean;
   papel?: "admin" | "membro" | "visitante";
-  /** false = empresa com base propria; as telas da Receita Federal somem. */
-  usa_base_receita?: boolean;
+  /** De onde vem a base de prospecção: "receita" (base pública) ou "carteira" (lista própria). */
+  escopo_base?: "receita" | "carteira";
 }
 
 /** Empresas que o usuario logado pode operar (para o seletor de empresa ativa). */
@@ -743,6 +755,9 @@ export interface Notificacao {
   user_id: string | null;
   lida: boolean;
   created_at: string;
+  organizacao_id: number | null;
+  /** Empresa onde a notificação nasceu — sem isso não dá pra ver que caiu no lugar errado. */
+  organizacao_nome: string | null;
 }
 
 export async function listarNotificacoes(lidas?: boolean): Promise<Notificacao[]> {

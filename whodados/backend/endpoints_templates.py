@@ -12,7 +12,6 @@ from .db import (
     update_template, delete_template, get_templates_by_categoria,
     set_template_imagem, get_template_imagem, clear_template_imagem,
     get_empresa_by_cnpj_db, listar_empresas_db, buscar_socios_principais,
-    org_usa_base_receita,
 )
 from .mailer import enviar_email_teste, montar_email_para_cnpj
 
@@ -117,29 +116,13 @@ async def preview_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template nao encontrado")
 
-    # Empresa com base propria nao pode ver dado da Receita nem de amostra --
-    # o preview usaria uma empresa real da base compartilhada. Ai o exemplo e'
-    # ficticio: serve pra conferir o texto, sem vazar dado de outra empresa.
-    if not org_usa_base_receita(org_id):
-        exemplo = {
-            "cnpj_completo": "00000000000000",
-            "razao_social": "Empresa Exemplo Ltda",
-            "municipio": "Porto Alegre", "cnae_principal": "", "porte_nome": "",
-        }
-        montado = montar_email_para_cnpj(
-            template, exemplo["cnpj_completo"], "contato@exemplo.com.br",
-            {k: v for k, v in exemplo.items() if k != "cnpj_completo"}, organizacao_id=org_id,
-        )
-        montado.update({"destinatario": "contato@exemplo.com.br",
-                        "empresa": exemplo["razao_social"], "cnpj": exemplo["cnpj_completo"]})
-        return montado
-
     cnpj = (data.get("cnpj") or "").strip()
-    empresa = get_empresa_by_cnpj_db(cnpj) if cnpj else None
+    empresa = get_empresa_by_cnpj_db(cnpj, organizacao_id=org_id) if cnpj else None
     if not empresa:
-        # Amostra: primeira empresa com e-mail no filtro padrao, pra o
-        # preview ter nome, cidade e CNAE de verdade.
-        amostra = listar_empresas_db(limit=1, offset=0)
+        # Amostra tirada da fonte DESTA empresa (carteira propria ou Receita),
+        # pro preview ter nome, cidade e CNAE de verdade sem mostrar empresa
+        # de uma base que ela nao acessa.
+        amostra = listar_empresas_db(limit=1, offset=0, organizacao_id=org_id)
         empresa = amostra[0] if amostra else None
     if not empresa:
         raise HTTPException(status_code=400, detail="Sem empresa de amostra para o preview")

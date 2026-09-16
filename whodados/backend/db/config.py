@@ -201,10 +201,7 @@ def _run_ensure_multiempresa(os):
         # --- Seed das empresas (idempotente por slug) ---
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('SYVP', 'syvp') ON CONFLICT (slug) DO NOTHING")
-        # JehJuh nao usa a base da Receita Federal -- tem base propria. A flag
-        # e' por empresa (nao por usuario): quem entra nela nao ve Prospeccao.
-        cur.execute("ALTER TABLE organizacoes ADD COLUMN IF NOT EXISTS usa_base_receita BOOLEAN DEFAULT TRUE")
-        cur.execute("INSERT INTO organizacoes (nome, slug, usa_base_receita) VALUES ('JehJuh', 'jehjuh', FALSE) ON CONFLICT (slug) DO NOTHING")
+        cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('JehJuh', 'jehjuh') ON CONFLICT (slug) DO NOTHING")
 
         # --- jehzinha (admin) tem acesso as duas ---
         cur.execute("""INSERT INTO usuario_organizacoes (user_id, organizacao_id)
@@ -379,6 +376,44 @@ def _run_ensure_multiempresa(os):
         )""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gastos_org_data ON gastos(organizacao_id, data DESC)")
 
+        # De onde a empresa le' a base de prospeccao:
+        #   'receita'  -> dados_empresas (a base publica da Receita Federal)
+        #   'carteira' -> empresas_carteira, a lista propria daquela empresa
+        # Nao e' bloqueio de tela: as telas sao as mesmas, muda a FONTE.
+        cur.execute("ALTER TABLE organizacoes ADD COLUMN IF NOT EXISTS escopo_base VARCHAR(20) DEFAULT 'receita'")
+        cur.execute("UPDATE organizacoes SET escopo_base = 'carteira' WHERE slug = 'jehjuh' AND escopo_base IS DISTINCT FROM 'carteira'")
+
+        # Carteira propria da empresa. Guarda os campos por conta propria (nao
+        # e' so' uma lista de CNPJs apontando pra dados_empresas) porque o
+        # cliente carregado pode nem existir na base da Receita que temos --
+        # e porque o ETL recria dados_empresas do zero a cada carga, entao
+        # qualquer coisa gravada la' seria perdida.
+        cur.execute("""CREATE TABLE IF NOT EXISTS empresas_carteira (
+            id SERIAL PRIMARY KEY,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            cnpj_completo VARCHAR(14) NOT NULL,
+            razao_social VARCHAR(255),
+            nome_fantasia VARCHAR(255),
+            municipio VARCHAR(120),
+            uf VARCHAR(2),
+            email VARCHAR(255),
+            contato_fone VARCHAR(60),
+            cnae_principal VARCHAR(10),
+            cnae_descricao VARCHAR(255),
+            porte_nome VARCHAR(40),
+            capital_social NUMERIC(16,2),
+            divida_total NUMERIC(16,2),
+            categoria VARCHAR(60),
+            situacao VARCHAR(30),
+            origem VARCHAR(40),
+            observacao TEXT,
+            criado_por VARCHAR(50),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE (organizacao_id, cnpj_completo)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_carteira_org ON empresas_carteira(organizacao_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_carteira_categoria ON empresas_carteira(organizacao_id, categoria)")
+
         # Descadastro de e-mail (LGPD/opt-out) -- GLOBAL, nao por empresa: se
         # alguem pede pra nao receber mais, isso vale pra NRA e SYVP, nao so'
         # pra quem mandou o e-mail que ela descadastrou. Toda campanha de
@@ -413,6 +448,16 @@ def _ensure_enriquecimento_table():
             removido_em TIMESTAMP WITH TIME ZONE
         )""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_enriquecimento_cnpj ON enriquecimento_contatos(cnpj)")
+        # Contato enriquecido e' trabalho de prospeccao de UMA empresa (quem
+        # pesquisou e achou o telefone). Sem esta coluna, o que a NRA
+        # levantou aparecia pra SYVP no mesmo CNPJ.
+        cur.execute("ALTER TABLE enriquecimento_contatos ADD COLUMN IF NOT EXISTS organizacao_id INTEGER")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_enriquecimento_org ON enriquecimento_contatos(cnpj, organizacao_id)")
+        # Contato enriquecido e' trabalho de prospeccao de UMA empresa (quem
+        # pesquisou e achou o telefone). Sem esta coluna, o que a NRA
+        # levantou aparecia pra SYVP no mesmo CNPJ.
+        cur.execute("ALTER TABLE enriquecimento_contatos ADD COLUMN IF NOT EXISTS organizacao_id INTEGER")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_enriquecimento_org ON enriquecimento_contatos(cnpj, organizacao_id)")
         conn.commit(); cur.close()
 
 def check_health():
