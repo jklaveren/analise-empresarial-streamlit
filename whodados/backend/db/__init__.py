@@ -16,6 +16,7 @@ from .service import (
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup, marcar_email_aberto,
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
+    atualizar_potencial_empresas,
     seed_default_templates, get_pipeline_metadata,
     get_app_config, set_app_config, get_sla_config, set_sla_config,
     list_all_users, update_user_flags, delete_user, update_user_email,
@@ -59,6 +60,7 @@ __all__ = [
     "get_emails_for_monitor", "get_monitor_stats", "get_emails_vermelhos_para_followup", "marcar_email_aberto",
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "contar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
+    "atualizar_potencial_empresas",
     "seed_default_templates", "get_pipeline_metadata",
     "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
     "list_all_users", "update_user_flags", "delete_user", "update_user_email",

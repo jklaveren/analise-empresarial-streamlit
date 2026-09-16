@@ -838,6 +838,36 @@ POTENCIAL_TIER_SQL = f"""(CASE
     ELSE 'baixo'
 END)"""
 
+
+# Mesma classificacao de classifier/cnae.py::classificar_cnae, em SQL --
+# indexada, pra filtrar por setor sem precisar comparar contra uma lista
+# de centenas de codigos CNAE (uma igualdade contra coluna indexada bate
+# muito mais rapido que "CNAE_PRINCIPAL = ANY(<231 codigos>)").
+CATEGORIA_CNAE_SQL = """(CASE
+    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 10 AND 33 THEN 'industria'
+    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 35 AND 43 THEN 'industria'
+    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 45 AND 47 THEN 'comercio'
+    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 58 AND 63 THEN 'tecnologia'
+    ELSE 'servicos'
+END)"""
+
+
+def atualizar_potencial_empresas() -> int:
+    """Repopula empresas_potencial inteira a partir de dados_empresas.
+    Rodar depois de toda carga do ETL (a carga substitui dados_empresas do
+    zero -- to_sql replace -- entao qualquer coisa pre-calculada precisa
+    ser refeita junto). Uma unica passada em lote, bem mais barato que
+    recalcular a formula a cada consulta."""
+    with get_db_cursor() as cur:
+        cur.execute("TRUNCATE empresas_potencial")
+        cur.execute(f"""
+            INSERT INTO empresas_potencial (cnpj_completo, potencial_score, potencial_tier, categoria_cnae)
+            SELECT e."CNPJ_COMPLETO", ({POTENCIAL_SCORE_SQL}), ({POTENCIAL_TIER_SQL}), ({CATEGORIA_CNAE_SQL})
+            FROM dados_empresas e
+            WHERE e."CNPJ_COMPLETO" IS NOT NULL
+        """)
+        return cur.rowcount
+
 # ==================== CONFIGURACOES DA APLICACAO (app_config) ====================
 
 _SLA_PADRAO = {"sla_verde_dias": 2, "sla_amarelo_dias": 5}
@@ -1128,7 +1158,7 @@ def _where_empresas(
     cidade=None, cnae=None, porte=None, busca=None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de=None, fundacao_ate=None, incluir_inativas: bool = True,
-    contato=None, potencial=None,
+    contato=None, potencial=None, categoria=None,
 ):
     """Monta o WHERE (e os params) compartilhado pela listagem e pela contagem,
     a partir dos filtros do funil (cidade, CNAE, porte, faixas de passivo/capital,
@@ -1180,7 +1210,10 @@ def _where_empresas(
             clauses.append(f"(NOT ({tem_email}) AND NOT ({tem_fone}))")
     tiers = _norm_lista(potencial)
     if tiers:
-        clauses.append(f"({POTENCIAL_TIER_SQL}) = ANY(%s)"); params.append(tiers)
+        clauses.append("ep.potencial_tier = ANY(%s)"); params.append(tiers)
+    categorias = _norm_lista(categoria)
+    if categorias:
+        clauses.append("ep.categoria_cnae = ANY(%s)"); params.append(categorias)
     where = (" AND " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -1189,7 +1222,7 @@ def listar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
-    incluir_inativas: bool = True, contato=None, potencial=None,
+    incluir_inativas: bool = True, contato=None, potencial=None, categoria=None,
     ordenar_por: str = "razao_social",
     limit: int = 100, offset: int = 0,
 ) -> List[Dict[str, Any]]:
@@ -1202,10 +1235,10 @@ def listar_empresas_db(
             where, params = _where_empresas(
                 cidade, cnae, porte, busca, divida_min, divida_max,
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
-                contato, potencial,
+                contato, potencial, categoria,
             )
             order_sql = (
-                f'({POTENCIAL_SCORE_SQL}) DESC, e."RAZAO_SOCIAL"'
+                'ep.potencial_score DESC NULLS LAST, e."RAZAO_SOCIAL"'
                 if ordenar_por == "potencial"
                 else 'e."RAZAO_SOCIAL"'
             )
@@ -1223,11 +1256,12 @@ def listar_empresas_db(
                     e."DATA_FUNDACAO" AS data_fundacao,
                     e."EMAIL" AS email,
                     ({CONTATO_FONE_SQL}) AS contato_fone,
-                    ({POTENCIAL_SCORE_SQL}) AS potencial_score,
-                    ({POTENCIAL_TIER_SQL}) AS potencial_tier
+                    COALESCE(ep.potencial_score, 0) AS potencial_score,
+                    COALESCE(ep.potencial_tier, 'baixo') AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
+                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE 1=1 {where}
                 ORDER BY {order_sql} LIMIT %s OFFSET %s
             """
@@ -1242,7 +1276,7 @@ def contar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
-    incluir_inativas: bool = True, potencial=None,
+    incluir_inativas: bool = True, potencial=None, categoria=None,
 ) -> int:
     """Conta quantas empresas batem no filtro atual (para o contador do funil,
     sem trazer as linhas). Retorna 0 se a tabela nao existir ou em caso de erro."""
@@ -1253,12 +1287,13 @@ def contar_empresas_db(
             where, params = _where_empresas(
                 cidade, cnae, porte, busca, divida_min, divida_max,
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
-                potencial=potencial,
+                potencial=potencial, categoria=categoria,
             )
             sql = f"""
                 SELECT COUNT(*) AS total
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE 1=1 {where}
             """
             cur.execute(sql, params)
@@ -1294,11 +1329,12 @@ def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
                     ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     ({CONTATO_FONE_SQL}) AS contato_fone,
-                    ({POTENCIAL_SCORE_SQL}) AS potencial_score,
-                    ({POTENCIAL_TIER_SQL}) AS potencial_tier
+                    COALESCE(ep.potencial_score, 0) AS potencial_score,
+                    COALESCE(ep.potencial_tier, 'baixo') AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
+                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE e."CNPJ_COMPLETO" = %s
                 LIMIT 1
                 """,

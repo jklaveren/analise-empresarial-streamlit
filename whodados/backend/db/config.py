@@ -114,6 +114,25 @@ def ensure_tables():
         # reais (to_sql if_exists="replace") quando o pipeline roda.
         cur.execute("CREATE TABLE IF NOT EXISTS municipios (cod_municipio VARCHAR(10) PRIMARY KEY, nome_municipio VARCHAR(200))")
         cur.execute("CREATE TABLE IF NOT EXISTS cnaes (codigo_cnae VARCHAR(10) PRIMARY KEY, descricao_cnae VARCHAR(300))")
+        # Potencial pre-calculado (nao recalculado a cada consulta -- com
+        # 1.68M+ linhas em dados_empresas, o CASE de potencial combinado com
+        # filtros grandes (ex.: lista de 200+ CNAEs) estourava o timeout do
+        # banco). Repopulada inteira via atualizar_potencial_empresas() --
+        # rodar isso de novo sempre que o ETL recarregar dados_empresas
+        # (a carga usa to_sql replace, entao a tabela e' recriada do zero).
+        # CHAR(14), nao VARCHAR -- tem que bater exatamente com o tipo de
+        # dados_empresas."CNPJ_COMPLETO" (CHAR, do to_sql do pandas), senao
+        # o JOIN faz cast implicito linha a linha e ignora os indices dos
+        # dois lados (era o gargalo real por tras da consulta lenta).
+        cur.execute("""CREATE TABLE IF NOT EXISTS empresas_potencial (
+            cnpj_completo CHAR(14) PRIMARY KEY,
+            potencial_score NUMERIC,
+            potencial_tier VARCHAR(10),
+            categoria_cnae VARCHAR(20)
+        )""")
+        cur.execute("ALTER TABLE empresas_potencial ADD COLUMN IF NOT EXISTS categoria_cnae VARCHAR(20)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_tier ON empresas_potencial(potencial_tier)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_categoria ON empresas_potencial(categoria_cnae)")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
     _ensure_multiempresa()
