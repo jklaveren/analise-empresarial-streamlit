@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
-from .auth import get_current_user
-from .services.whatsapp_service import enviar_whatsapp, validar_whatsapp, get_twilio_auth_token
+from .auth import get_current_user, get_active_org
+from .services.whatsapp_service import (
+    enviar_whatsapp, validar_whatsapp, get_twilio_auth_token, org_do_numero,
+)
 from .db.config import get_cur
 from .db import registrar_mensagem_whatsapp, listar_conversas_whatsapp, listar_mensagens_whatsapp
 from .logger import get_logger
@@ -17,16 +19,23 @@ router = APIRouter(prefix="/api/v1/integracoes", tags=["Integrações"])
 
 
 @router.get("")
-def listar_integracoes(current_user: dict = Depends(get_current_user)):
+def listar_integracoes(current_user: dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
     """
-    Lista as integrações configuradas. Os valores são ofuscados na resposta
-    (mostra somente o início) para não expor credenciais completas.
+    Integrações DESTA empresa (cada uma tem o próprio Twilio/Brevo). Os
+    valores são ofuscados na resposta (mostra somente o início) para não
+    expor credenciais completas.
+
+    `herdado` marca a credencial que ainda vem da configuração global — ou
+    seja, a empresa ainda não tem a dela e está usando a de ninguém.
     """
     try:
         with get_cur() as cur:
             cur.execute(
-                "SELECT id, key, value, descricao, ativo, updated_at "
-                "FROM integracao_configs ORDER BY key"
+                "SELECT DISTINCT ON (key) id, key, value, descricao, ativo, updated_at, organizacao_id "
+                "FROM integracao_configs "
+                "WHERE organizacao_id = %s OR organizacao_id IS NULL "
+                "ORDER BY key, organizacao_id NULLS LAST",
+                (org_id,),
             )
             linhas = cur.fetchall()
         resultado = []
@@ -45,6 +54,7 @@ def listar_integracoes(current_user: dict = Depends(get_current_user)):
                 "descricao": r["descricao"],
                 "ativo": r["ativo"],
                 "configurado": bool(r["value"]),
+                "herdado": r["organizacao_id"] is None,
             })
         return resultado
     except Exception as e:
@@ -58,10 +68,15 @@ class IntegracaoIn(BaseModel):
 
 
 @router.post("")
-def salvar_integracao(payload: IntegracaoIn, current_user: dict = Depends(get_current_user)):
+def salvar_integracao(payload: IntegracaoIn, current_user: dict = Depends(get_current_user),
+                      org_id: int = Depends(get_active_org)):
     """
-    Salva/atualiza o valor de uma integração. Mantém o valor por extenso no
-    banco (usado em runtime); quem chama envia o valor real.
+    Salva/atualiza o valor de uma integração DESTA empresa. Mantém o valor
+    por extenso no banco (usado em runtime); quem chama envia o valor real.
+
+    São 3 empresas, cada uma com o próprio número de WhatsApp e a própria
+    chave de e-mail -- por isso a credencial é gravada com organizacao_id em
+    vez de sobrescrever uma configuração global compartilhada.
     """
     chaves_permitidas = {"brevo_api_key", "twilio_sid", "twilio_token", "twilio_wa_number"}
     key = (payload.key or "").strip()
@@ -73,15 +88,15 @@ def salvar_integracao(payload: IntegracaoIn, current_user: dict = Depends(get_cu
     try:
         with get_cur() as cur:
             cur.execute(
-                """INSERT INTO integracao_configs (key, value, descricao, ativo, created_at, updated_at)
-                   VALUES (%s, %s, %s, TRUE, NOW(), NOW())
-                   ON CONFLICT (key) DO UPDATE
+                """INSERT INTO integracao_configs (organizacao_id, key, value, descricao, ativo, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, TRUE, NOW(), NOW())
+                   ON CONFLICT (COALESCE(organizacao_id, 0), key) DO UPDATE
                      SET value = EXCLUDED.value,
                          descricao = COALESCE(EXCLUDED.descricao, integracao_configs.descricao),
                          ativo = TRUE,
                          updated_at = NOW()
                  RETURNING id, key, descricao, ativo""",
-                (key, valor, payload.descricao),
+                (org_id, key, valor, payload.descricao),
             )
             registro = cur.fetchone()
         return {"ok": True, "chave": key, "configurado": True}
@@ -90,7 +105,8 @@ def salvar_integracao(payload: IntegracaoIn, current_user: dict = Depends(get_cu
 
 
 @router.post("/whatsapp/enviar")
-async def api_enviar_whatsapp(payload: Dict, current_user: dict = Depends(get_current_user)):
+async def api_enviar_whatsapp(payload: Dict, current_user: dict = Depends(get_current_user),
+                              org_id: int = Depends(get_active_org)):
     """
     Envia uma mensagem de WhatsApp para uma empresa.
     
@@ -115,29 +131,34 @@ async def api_enviar_whatsapp(payload: Dict, current_user: dict = Depends(get_cu
     body = mensagem or f"Olá! Esta é uma mensagem automática do WhoDados. Empresa CNPJ: {cnpj}"
     
     try:
-        result = enviar_whatsapp(telefone, body)
+        result = enviar_whatsapp(telefone, body, organizacao_id=org_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha ao enviar WhatsApp: {str(e)}")
 
     registrar_mensagem_whatsapp(
         telefone=telefone, direcao="saida", corpo=body, cnpj=cnpj,
-        status="enviada", twilio_sid=result.get("sid"),
+        status="enviada", twilio_sid=result.get("sid"), organizacao_id=org_id,
     )
     return result
 
 
 @router.get("/whatsapp/conversas")
-def api_listar_conversas_whatsapp(current_user: dict = Depends(get_current_user)):
-    """Caixa de entrada: uma linha por numero, com a ultima mensagem e o
-    total de nao lidas. Ordenado pela conversa mais recente primeiro."""
-    return listar_conversas_whatsapp()
+def api_listar_conversas_whatsapp(current_user: dict = Depends(get_current_user),
+                                  org_id: int = Depends(get_active_org)):
+    """Caixa de entrada DESTA empresa: uma linha por numero, com a ultima
+    mensagem e o total de nao lidas. Ordenado pela conversa mais recente.
+
+    Cada empresa tem o proprio numero, entao a conversa e' dela -- a caixa de
+    entrada da NRA nao mistura com a da SYVP."""
+    return listar_conversas_whatsapp(org_id)
 
 
 @router.get("/whatsapp/conversas/{telefone}")
-def api_listar_mensagens_whatsapp(telefone: str, current_user: dict = Depends(get_current_user)):
-    """Historico de uma conversa (mais antiga -> mais recente). Marca as
-    mensagens recebidas como lidas ao abrir."""
-    return listar_mensagens_whatsapp(telefone)
+def api_listar_mensagens_whatsapp(telefone: str, current_user: dict = Depends(get_current_user),
+                                  org_id: int = Depends(get_active_org)):
+    """Historico de uma conversa DESTA empresa (mais antiga -> mais recente).
+    Marca as mensagens recebidas como lidas ao abrir."""
+    return listar_mensagens_whatsapp(telefone, organizacao_id=org_id)
 
 
 @router.post("/whatsapp/webhook")
@@ -150,9 +171,18 @@ async def whatsapp_webhook(request: Request):
     form = await request.form()
     params = {k: v for k, v in form.items()}
 
-    auth_token = get_twilio_auth_token()
+    # 'To' e' o NOSSO numero -- e' ele que diz de qual empresa e' a conversa.
+    # Descobrimos a empresa antes de validar a assinatura porque o Auth Token
+    # usado na validacao tambem e' o daquela empresa.
+    numero_destino = (params.get("To") or "").replace("whatsapp:", "")
+    org_id = org_do_numero(numero_destino)
+
+    auth_token = get_twilio_auth_token(org_id)
     if not auth_token:
-        log.warning("Webhook do WhatsApp chamado mas Twilio nao esta configurado -- ignorado.")
+        log.warning(
+            "Webhook do WhatsApp chamado para %s mas nao ha' Twilio configurado -- ignorado.",
+            numero_destino or "(sem destino)",
+        )
         raise HTTPException(status_code=503, detail="Integracao com Twilio nao configurada")
 
     from twilio.request_validator import RequestValidator
@@ -173,6 +203,9 @@ async def whatsapp_webhook(request: Request):
     corpo = params.get("Body", "")
     sid = params.get("MessageSid", "")
     if telefone:
-        registrar_mensagem_whatsapp(telefone=telefone, direcao="entrada", corpo=corpo, status="recebida", twilio_sid=sid)
+        registrar_mensagem_whatsapp(
+            telefone=telefone, direcao="entrada", corpo=corpo, status="recebida",
+            twilio_sid=sid, organizacao_id=org_id,
+        )
 
     return Response(content="<Response></Response>", media_type="application/xml")

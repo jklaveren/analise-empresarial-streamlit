@@ -89,6 +89,14 @@ def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
         except Exception as e:
             log.warning(f"Falha lendo SMTP da empresa {organizacao_id}, usando global: {e}")
             cfg = None
+        if not (cfg and cfg.get("configurado")):
+            # Empresa sem SMTP proprio NAO cai na config global: o e-mail
+            # sairia com o remetente de outra empresa (o Brevo e' um por
+            # empresa). Devolve vazio -- o envio vira "simulado" e aparece
+            # como nao configurado, em vez de sair assinado por quem nao e'.
+            log.warning(f"Empresa {organizacao_id} sem SMTP configurado -- e-mail nao sera' enviado.")
+            return {"host": "", "port": 587, "username": "", "password": "",
+                    "use_tls": True, "email_from": "", "email_from_name": ""}
         if cfg and cfg.get("configurado"):
             return {
                 "host": cfg.get("smtp_host"),

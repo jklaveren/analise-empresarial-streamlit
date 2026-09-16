@@ -299,6 +299,21 @@ def _run_ensure_multiempresa(os):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_criado ON whatsapp_mensagens(criado_em DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_org ON whatsapp_mensagens(organizacao_id)")
 
+        # Credencial de integracao por EMPRESA. Cada uma tem o proprio numero
+        # de WhatsApp (e o proprio Twilio), entao a chave passa a ser
+        # (empresa, key) em vez de key global. As linhas antigas ficam com
+        # organizacao_id NULL e servem de fallback pra quem ainda nao
+        # configurou -- por isso o UNIQUE antigo em key precisa sair.
+        cur.execute("ALTER TABLE integracao_configs ADD COLUMN IF NOT EXISTS organizacao_id INTEGER REFERENCES organizacoes(id) ON DELETE CASCADE")
+        cur.execute("""DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'integracao_configs_key_key') THEN
+                    ALTER TABLE integracao_configs DROP CONSTRAINT integracao_configs_key_key;
+                END IF;
+            END $$;""")
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_integracao_org_key
+                       ON integracao_configs (COALESCE(organizacao_id, 0), key)""")
+
         # Atividades/tarefas do CRM -- atribuiveis a um usuario da mesma
         # organizacao (ex.: os socios da SVYP dividindo follow-ups entre si).
         # cnpj e' OPCIONAL: boa parte das tarefas entre socios nao tem empresa

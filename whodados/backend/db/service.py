@@ -2384,13 +2384,10 @@ def listar_mensagens_whatsapp(
     as mensagens recebidas dessa conversa como lidas ao abrir (comportamento
     padrao de caixa de entrada).
 
-    A conversa e' COMPARTILHADA entre as empresas de proposito: o numero do
-    WhatsApp ja' e' de uma empresa so', entao quem abre a conversa ve o
-    acompanhamento inteiro daquele numero, nao so' as mensagens da empresa
-    ativa (senao a mesma conversa apareceria pela metade). As mensagens
-    continuam gravadas com organizacao_id, entao da' pra separar depois se
-    algum dia uma empresa nao puder ver o WhatsApp da outra --
-    organizacao_id aqui filtra quando informado."""
+    A conversa e' DA EMPRESA: cada uma tem o proprio numero de WhatsApp, e a
+    mensagem recebida e' endereçada pela empresa dona do numero de destino
+    (ver org_do_numero). Quem esta' na NRA nao ve a caixa de entrada da SYVP.
+    organizacao_id=None so' aparece em rotina interna que varre tudo."""
     try:
         with get_db_cursor() as cur:
             if not _tabela_existe(cur, "whatsapp_mensagens"):
@@ -2406,8 +2403,9 @@ def listar_mensagens_whatsapp(
             if marcar_como_lida:
                 cur.execute(
                     """UPDATE whatsapp_mensagens SET lida = TRUE
-                       WHERE telefone = %s AND direcao = 'entrada' AND lida = FALSE""",
-                    (telefone,),
+                       WHERE telefone = %s AND direcao = 'entrada' AND lida = FALSE
+                         AND (%s::int IS NULL OR organizacao_id = %s)""",
+                    (telefone, organizacao_id, organizacao_id),
                 )
             return mensagens
     except Exception as e:
