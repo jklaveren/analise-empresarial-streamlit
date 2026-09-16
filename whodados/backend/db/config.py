@@ -66,6 +66,28 @@ def ensure_tables():
         cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS imagem_mime VARCHAR(50)")
         cur.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS tem_imagem BOOLEAN DEFAULT FALSE")
         cur.execute("CREATE TABLE IF NOT EXISTS campanhas (id SERIAL PRIMARY KEY, nome VARCHAR(200) NOT NULL, template_id INTEGER, filtros JSONB, status VARCHAR(50) DEFAULT 'rascunho', total_destinatarios INTEGER DEFAULT 0, enviados INTEGER DEFAULT 0, erros INTEGER DEFAULT 0, eh_sequencia BOOLEAN DEFAULT FALSE, dias_sequencia JSONB, agendada_para TIMESTAMP WITH TIME ZONE, iniciada_em TIMESTAMP WITH TIME ZONE, concluida_em TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), created_by VARCHAR(50))")
+        # Canal (email/whatsapp) + envio em lotes diarios (o limite de
+        # mensagens/dia do WhatsApp e' do Twilio, nao nosso -- tamanho_lote
+        # deixa a campanha respeitar isso e ir mandando aos poucos em vez de
+        # estourar o limite tentando mandar tudo de uma vez).
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS canal VARCHAR(20) DEFAULT 'email'")
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS mensagem TEXT")
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS tamanho_lote INTEGER")
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS repetir_ate DATE")
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS ultimo_lote_em TIMESTAMP WITH TIME ZONE")
+        # Ledger generico de quem ja foi contatado por qual campanha -- usado
+        # pra calcular o "proximo lote" (quem do filtro ainda nao foi
+        # contatado), independente do canal.
+        cur.execute("""CREATE TABLE IF NOT EXISTS campanha_envios (
+            id SERIAL PRIMARY KEY,
+            campanha_id INTEGER NOT NULL REFERENCES campanhas(id) ON DELETE CASCADE,
+            cnpj VARCHAR(18) NOT NULL,
+            canal VARCHAR(20) NOT NULL,
+            status VARCHAR(30) DEFAULT 'enviado',
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE (campanha_id, cnpj)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_campanha_envios_campanha ON campanha_envios(campanha_id)")
         cur.execute("CREATE TABLE IF NOT EXISTS emails_enviados (id SERIAL PRIMARY KEY, campaign_id INTEGER, cnpj VARCHAR(18) NOT NULL, email_destino VARCHAR(255) NOT NULL, assunto VARCHAR(200), status VARCHAR(50) DEFAULT 'pendente', erro TEXT, sequencia_passo INTEGER DEFAULT 0, enviado_em TIMESTAMP WITH TIME ZONE, aberto_em TIMESTAMP WITH TIME ZONE, criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
         cur.execute("CREATE TABLE IF NOT EXISTS notificacoes (id SERIAL PRIMARY KEY, tipo VARCHAR(50) NOT NULL, titulo VARCHAR(200) NOT NULL, mensagem TEXT, cnpj VARCHAR(18), user_id VARCHAR(50), lida BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")        
         cur.execute("CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, action VARCHAR(100) NOT NULL, user_id VARCHAR(50), ip_address INET, user_agent TEXT, resource_type VARCHAR(50), resource_id VARCHAR(100), details JSONB DEFAULT '{}'::jsonb, success BOOLEAN DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
@@ -133,6 +155,14 @@ def _run_ensure_multiempresa(os):
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             PRIMARY KEY (user_id, organizacao_id)
         )""")
+        # Papel do usuario DENTRO dessa empresa (hierarquia: Operador Global
+        # [app_users.is_admin] > admin [por empresa] > membro > visitante).
+        # 'admin' aqui e' escopado a ESSA organizacao -- diferente do
+        # is_admin global, que da acesso a todas. 'visitante' e' bloqueado
+        # em quase tudo pelo VisitanteMiddleware (main.py) e ve dados
+        # mascarados nas Empresas -- pensado pra dar acesso a alguem de
+        # fora (ex.: recrutador) sem expor dado real de cliente.
+        cur.execute("ALTER TABLE usuario_organizacoes ADD COLUMN IF NOT EXISTS papel VARCHAR(20) DEFAULT 'membro'")
         cur.execute("""CREATE TABLE IF NOT EXISTS org_smtp_config (
             organizacao_id INTEGER PRIMARY KEY REFERENCES organizacoes(id) ON DELETE CASCADE,
             smtp_host VARCHAR(200),
@@ -220,6 +250,61 @@ def _run_ensure_multiempresa(os):
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             )"""
         )
+
+        # --- WhatsApp (Twilio): historico de mensagens enviadas/recebidas.
+        # organizacao_id fica nullable pra nao quebrar mensagens antigas sem
+        # org resolvida; cnpj e' um best-effort match pelo telefone (pode ficar
+        # NULL se nao achar nenhuma empresa com esse numero).
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS whatsapp_mensagens (
+                id SERIAL PRIMARY KEY,
+                organizacao_id INTEGER REFERENCES organizacoes(id) ON DELETE SET NULL,
+                cnpj VARCHAR(18),
+                telefone VARCHAR(20) NOT NULL,
+                direcao VARCHAR(10) NOT NULL,
+                corpo TEXT,
+                status VARCHAR(30) DEFAULT 'recebida',
+                twilio_sid VARCHAR(64),
+                lida BOOLEAN DEFAULT FALSE,
+                criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            )"""
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_telefone ON whatsapp_mensagens(telefone)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_criado ON whatsapp_mensagens(criado_em DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_org ON whatsapp_mensagens(organizacao_id)")
+
+        # Atividades/tarefas do CRM -- atribuiveis a um usuario da mesma
+        # organizacao (ex.: os socios da SVYP dividindo follow-ups entre si).
+        cur.execute("""CREATE TABLE IF NOT EXISTS crm_atividades (
+            id SERIAL PRIMARY KEY,
+            organizacao_id INTEGER REFERENCES organizacoes(id) ON DELETE CASCADE,
+            cnpj VARCHAR(18) NOT NULL,
+            titulo VARCHAR(200) NOT NULL,
+            tipo VARCHAR(30) DEFAULT 'tarefa',
+            descricao TEXT,
+            responsavel_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+            prazo DATE,
+            status VARCHAR(20) DEFAULT 'pendente',
+            criado_por VARCHAR(50),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            concluido_em TIMESTAMP WITH TIME ZONE
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_cnpj ON crm_atividades(cnpj)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_responsavel ON crm_atividades(responsavel_user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crm_atividades_org ON crm_atividades(organizacao_id)")
+
+        # Descadastro de e-mail (LGPD/opt-out) -- GLOBAL, nao por empresa: se
+        # alguem pede pra nao receber mais, isso vale pra NRA e SYVP, nao so'
+        # pra quem mandou o e-mail que ela descadastrou. Toda campanha de
+        # e-mail tem que respeitar isso (ver mailer/service.py) -- e' regra
+        # do negocio, nao op'cao de template.
+        cur.execute("""CREATE TABLE IF NOT EXISTS emails_descadastrados (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            cnpj VARCHAR(18),
+            motivo TEXT,
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
 
         conn.commit(); cur.close()
 

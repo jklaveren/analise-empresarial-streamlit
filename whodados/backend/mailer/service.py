@@ -107,6 +107,22 @@ def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
     }
 
 
+def _conectar_smtp(cfg: Dict[str, Any]) -> smtplib.SMTP:
+    """Abre a conexao no modo certo pro provedor: porta 465 e' SSL implicito
+    desde o connect (SMTP_SSL) -- tentar STARTTLS nela trava ou derruba a
+    conexao sem erro claro. Qualquer outra porta (587, 25, ...) e' texto
+    puro + STARTTLS depois de conectar, como a maioria dos provedores
+    (Gmail, Outlook, SendGrid) espera."""
+    host = cfg.get("host")
+    port = int(cfg.get("port") or 587)
+    if port == 465:
+        return smtplib.SMTP_SSL(host, port, timeout=20)
+    server = smtplib.SMTP(host, port, timeout=20)
+    if cfg.get("use_tls", True):
+        server.starttls()
+    return server
+
+
 def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, smtp: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = smtp or _smtp_da_org(None)
     if not cfg.get("host"):
@@ -120,9 +136,7 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
         if corpo_texto:
             msg.attach(MIMEText(corpo_texto, "plain", "utf-8"))
         msg.attach(MIMEText(corpo_html, "html", "utf-8"))
-        with smtplib.SMTP(cfg.get("host"), cfg.get("port") or 587) as server:
-            if cfg.get("use_tls"):
-                server.starttls()
+        with _conectar_smtp(cfg) as server:
             if cfg.get("username") and cfg.get("password"):
                 server.login(cfg.get("username"), cfg.get("password"))
             server.sendmail(cfg.get("email_from"), [para], msg.as_string())
@@ -152,6 +166,25 @@ def _assinatura_da_org(organizacao_id: Optional[int]) -> str:
     return assinatura.replace("{{logo}}", f"{base}/api/v1/organizacoes/{organizacao_id}/logo")
 
 
+def _rodape_descadastro(email_dest: str) -> Dict[str, str]:
+    """Rodape de opt-out (LGPD) -- discreto, sem cara de spam generico, e
+    injetado pelo MOTOR de envio (nao pelo template): assim toda campanha,
+    de qualquer empresa, sempre tem esse link, sem depender de quem
+    escreveu o template lembrar de incluir."""
+    from .descadastro import gerar_link_descadastro
+    link = gerar_link_descadastro(email_dest)
+    if not link:
+        return {"html": "", "texto": ""}
+    html = (
+        '<p style="margin:20px 0 0 0;font-family:Arial,Helvetica,sans-serif;'
+        'font-size:11px;line-height:1.5;color:#9CA3AF;">'
+        f'Prefere não receber mais e-mails como este? <a href="{link}" style="color:#9CA3AF;">É só avisar aqui</a>.'
+        '</p>'
+    )
+    texto = f"\n\nPrefere nao receber mais e-mails como este? {link}"
+    return {"html": html, "texto": texto}
+
+
 def enviar_template_para_cnpjs(
     campanha_id: Optional[int],
     template: Dict,
@@ -161,8 +194,10 @@ def enviar_template_para_cnpjs(
     organizacao_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Envia template para CNPJs, escolhendo o template correto por CNAE.
-    Usa o SMTP e a assinatura da empresa (organizacao_id)."""
-    resultados = {"sucessos": 0, "erros": 0, "enviados": [], "erros_list": []}
+    Usa o SMTP e a assinatura da empresa (organizacao_id). Pula quem ja
+    pediu descadastro (LGPD/opt-out) -- regra do negocio, nao do template."""
+    from ..db.service import email_esta_descadastrado
+    resultados = {"sucessos": 0, "erros": 0, "descadastrados": 0, "enviados": [], "erros_list": []}
     smtp_cfg = _smtp_da_org(organizacao_id)
     assinatura = _assinatura_da_org(organizacao_id)
     if campanha_id:
@@ -176,6 +211,9 @@ def enviar_template_para_cnpjs(
 
     for i, cnpj in enumerate(cnpjs):
         email_dest = emails_por_cnpj.get(cnpj, f"contato@{cnpj[:8]}.com")
+        if email_esta_descadastrado(email_dest):
+            resultados["descadastrados"] += 1
+            continue
         dados = dados_map.get(cnpj, {})
         cnae = dados.get("cnae_principal") or dados.get("cnae")
         categoria = classificar_cnae(cnae) if cnae else "servicos"
@@ -207,9 +245,11 @@ def enviar_template_para_cnpjs(
             except Exception:
                 pass
 
+        rodape = _rodape_descadastro(email_dest)
         result = enviar_email(
             email_dest, rendered.get("assunto", ""),
-            rendered.get("corpo_html", "") + assinatura, rendered.get("corpo_texto"),
+            rendered.get("corpo_html", "") + assinatura + rodape["html"],
+            (rendered.get("corpo_texto") or "") + rodape["texto"],
             smtp=smtp_cfg,
         )
         if result.get("sucesso"):

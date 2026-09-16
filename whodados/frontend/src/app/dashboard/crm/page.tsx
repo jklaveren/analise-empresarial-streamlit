@@ -21,7 +21,127 @@ import {
   listarCrmClassificados,
   CrmClassificado,
   ClassificacaoEstatisticas,
+  listarUsuariosOrg,
+  listarAtividadesCrm,
+  criarAtividadeCrm,
+  concluirAtividadeCrm,
+  UsuarioOrg,
+  AtividadeCrm,
 } from "@/lib/api";
+
+const TIPOS_ATIVIDADE = [
+  { value: "tarefa", label: "📋 Tarefa" },
+  { value: "ligacao", label: "📞 Ligação" },
+  { value: "reuniao", label: "🗓️ Reunião" },
+  { value: "email", label: "📧 E-mail" },
+  { value: "outro", label: "•  Outro" },
+];
+
+function formatPrazo(prazo: string | null): string {
+  if (!prazo) return "";
+  try { return new Date(prazo + "T00:00:00").toLocaleDateString("pt-BR"); } catch { return prazo; }
+}
+
+/** Atividades/tarefas de uma empresa no CRM: lista + form pra criar nova,
+ * atribuivel a um usuario da organizacao (ex.: os socios dividindo follow-ups). */
+function AtividadesCard({ cnpj, usuarios, onMudou }: { cnpj: string; usuarios: UsuarioOrg[]; onMudou: () => void }) {
+  const [aberto, setAberto] = useState(false);
+  const [atividades, setAtividades] = useState<AtividadeCrm[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [criando, setCriando] = useState(false);
+  const [form, setForm] = useState({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+
+  const carregar = async () => {
+    setLoading(true);
+    try { setAtividades(await listarAtividadesCrm(cnpj)); }
+    catch { /* silencioso -- nao trava o card */ }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { if (aberto) carregar(); }, [aberto]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCriar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.titulo.trim()) return;
+    setCriando(true);
+    try {
+      await criarAtividadeCrm(cnpj, {
+        titulo: form.titulo.trim(), tipo: form.tipo,
+        responsavel_user_id: form.responsavel_user_id ? Number(form.responsavel_user_id) : undefined,
+        prazo: form.prazo || undefined,
+        descricao: form.descricao.trim() || undefined,
+      });
+      setForm({ titulo: "", tipo: "tarefa", responsavel_user_id: "", prazo: "", descricao: "" });
+      await carregar();
+      onMudou();
+    } catch { /* mantem o form preenchido pra tentar de novo */ }
+    finally { setCriando(false); }
+  };
+
+  const handleConcluir = async (id: number) => {
+    setAtividades(prev => prev.map(a => a.id === id ? { ...a, status: "concluida" } : a));
+    try { await concluirAtividadeCrm(id); onMudou(); } catch { await carregar(); }
+  };
+
+  const pendentes = atividades.filter(a => a.status === "pendente");
+
+  return (
+    <div className="mt-2 border-t border-slate-100 pt-2">
+      <button
+        type="button"
+        onClick={() => setAberto(v => !v)}
+        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
+      >
+        📋 {pendentes.length > 0 ? `${pendentes.length} tarefa${pendentes.length > 1 ? "s" : ""}` : "+ Tarefa"}
+        <span className="text-slate-400">{aberto ? "▲" : "▼"}</span>
+      </button>
+
+      {aberto && (
+        <div className="mt-2 space-y-2">
+          {loading ? (
+            <p className="text-xs text-slate-400">Carregando...</p>
+          ) : atividades.length > 0 ? (
+            <ul className="space-y-1">
+              {atividades.map(a => (
+                <li key={a.id} className={`text-xs flex items-start gap-1.5 ${a.status === "concluida" ? "text-slate-400 line-through" : "text-slate-700"}`}>
+                  <input type="checkbox" checked={a.status === "concluida"} onChange={() => a.status === "pendente" && handleConcluir(a.id)} className="mt-0.5" />
+                  <span className="flex-1">
+                    {a.titulo}
+                    {a.responsavel_username && <span className="text-slate-400"> · {a.responsavel_username}</span>}
+                    {a.prazo && <span className="text-slate-400"> · {formatPrazo(a.prazo)}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-slate-400">Nenhuma atividade ainda.</p>
+          )}
+
+          <form onSubmit={handleCriar} className="space-y-1.5 bg-slate-50 rounded-lg p-2">
+            <input
+              type="text" placeholder="Nova tarefa..." value={form.titulo}
+              onChange={e => setForm({ ...form, titulo: e.target.value })}
+              className="w-full text-xs rounded border border-slate-200 px-2 py-1"
+            />
+            <div className="flex gap-1">
+              <select value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })} className="text-xs rounded border border-slate-200 px-1 py-1 bg-white">
+                {TIPOS_ATIVIDADE.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+              <select value={form.responsavel_user_id} onChange={e => setForm({ ...form, responsavel_user_id: e.target.value })} className="flex-1 text-xs rounded border border-slate-200 px-1 py-1 bg-white">
+                <option value="">Responsável...</option>
+                {usuarios.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+              </select>
+              <input type="date" value={form.prazo} onChange={e => setForm({ ...form, prazo: e.target.value })} className="text-xs rounded border border-slate-200 px-1 py-1" />
+            </div>
+            <button type="submit" disabled={criando || !form.titulo.trim()} className="w-full text-xs bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded py-1 font-medium">
+              {criando ? "Adicionando..." : "Adicionar"}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const COLUNAS: { status: CrmStatus; label: string; cor: string }[] = [
   { status: "novo", label: "Novo", cor: "border-slate-300 bg-slate-50" },
@@ -267,6 +387,7 @@ function FunilTab() {
 
   const [kanban, setKanban] = useState<CrmKanban>(KANBAN_VAZIO);
   const [nomes, setNomes] = useState<Record<string, string>>({});
+  const [usuarios, setUsuarios] = useState<UsuarioOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [movendo, setMovendo] = useState<string | null>(null);
@@ -305,6 +426,7 @@ function FunilTab() {
 
   useEffect(() => {
     carregar();
+    listarUsuariosOrg().then(setUsuarios).catch(() => {});
     }, []);
 
   const moverPara = async (cnpj: string, novoStatus: CrmStatus) => {
@@ -373,6 +495,7 @@ function FunilTab() {
                         </option>
                       ))}
                     </select>
+                    <AtividadesCard cnpj={r.cnpj} usuarios={usuarios} onMudou={carregar} />
                   </div>
                 ))}
               </div>

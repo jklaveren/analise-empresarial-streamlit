@@ -37,6 +37,12 @@ def get_twilio_client():
     return Client(account_sid, auth_token)
 
 
+def get_twilio_auth_token() -> str:
+    """Auth Token isolado (sem instanciar Client) -- usado so pra validar a
+    assinatura das chamadas de webhook que o Twilio faz pra gente."""
+    return _get_config("twilio_token")
+
+
 def enviar_whatsapp(to_number: str, mensagem: str):
     """
     Envia WhatsApp via Twilio.

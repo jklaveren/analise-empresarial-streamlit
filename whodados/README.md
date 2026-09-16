@@ -133,9 +133,11 @@ Os arquivos baixados vão para `whodados/pipeline/raw/` e os CSVs gerados para `
 DATABASE_URL="postgresql://..." python whodados/scripts/sync_data_to_db.py
 ```
 
-### Automático (GitHub Actions)
+### Automático (GitHub Actions) — desativado
 
-O workflow `.github/workflows/whodados-etl.yml` (na **raiz** do repositório — o GitHub Actions só executa workflows de lá) roda toda **segunda-feira às 02h UTC** (cron `0 2 * * 1`). Ele é fracionado em estágios (`download-rf`, `download-pgfn`, `process-rf`, `process-pgfn`, `merge`), com cache dos downloads e artifact dos CSVs. Configure `SUPABASE_CONNECTION_STRING` como variável do repositório no GitHub.
+Existiam workflows (`whodados-etl.yml`, `whodados-etl-levas.yml`, `whodados-dividas.yml`) que rodavam o ETL automaticamente. Foram **removidos em 2026-09** porque as execuções no runner do GitHub Actions passaram a falhar sempre (travando em menos de 1 minuto, mesmo código que funciona local) — indício de bloqueio/anti-abuso da Receita Federal contra IPs de datacenter/nuvem. `teste-conectividade-rf.yml` continua no repo como diagnóstico (só testa alcance, não baixa dados).
+
+Enquanto isso não é resolvido (self-hosted runner, proxy, ou outra fonte para os dados), rode o ETL **do seu computador**: `python whodados/pipeline/pipeline_levas.py` com `DATABASE_URL` no ambiente (veja `nra_etl/rodar_pipeline.cmd` para o fluxo usado hoje).
 
 ---
 

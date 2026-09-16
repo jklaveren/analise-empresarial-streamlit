@@ -1,0 +1,39 @@
+name: Campanhas — envia o lote diario pendente
+
+# Campanhas de e-mail/WhatsApp com "tamanho_lote" definido mandam so uma
+# fatia do publico por vez (o WhatsApp em particular tem limite diario do
+# Twilio). Este workflow chama o backend 1x/dia pra avancar o proximo lote
+# de cada campanha agendada/em andamento -- o Render free hiberna quando
+# ocioso, entao um scheduler dentro do proprio processo nao seria confiavel;
+# um cron batendo de fora e' o mesmo padrao ja usado pelo keep-alive e pelo
+# ETL neste repo.
+#
+# Requer o secret CAMPANHAS_CRON_SECRET (Settings > Secrets > Actions) com o
+# MESMO valor da variavel CRON_SECRET configurada no Render. Sem isso, o
+# endpoint recusa a chamada (403) e nada e' enviado.
+
+on:
+  schedule:
+    # Todo dia as 13h UTC (~10h de Brasilia).
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+jobs:
+  proximo-lote:
+    name: Avancar lotes pendentes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Chama /campanhas/executar-pendentes
+        run: |
+          URL="https://whodados-backend.onrender.com/api/v1/campanhas/executar-pendentes"
+          echo "Chamando $URL"
+          code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" --max-time 120 -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CAMPANHAS_CRON_SECRET }}" \
+            "$URL") || code=000
+          echo "HTTP $code"
+          cat /tmp/resp.json; echo
+          if [ "$code" != "200" ]; then
+            echo "[ERRO] Falha ao avancar os lotes pendentes."
+            exit 1
+          fi

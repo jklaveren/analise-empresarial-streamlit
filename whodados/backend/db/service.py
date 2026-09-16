@@ -229,12 +229,12 @@ def listar_crm_classificados(organizacao_id: int, filtro: Optional[str] = None) 
     permite = {"perfil_ideal", "perfil_possivel", "fora_perfil", "parceiro", "sem_classificacao"}
     try:
         with get_db_cursor() as cur:
-            base_sql = """
+            base_sql = f"""
                 SELECT c.cnpj, c.classificacao, c.motivo, c.status, c.parceiro,
                        c.data_atualizacao, c.notas,
                        COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", '') AS razao_social,
                        COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
-                       COALESCE(e."EMAIL", '') AS email, COALESCE(e."CONTATO_FONE", '') AS contato_fone,
+                       COALESCE(e."EMAIL", '') AS email, ({CONTATO_FONE_SQL}) AS contato_fone,
                        COALESCE(m.nome_municipio, '') AS municipio
                 FROM crm c
                 LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = c.cnpj
@@ -391,10 +391,21 @@ def clear_template_imagem(template_id: int, organizacao_id: Optional[int] = None
             params,
         )
         return _com_imagem_url(cur.fetchone())
-def create_campanha(nome: str, template_id: int, filtros: Dict, created_by: Optional[str] = None, eh_sequencia: bool = False, agendada_para: Optional[str] = None, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
+def create_campanha(
+    nome: str, template_id: Optional[int], filtros: Dict, created_by: Optional[str] = None,
+    eh_sequencia: bool = False, agendada_para: Optional[str] = None, organizacao_id: Optional[int] = None,
+    canal: str = "email", mensagem: Optional[str] = None, tamanho_lote: Optional[int] = None,
+    repetir_ate: Optional[str] = None,
+) -> Dict[str, Any]:
     status = "agendada" if agendada_para else "rascunho"
     with get_db_cursor() as cur:
-        cur.execute("INSERT INTO campanhas (nome, template_id, filtros, status, created_by, eh_sequencia, agendada_para, organizacao_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *", (nome, template_id, json.dumps(filtros or {}), status, created_by, eh_sequencia, agendada_para, organizacao_id))
+        cur.execute(
+            """INSERT INTO campanhas
+               (nome, template_id, filtros, status, created_by, eh_sequencia, agendada_para, organizacao_id, canal, mensagem, tamanho_lote, repetir_ate)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+            (nome, template_id, json.dumps(filtros or {}), status, created_by, eh_sequencia, agendada_para,
+             organizacao_id, canal, mensagem, tamanho_lote, repetir_ate),
+        )
         row = cur.fetchone()
         if row and row.get("filtros") and isinstance(row["filtros"], str):
             try: row["filtros"] = json.loads(row["filtros"])
@@ -784,6 +795,49 @@ PORTE_NOME_TO_CODE = {
     "MEDIO E GRANDE": "05",
 }
 
+# Score de potencial (0-100), calculado on-the-fly a partir de sinais que ja
+# existem em dados_empresas -- sem coluna nova, sem reprocessar o ETL.
+# Pesos: porte (35) + capital social (25) + saude financeira/divida (20)
+# + maturidade (10) + contactabilidade (10). MEI zera o componente de porte
+# porque o cadastro de porte da RF costuma vir "NAO INFORMADO" pra MEI mesmo
+# quando o negocio e' relevante -- sem essa checagem MEI empataria com
+# "NAO INFORMADO" indevidamente.
+POTENCIAL_SCORE_SQL = """(
+    (CASE WHEN e."OPCAO_MEI" = 'S' THEN 5 ELSE
+        CASE e."PORTE_EMPRESA"
+            WHEN '05' THEN 35
+            WHEN '03' THEN 25
+            WHEN '02' THEN 12
+            ELSE 8
+        END
+    END)
+    + (CASE
+        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 1000000 THEN 25
+        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 100000 THEN 18
+        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 10000 THEN 10
+        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) > 0 THEN 4
+        ELSE 0
+      END)
+    + (CASE
+        WHEN COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) = 0 THEN 20
+        WHEN COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) < 50000 THEN 10
+        ELSE 0
+      END)
+    + (CASE
+        WHEN e."DATA_FUNDACAO" IS NULL THEN 4
+        WHEN e."DATA_FUNDACAO" <= (NOW() - INTERVAL '5 years')::date THEN 10
+        WHEN e."DATA_FUNDACAO" <= (NOW() - INTERVAL '1 year')::date THEN 6
+        ELSE 2
+      END)
+    + (CASE WHEN TRIM(COALESCE(e."EMAIL", '')) <> '' THEN 6 ELSE 0 END)
+    + (CASE WHEN TRIM(COALESCE(e."TELEFONE", '')) <> '' THEN 4 ELSE 0 END)
+)"""
+POTENCIAL_TIER_SQL = f"""(CASE
+    WHEN {POTENCIAL_SCORE_SQL} >= 65 THEN 'alto'
+    WHEN {POTENCIAL_SCORE_SQL} >= 40 THEN 'medio'
+    ELSE 'baixo'
+END)"""
+
 # ==================== CONFIGURACOES DA APLICACAO (app_config) ====================
 
 _SLA_PADRAO = {"sla_verde_dias": 2, "sla_amarelo_dias": 5}
@@ -882,11 +936,12 @@ def update_user_flags(user_id: int, is_admin: Optional[bool] = None, is_active: 
 # remetente) e isolado por organizacao. O acesso e por usuario.
 
 def listar_organizacoes_do_usuario(username: str) -> List[Dict[str, Any]]:
-    """Empresas que o usuario pode operar (para o seletor de empresa ativa)."""
+    """Empresas que o usuario pode operar (para o seletor de empresa ativa),
+    com o papel dele em cada uma (admin/membro/visitante)."""
     with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT o.id, o.nome, o.slug, o.ativo
+            SELECT o.id, o.nome, o.slug, o.ativo, uo.papel
             FROM organizacoes o
             JOIN usuario_organizacoes uo ON uo.organizacao_id = o.id
             JOIN app_users u ON u.id = uo.user_id
@@ -896,6 +951,34 @@ def listar_organizacoes_do_usuario(username: str) -> List[Dict[str, Any]]:
             (username,),
         )
         return cur.fetchall()
+
+
+def get_papel_usuario_org(username: str, organizacao_id: int) -> Optional[str]:
+    """Papel do usuario NESSA organizacao (admin/membro/visitante), ou None
+    se ele nao tiver vinculo com ela."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT uo.papel FROM usuario_organizacoes uo
+               JOIN app_users u ON u.id = uo.user_id
+               WHERE u.username = %s AND uo.organizacao_id = %s""",
+            (username, organizacao_id),
+        )
+        row = cur.fetchone()
+        return row["papel"] if row else None
+
+
+def definir_papel_usuario_org(user_id: int, organizacao_id: int, papel: str) -> bool:
+    """Muda o papel de um usuario numa empresa onde ele ja tem acesso.
+    Nao cria o vinculo -- so' atualiza um que ja existe (use
+    definir_acesso_usuario_orgs pra dar acesso primeiro)."""
+    if papel not in ("admin", "membro", "visitante"):
+        return False
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE usuario_organizacoes SET papel = %s WHERE user_id = %s AND organizacao_id = %s",
+            (papel, user_id, organizacao_id),
+        )
+        return cur.rowcount > 0
 
 
 def usuario_tem_acesso_org(username: str, organizacao_id: int) -> bool:
@@ -1045,7 +1128,7 @@ def _where_empresas(
     cidade=None, cnae=None, porte=None, busca=None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de=None, fundacao_ate=None, incluir_inativas: bool = True,
-    contato=None,
+    contato=None, potencial=None,
 ):
     """Monta o WHERE (e os params) compartilhado pela listagem e pela contagem,
     a partir dos filtros do funil (cidade, CNAE, porte, faixas de passivo/capital,
@@ -1095,6 +1178,9 @@ def _where_empresas(
             clauses.append(f"(NOT ({tem_email}) AND {tem_fone})")
         elif contato == "sem_contato":
             clauses.append(f"(NOT ({tem_email}) AND NOT ({tem_fone}))")
+    tiers = _norm_lista(potencial)
+    if tiers:
+        clauses.append(f"({POTENCIAL_TIER_SQL}) = ANY(%s)"); params.append(tiers)
     where = (" AND " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -1103,7 +1189,8 @@ def listar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
-    incluir_inativas: bool = True, contato=None,
+    incluir_inativas: bool = True, contato=None, potencial=None,
+    ordenar_por: str = "razao_social",
     limit: int = 100, offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """Lista empresas de dados_empresas com o funil de filtros (server-side).
@@ -1115,7 +1202,12 @@ def listar_empresas_db(
             where, params = _where_empresas(
                 cidade, cnae, porte, busca, divida_min, divida_max,
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
-                contato,
+                contato, potencial,
+            )
+            order_sql = (
+                f'({POTENCIAL_SCORE_SQL}) DESC, e."RAZAO_SOCIAL"'
+                if ordenar_por == "potencial"
+                else 'e."RAZAO_SOCIAL"'
             )
             sql = f"""
                 SELECT
@@ -1130,12 +1222,14 @@ def listar_empresas_db(
                     ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     e."EMAIL" AS email,
-                    ({CONTATO_FONE_SQL}) AS contato_fone
+                    ({CONTATO_FONE_SQL}) AS contato_fone,
+                    ({POTENCIAL_SCORE_SQL}) AS potencial_score,
+                    ({POTENCIAL_TIER_SQL}) AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
                 WHERE 1=1 {where}
-                ORDER BY e."RAZAO_SOCIAL" LIMIT %s OFFSET %s
+                ORDER BY {order_sql} LIMIT %s OFFSET %s
             """
             cur.execute(sql, params + [limit, offset])
             return cur.fetchall()
@@ -1148,7 +1242,7 @@ def contar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
     fundacao_de: Optional[str] = None, fundacao_ate: Optional[str] = None,
-    incluir_inativas: bool = True,
+    incluir_inativas: bool = True, potencial=None,
 ) -> int:
     """Conta quantas empresas batem no filtro atual (para o contador do funil,
     sem trazer as linhas). Retorna 0 se a tabela nao existir ou em caso de erro."""
@@ -1159,6 +1253,7 @@ def contar_empresas_db(
             where, params = _where_empresas(
                 cidade, cnae, porte, busca, divida_min, divida_max,
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
+                potencial=potencial,
             )
             sql = f"""
                 SELECT COUNT(*) AS total
@@ -1198,7 +1293,9 @@ def get_empresa_by_cnpj_db(cnpj: str) -> Dict[str, Any]:
                     COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
                     ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
-                    ({CONTATO_FONE_SQL}) AS contato_fone
+                    ({CONTATO_FONE_SQL}) AS contato_fone,
+                    ({POTENCIAL_SCORE_SQL}) AS potencial_score,
+                    ({POTENCIAL_TIER_SQL}) AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
@@ -1317,3 +1414,322 @@ def seed_default_templates() -> int:
             )
             criados += 1
         return criados
+
+
+# ==================== DESCADASTRO DE E-MAIL (LGPD/opt-out) ====================
+# Global (nao por empresa): pedido de "nao me mande mais e-mail" vale pra
+# qualquer organizacao que tentar mandar pra esse endereco.
+
+def email_esta_descadastrado(email: str) -> bool:
+    if not email:
+        return False
+    with get_db_cursor() as cur:
+        cur.execute("SELECT 1 FROM emails_descadastrados WHERE email = %s", (email.strip().lower(),))
+        return cur.fetchone() is not None
+
+
+def descadastrar_email(email: str, cnpj: Optional[str] = None, motivo: Optional[str] = None) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO emails_descadastrados (email, cnpj, motivo)
+               VALUES (%s, %s, %s) ON CONFLICT (email) DO NOTHING""",
+            (email.strip().lower(), cnpj, motivo),
+        )
+        return True
+
+
+# ==================== CRM: ATIVIDADES/TAREFAS ====================
+
+def listar_usuarios_da_org(organizacao_id: int) -> List[Dict[str, Any]]:
+    """Usuarios que podem ser responsaveis por uma atividade (membros da
+    mesma organizacao ativa -- ex.: os socios da SVYP)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT u.id, u.username
+               FROM app_users u
+               JOIN usuario_organizacoes uo ON uo.user_id = u.id
+               WHERE uo.organizacao_id = %s AND u.is_active = TRUE
+               ORDER BY u.username""",
+            (organizacao_id,),
+        )
+        return cur.fetchall()
+
+
+def criar_atividade_crm(
+    cnpj: str, organizacao_id: int, titulo: str, criado_por: Optional[str] = None,
+    tipo: str = "tarefa", descricao: Optional[str] = None,
+    responsavel_user_id: Optional[int] = None, prazo: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO crm_atividades
+               (organizacao_id, cnpj, titulo, tipo, descricao, responsavel_user_id, prazo, criado_por)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+            (organizacao_id, cnpj, titulo, tipo, descricao, responsavel_user_id, prazo, criado_por),
+        )
+        return cur.fetchone()
+
+
+def listar_todas_atividades(organizacao_id: int) -> List[Dict[str, Any]]:
+    """Todas as atividades da organizacao, com nome da empresa resolvido --
+    base do board tipo Trello (visao agregada, nao so' por empresa)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT a.*, u.username AS responsavel_username,
+                      COALESCE(e."RAZAO_SOCIAL", e."NOME_FANTASIA", a.cnpj) AS razao_social
+               FROM crm_atividades a
+               LEFT JOIN app_users u ON u.id = a.responsavel_user_id
+               LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = a.cnpj
+               WHERE a.organizacao_id = %s
+               ORDER BY a.prazo NULLS LAST, a.criado_em DESC""",
+            (organizacao_id,),
+        )
+        return cur.fetchall()
+
+
+def mover_atividade_crm(atividade_id: int, organizacao_id: int, status: str) -> bool:
+    if status not in ("pendente", "em_andamento", "concluida"):
+        return False
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE crm_atividades SET status = %s,
+                   concluido_em = CASE WHEN %s = 'concluida' THEN NOW() ELSE NULL END
+               WHERE id = %s AND organizacao_id = %s""",
+            (status, status, atividade_id, organizacao_id),
+        )
+        return cur.rowcount > 0
+
+
+def listar_atividades_crm(cnpj: str, organizacao_id: int) -> List[Dict[str, Any]]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT a.*, u.username AS responsavel_username
+               FROM crm_atividades a
+               LEFT JOIN app_users u ON u.id = a.responsavel_user_id
+               WHERE a.cnpj = %s AND a.organizacao_id = %s
+               ORDER BY (a.status = 'concluida'), a.prazo NULLS LAST, a.criado_em DESC""",
+            (cnpj, organizacao_id),
+        )
+        return cur.fetchall()
+
+
+def contar_atividades_pendentes(organizacao_id: int) -> Dict[str, int]:
+    """CNPJ -> quantidade de atividades pendentes, pra badge nos cards do
+    Kanban sem precisar de uma consulta por card."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT cnpj, COUNT(*) AS n FROM crm_atividades
+               WHERE organizacao_id = %s AND status = 'pendente'
+               GROUP BY cnpj""",
+            (organizacao_id,),
+        )
+        return {r["cnpj"]: r["n"] for r in cur.fetchall()}
+
+
+def concluir_atividade_crm(atividade_id: int, organizacao_id: int) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE crm_atividades SET status = 'concluida', concluido_em = NOW()
+               WHERE id = %s AND organizacao_id = %s""",
+            (atividade_id, organizacao_id),
+        )
+        return cur.rowcount > 0
+
+
+def deletar_atividade_crm(atividade_id: int, organizacao_id: int) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            "DELETE FROM crm_atividades WHERE id = %s AND organizacao_id = %s",
+            (atividade_id, organizacao_id),
+        )
+        return cur.rowcount > 0
+
+
+# ==================== CAMPANHAS EM LOTE (envio diario ate um limite) ====================
+
+def cnpjs_ja_contatados_campanha(campanha_id: int) -> set:
+    """CNPJs que essa campanha ja contatou (em qualquer lote anterior).
+    Usado pra calcular quem ainda falta no proximo lote."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT cnpj FROM campanha_envios WHERE campanha_id = %s", (campanha_id,))
+        return {r["cnpj"] for r in cur.fetchall()}
+
+
+def registrar_envio_campanha(campanha_id: int, cnpj: str, canal: str, status: str = "enviado") -> None:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO campanha_envios (campanha_id, cnpj, canal, status)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (campanha_id, cnpj) DO UPDATE SET status = EXCLUDED.status""",
+            (campanha_id, cnpj, canal, status),
+        )
+
+
+def contar_envios_campanha(campanha_id: int) -> int:
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM campanha_envios WHERE campanha_id = %s", (campanha_id,))
+        row = cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+def listar_campanhas_pendentes() -> List[Dict[str, Any]]:
+    """Campanhas em lote que ainda tem lote pra mandar hoje: status
+    'agendada' (primeiro lote) ou 'em_andamento' (proximos lotes), com
+    repetir_ate ainda no futuro (ou sem data-limite) e que ainda nao
+    rodaram hoje. Usada pelo cron diario (GitHub Actions)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT * FROM campanhas
+               WHERE status IN ('agendada', 'em_andamento')
+                 AND tamanho_lote IS NOT NULL
+                 AND (repetir_ate IS NULL OR repetir_ate >= CURRENT_DATE)
+                 AND (ultimo_lote_em IS NULL OR ultimo_lote_em::date < CURRENT_DATE)
+               ORDER BY id"""
+        )
+        rows = cur.fetchall()
+        for r in rows:
+            if r and r.get("filtros") and isinstance(r["filtros"], str):
+                try: r["filtros"] = json.loads(r["filtros"])
+                except: pass
+        return rows
+
+
+# ==================== WHATSAPP (Twilio) ====================
+
+def _so_digitos(v: Optional[str]) -> str:
+    return re.sub(r"\D", "", v or "")
+
+
+def buscar_empresa_por_telefone(telefone: str) -> Optional[str]:
+    """Tenta achar o CNPJ de uma empresa cujo telefone cadastrado bate com o
+    numero recebido no WhatsApp. Compara so os ultimos 8 digitos (numero sem
+    DDI/DDD) pra tolerar diferenca de formatacao entre o que a RF cadastrou e
+    o que o Twilio manda. Retorna None se nao achar (mensagem fica sem CNPJ
+    associado, mas continua visivel na caixa de entrada por telefone)."""
+    digitos = _so_digitos(telefone)
+    if len(digitos) < 8:
+        return None
+    ultimos8 = digitos[-8:]
+    try:
+        with get_db_cursor() as cur:
+            # ORDER BY determinístico: sem isso, quando o sufixo bate em mais
+            # de uma empresa (esperado -- 8 digitos colidem em ~1-2% dos casos
+            # numa base de 1.6M+ empresas), o Postgres pode devolver uma linha
+            # diferente a cada chamada e a mesma conversa mudaria de "dona".
+            cur.execute(
+                """SELECT "CNPJ_COMPLETO" AS cnpj FROM dados_empresas
+                   WHERE right(regexp_replace(COALESCE("TELEFONE", ''), '\\D', '', 'g'), 8) = %s
+                      OR right(regexp_replace(COALESCE("TELEFONE_2", ''), '\\D', '', 'g'), 8) = %s
+                   ORDER BY "CNPJ_COMPLETO" LIMIT 1""",
+                (ultimos8, ultimos8),
+            )
+            row = cur.fetchone()
+            return row["cnpj"] if row else None
+    except Exception as e:
+        log.warning(f"buscar_empresa_por_telefone falhou: {e}")
+        return None
+
+
+def _cnpj_da_conversa(telefone: str) -> Optional[str]:
+    """CNPJ ja associado a essa conversa (se alguma mensagem anterior achou
+    um match). Evita re-rodar o match fuzzy por telefone a cada mensagem --
+    o que, alem de mais lento, podia (antes desta funcao existir) associar
+    cada mensagem da MESMA conversa a uma empresa diferente."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """SELECT cnpj FROM whatsapp_mensagens
+                   WHERE telefone = %s AND cnpj IS NOT NULL
+                   ORDER BY criado_em ASC LIMIT 1""",
+                (telefone,),
+            )
+            row = cur.fetchone()
+            return row["cnpj"] if row else None
+    except Exception:
+        return None
+
+
+def registrar_mensagem_whatsapp(
+    telefone: str, direcao: str, corpo: str, cnpj: Optional[str] = None,
+    status: str = "recebida", twilio_sid: Optional[str] = None,
+    organizacao_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Grava uma mensagem (enviada ou recebida) no historico de WhatsApp.
+    Se cnpj nao vier informado, reusa o da conversa (se ja resolvido antes)
+    ou tenta resolver pelo telefone agora."""
+    if not cnpj:
+        cnpj = _cnpj_da_conversa(telefone) or buscar_empresa_por_telefone(telefone)
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO whatsapp_mensagens
+               (organizacao_id, cnpj, telefone, direcao, corpo, status, twilio_sid)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               RETURNING id, criado_em""",
+            (organizacao_id, cnpj, telefone, direcao, corpo, status, twilio_sid),
+        )
+        row = cur.fetchone()
+        return {"id": row["id"], "criado_em": row["criado_em"], "cnpj": cnpj}
+
+
+def listar_conversas_whatsapp(organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Uma linha por numero de telefone, com a ultima mensagem da conversa e
+    quantas mensagens recebidas ainda nao foram lidas. Ordenado pela mais
+    recente primeiro."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "whatsapp_mensagens"):
+                return []
+            cur.execute(
+                """
+                SELECT DISTINCT ON (w.telefone)
+                    w.telefone, w.cnpj,
+                    COALESCE(e."RAZAO_SOCIAL", '') AS razao_social,
+                    w.corpo AS ultima_mensagem, w.direcao AS ultima_direcao,
+                    w.criado_em AS ultima_em
+                FROM whatsapp_mensagens w
+                LEFT JOIN dados_empresas e ON e."CNPJ_COMPLETO" = w.cnpj
+                WHERE (%s::int IS NULL OR w.organizacao_id = %s)
+                ORDER BY w.telefone, w.criado_em DESC
+                """,
+                (organizacao_id, organizacao_id),
+            )
+            conversas = cur.fetchall()
+            cur.execute(
+                """SELECT telefone, COUNT(*) AS nao_lidas FROM whatsapp_mensagens
+                   WHERE direcao = 'entrada' AND lida = FALSE
+                   GROUP BY telefone"""
+            )
+            nao_lidas = {r["telefone"]: r["nao_lidas"] for r in cur.fetchall()}
+            for c in conversas:
+                c["nao_lidas"] = nao_lidas.get(c["telefone"], 0)
+            conversas.sort(key=lambda c: c["ultima_em"], reverse=True)
+            return conversas
+    except Exception as e:
+        log.warning(f"listar_conversas_whatsapp falhou, retornando lista vazia: {e}")
+        return []
+
+
+def listar_mensagens_whatsapp(telefone: str, marcar_como_lida: bool = True) -> List[Dict[str, Any]]:
+    """Historico completo (mais antiga -> mais recente) de uma conversa. Marca
+    as mensagens recebidas dessa conversa como lidas ao abrir (comportamento
+    padrao de caixa de entrada)."""
+    try:
+        with get_db_cursor() as cur:
+            if not _tabela_existe(cur, "whatsapp_mensagens"):
+                return []
+            cur.execute(
+                """SELECT id, cnpj, telefone, direcao, corpo, status, criado_em, lida
+                   FROM whatsapp_mensagens WHERE telefone = %s ORDER BY criado_em ASC""",
+                (telefone,),
+            )
+            mensagens = cur.fetchall()
+            if marcar_como_lida:
+                cur.execute(
+                    """UPDATE whatsapp_mensagens SET lida = TRUE
+                       WHERE telefone = %s AND direcao = 'entrada' AND lida = FALSE""",
+                    (telefone,),
+                )
+            return mensagens
+    except Exception as e:
+        log.warning(f"listar_mensagens_whatsapp falhou, retornando lista vazia: {e}")
+        return []

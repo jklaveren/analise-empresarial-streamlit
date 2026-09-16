@@ -1,0 +1,74 @@
+name: Atualizar Dados (via BigQuery / Base dos Dados) — WhoDados
+
+# Alternativa ao ETL antigo (removido -- baixava direto da RF/PGFN e
+# parou de funcionar no runner do GitHub Actions, provavel bloqueio de
+# IP de datacenter). Este consulta os mesmos dados via BigQuery publico
+# da Base dos Dados -- API autenticada, nao download de arquivo, entao
+# o bloqueio de IP deixa de ser um problema.
+#
+# SO DISPARO MANUAL por enquanto (sem `schedule:`) -- o schema das
+# tabelas usadas em pipeline_bigquery.py ainda nao foi confirmado contra
+# o BigQuery real. Antes de agendar isso:
+#   1. Rode "Run workflow" aqui com CHECK_SCHEMA=true uma vez e confira
+#      o resultado no log.
+#   2. Ajuste pipeline_bigquery.py se algum nome de coluna vier diferente.
+#   3. Rode sem CHECK_SCHEMA (carga de verdade) e confira dados_empresas
+#      no Supabase.
+#   4. Só então adicione um `schedule:` aqui (e desative/remova esta nota).
+#
+# Requer, em Settings > Secrets and variables > Actions:
+#   BD_BILLING_PROJECT_ID   ID do projeto Google Cloud (cobranca)
+#   GCP_SERVICE_ACCOUNT_JSON   conteudo do JSON da service account
+#   SUPABASE_CONNECTION_STRING   connection string do Supabase (ou usa a
+#     variable existente, mesma dos outros workflows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      check_schema:
+        description: "So listar as colunas reais (nao carrega nada)"
+        type: boolean
+        default: false
+
+jobs:
+  etl-bigquery:
+    name: "ETL via BigQuery (Base dos Dados)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: whodados/pipeline/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r whodados/pipeline/requirements-dev.txt
+
+      - name: "Rodar pipeline via BigQuery"
+        env:
+          BD_BILLING_PROJECT_ID: ${{ secrets.BD_BILLING_PROJECT_ID }}
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          DATABASE_URL: ${{ secrets.SUPABASE_CONNECTION_STRING || vars.SUPABASE_CONNECTION_STRING }}
+          UF_ALVO: "RS"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          if [ "${{ inputs.check_schema }}" = "true" ]; then
+            python whodados/pipeline/pipeline_bigquery.py --check-schema
+          else
+            python whodados/pipeline/pipeline_bigquery.py
+          fi
+
+      - name: "Publicar CSV como artifact"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dados-rs-bigquery
+          path: ${{ github.workspace }}/dados_bigquery/out/*.csv
+          retention-days: 14
+          if-no-files-found: ignore

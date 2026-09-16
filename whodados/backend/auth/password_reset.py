@@ -24,6 +24,8 @@ try:
         update_user_password,
     )
     from ..mailer import enviar_email
+    from ..mailer.service import _smtp_da_org
+    from ..db.service import get_orgs_do_user_id, get_org_smtp_config
 except ImportError:
     import logging
     get_logger = lambda x: logging.getLogger(x)
@@ -31,6 +33,7 @@ except ImportError:
     get_user_by_username_or_email = create_password_reset_token = get_password_reset_token = _noop
     mark_password_reset_token_used = update_user_password = _noop
     enviar_email = _noop
+    _smtp_da_org = get_orgs_do_user_id = get_org_smtp_config = _noop
 
 log = get_logger(__name__)
 
@@ -64,7 +67,23 @@ def gerar_token_reset(username_or_email: str) -> Dict[str, Any]:
         f"</body></html>"
     )
     text_body = f"WhoDados - Recuperacao de Senha\n\nOla {user['username']},\n\nAcesse: {reset_url}\n\nExpira em {expire_minutes} minutos.\n\nSe nao foi voce, ignore."
-    result = enviar_email(para=user["email"], assunto="WhoDados - Recuperacao de Senha", corpo_html=html_body, corpo_texto=text_body)
+    # Sem isto, enviar_email cai no SMTP global (settings.SMTP_HOST) que nunca
+    # foi preenchido -- cada empresa configura o proprio SMTP em
+    # org_smtp_config, entao um usuario sem org associada a nenhum SMTP
+    # configurado nunca recebia o e-mail (sucesso "simulado" e silencioso).
+    # Usa a primeira organizacao do usuario que tiver SMTP configurado.
+    smtp_cfg = None
+    try:
+        for org_id in get_orgs_do_user_id(user["id"]):
+            cfg = get_org_smtp_config(org_id)
+            if cfg and cfg.get("configurado"):
+                smtp_cfg = _smtp_da_org(org_id)
+                break
+    except Exception as e:
+        log.warning(f"Falha resolvendo SMTP da organizacao para reset de senha: {e}")
+    if not smtp_cfg:
+        log.warning(f"Nenhuma organizacao do usuario '{user['username']}' tem SMTP configurado -- e-mail de reset nao sera enviado de verdade.")
+    result = enviar_email(para=user["email"], assunto="WhoDados - Recuperacao de Senha", corpo_html=html_body, corpo_texto=text_body, smtp=smtp_cfg)
     if result.get("sucesso"):
         return {"sucesso": True, "message": "Email enviado", "_dev_token": token_raw if not getattr(settings, "is_production", False) else None}
     return {"sucesso": False, "message": "Erro ao enviar email"}

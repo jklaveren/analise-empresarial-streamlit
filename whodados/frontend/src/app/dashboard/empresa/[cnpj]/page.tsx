@@ -7,6 +7,7 @@ import {
   ApiError, EmpresaDetalhe, atualizarCrm, getEmpresaDetalhe, enviarWhatsApp,
   getMe, MeInfo, ItemEnriquecimento, enriquecerEmpresa, listarEnriquecimento, removerEnriquecimento,
 } from "@/lib/api";
+import { PotencialBadge } from "@/components/PotencialBadge";
 
 export default function EmpresaDetalhePage() {
   const params = useParams<{ cnpj: string }>();
@@ -132,7 +133,10 @@ export default function EmpresaDetalhePage() {
         <Link href="/dashboard" className="text-sm text-indigo-600 hover:underline">← Voltar</Link>
         <div className="flex items-start justify-between mt-2 gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">{empresa.razao_social}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-slate-800">{empresa.razao_social}</h1>
+              <PotencialBadge tier={empresa.potencial_tier} score={empresa.potencial_score} />
+            </div>
             <p className="text-slate-500 font-mono text-sm">{empresa.cnpj_completo}</p>
           </div>
           <div className="flex gap-2">

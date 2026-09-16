@@ -71,23 +71,15 @@ app.add_middleware(
 
 # Security middlewares (innermost)
 try:
-    from .security import SecurityHeadersMiddleware, RateLimiterMiddleware
+    from .security import SecurityHeadersMiddleware, RateLimiterMiddleware, VisitanteMiddleware
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RateLimiterMiddleware)
+    app.add_middleware(VisitanteMiddleware)
     logger.info("Security middlewares loaded")
 except ImportError as e:
     logger.warning(f"Security middlewares not available: {e}")
 
 app.include_router(api_router)
-
-# Integrações externas (WhatsApp via Twilio) -- rota separada para não
-# interferir no router principal; falha silenciosa se o módulo não existir.
-try:
-    from .endpoints_integracoes import router as integracoes_router
-    app.include_router(integracoes_router, prefix="/api/v1")
-    logger.info("Router de integrações (WhatsApp) registrado")
-except Exception as e:
-    logger.warning(f"Router de integrações não registrado: {e}")
 
 
 @app.get("/health")

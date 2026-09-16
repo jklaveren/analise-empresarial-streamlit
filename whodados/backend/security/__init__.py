@@ -1,6 +1,7 @@
 """Security Module - WhoDados."""
 from .rate_limiter import RateLimiterMiddleware
 from .headers import SecurityHeadersMiddleware
+from .visitante import VisitanteMiddleware
 from .audit import (
     AuditAction,
     audit,
@@ -14,6 +15,7 @@ from .audit import (
 __all__ = [
     "RateLimiterMiddleware",
     "SecurityHeadersMiddleware",
+    "VisitanteMiddleware",
     "AuditAction",
     "audit",
     "log_login",

@@ -379,12 +379,16 @@ function UsuariosTab() {
       </div>
 
       {mostrarNovo ? (
-        <form onSubmit={criar} className="rounded-xl bg-white border p-5 space-y-3">
+        <form onSubmit={criar} autoComplete="off" className="rounded-xl bg-white border p-5 space-y-3">
           <h3 className="font-semibold">Novo usuario</h3>
           <div className="grid grid-cols-2 gap-3">
-            <input placeholder="Usuario" value={novoUser} onChange={e => setNovoUser(e.target.value)} required className="border rounded px-3 py-2" />
-            <input type="email" placeholder="E-mail (opcional)" value={novoEmail} onChange={e => setNovoEmail(e.target.value)} className="border rounded px-3 py-2" />
-            <input type="password" placeholder="Senha (min. 8 caracteres)" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} required className="border rounded px-3 py-2" />
+            {/* autoComplete distinto do padrao "username"/"current-password" --
+                sem isso o navegador oferece autopreencher com QUALQUER credencial
+                salva no site (ex.: a senha SMTP do Brevo, cadastrada em outra
+                tela), porque o par texto+senha aqui parece um login comum. */}
+            <input placeholder="Usuario" name="novo-usuario-login" autoComplete="off" value={novoUser} onChange={e => setNovoUser(e.target.value)} required className="border rounded px-3 py-2" />
+            <input type="email" placeholder="E-mail (opcional)" name="novo-usuario-email" autoComplete="off" value={novoEmail} onChange={e => setNovoEmail(e.target.value)} className="border rounded px-3 py-2" />
+            <input type="password" placeholder="Senha (min. 8 caracteres)" name="novo-usuario-senha" autoComplete="new-password" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} required className="border rounded px-3 py-2" />
             <label className="flex items-center gap-2 text-sm text-slate-600">
               <input type="checkbox" checked={novoAdmin} onChange={e => setNovoAdmin(e.target.checked)} />
               Administrador
@@ -658,7 +662,50 @@ function IntegracoesTab() {
   );
 }
 
-type Aba = "perfil" | "regras" | "usuarios" | "empresas" | "email" | "integracoes" | "sobre";
+function RegraItem({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <div className="border-b border-slate-100 pb-4 last:border-0">
+      <h3 className="font-semibold text-slate-800 mb-1">{titulo}</h3>
+      <div className="text-sm text-slate-600 leading-relaxed space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function RegrasNegocioTab() {
+  return (
+    <div className="space-y-6">
+      <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-4 text-sm text-indigo-800">
+        Isto documenta regras que já estão implementadas no sistema — não são sugestões, são o que o código realmente faz hoje.
+      </div>
+
+      <RegraItem titulo="📜 LGPD — descadastro de e-mail (opt-out)">
+        <p>Toda campanha de e-mail, de qualquer empresa (NRA ou SYVP), inclui automaticamente um link de descadastro no rodapé — quem escreve o template não precisa lembrar de incluir isso, o sistema injeta sozinho na hora de enviar.</p>
+        <p>Quem clica é descadastrado <strong>globalmente</strong>: para de receber e-mail de qualquer empresa do sistema, não só da que mandou. O sistema também pula automaticamente quem já pediu descadastro antes de enviar qualquer campanha nova.</p>
+      </RegraItem>
+
+      <RegraItem titulo="🏆 Score de potencial das empresas">
+        <p>Calculado automaticamente (0-100) a partir de: porte (peso 35), capital social (25), saúde financeira/dívida (20), maturidade da empresa (10) e ter contato cadastrado (10). MEI não conta como porte alto mesmo que a Receita não informe o porte real.</p>
+        <p>Faixas: <strong>Alto</strong> (≥65), <strong>Médio</strong> (40-64), <strong>Baixo</strong> (&lt;40).</p>
+      </RegraItem>
+
+      <RegraItem titulo="👁️ Hierarquia de acesso">
+        <p><strong>Operador Global</strong> — acesso total, todas as empresas. <strong>Admin</strong> — acesso total, só na empresa dele. <strong>Membro</strong> — acesso normal de trabalho. <strong>Visitante</strong> — só vê a tela de Empresas, com CNPJ parcial, sem e-mail/telefone, e valores financeiros em faixa (não exato); sem acesso a CRM, Campanhas, WhatsApp ou Configurações.</p>
+        <p>Pensado pra dar acesso a alguém de fora (ex.: um recrutador avaliando o produto) sem expor dado real de cliente.</p>
+      </RegraItem>
+
+      <RegraItem titulo="📧 Envio em lotes diários">
+        <p>Campanhas (e-mail ou WhatsApp) podem ter um "tamanho de lote" — manda só essa quantidade por vez, avançando pro próximo grupo a cada execução, em vez de mandar tudo de uma vez. Existe pra respeitar limites diários dos provedores (ex.: 300/dia é comum em planos gratuitos de e-mail e é o limite do WhatsApp/Twilio).</p>
+        <p>Um workflow automático (GitHub Actions, uma vez por dia) avança sozinho as campanhas que já foram iniciadas — não mexe em campanhas ainda em rascunho.</p>
+      </RegraItem>
+
+      <RegraItem titulo="✉️ Credibilidade do e-mail — pendências">
+        <p>Recomendado (ainda não configurado): autenticar DKIM com o domínio próprio no Brevo, em vez do padrão compartilhado — reduz chance de cair em spam e passa mais confiança pro destinatário.</p>
+      </RegraItem>
+    </div>
+  );
+}
+
+type Aba = "perfil" | "regras" | "lgpd" | "usuarios" | "empresas" | "email" | "integracoes" | "sobre";
 
 export default function ConfiguracoesPage() {
   const { isAdmin } = useAuth();
@@ -667,6 +714,7 @@ export default function ConfiguracoesPage() {
   const abas: { id: Aba; label: string; icone: string; somenteAdmin?: boolean }[] = [
     { id: "perfil", label: "Perfil", icone: "👤" },
     { id: "regras", label: "Regras do CRM/Monitor", icone: "🎯" },
+    { id: "lgpd", label: "Regras & LGPD", icone: "📜" },
     { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
     { id: "empresas", label: "Empresas", icone: "🏢", somenteAdmin: true },
     { id: "email", label: "Email (global)", icone: "✉️", somenteAdmin: true },
@@ -697,6 +745,7 @@ export default function ConfiguracoesPage() {
 
       {aba === "perfil" && <PerfilTab />}
       {aba === "regras" && <RegrasTab />}
+      {aba === "lgpd" && <RegrasNegocioTab />}
       {aba === "usuarios" && isAdmin && <UsuariosTab />}
       {aba === "empresas" && isAdmin && <EmpresasTab />}
       {aba === "email" && isAdmin && <EmailTab />}

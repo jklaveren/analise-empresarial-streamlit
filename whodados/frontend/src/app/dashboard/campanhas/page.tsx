@@ -11,7 +11,9 @@ const PORTES = ["MICRO", "PEQUENO", "DEMAIS", "SEM INFORMACAO"];
 
 const STATUS_COR: Record<string, string> = {
   rascunho: "bg-slate-100 text-slate-600",
+  agendada: "bg-amber-100 text-amber-700",
   executando: "bg-blue-100 text-blue-700",
+  em_andamento: "bg-blue-100 text-blue-700",
   concluida: "bg-emerald-100 text-emerald-700",
   erro: "bg-red-100 text-red-700",
 };
@@ -100,7 +102,10 @@ export default function CampanhasPage() {
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState<number | null>(null);
-  const [form, setForm] = useState<{ nome: string; template_id: number; filtros: FiltrosForm }>({ nome: "", template_id: 0, filtros: FORM_VAZIO });
+  const [form, setForm] = useState<{
+    nome: string; template_id: number; filtros: FiltrosForm;
+    canal: "email" | "whatsapp"; mensagem: string; tamanho_lote: string; repetir_ate: string;
+  }>({ nome: "", template_id: 0, filtros: FORM_VAZIO, canal: "email", mensagem: "", tamanho_lote: "", repetir_ate: "" });
   const [prevTotal, setPrevTotal] = useState<number | null>(null);
   const [prevCarregando, setPrevCarregando] = useState(false);
 
@@ -140,23 +145,34 @@ export default function CampanhasPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.template_id) { setErro("Selecione um template para a campanha."); return; }
+    if (form.canal === "email" && !form.template_id) { setErro("Selecione um template para a campanha."); return; }
+    if (form.canal === "whatsapp" && !form.mensagem.trim()) { setErro("Escreva a mensagem de WhatsApp."); return; }
     setSaving(true); setErro("");
     try {
-      await criarCampanha({ nome: form.nome, template_id: form.template_id, filtros: montarFiltros(form.filtros) } as any);
+      await criarCampanha({
+        nome: form.nome,
+        template_id: form.canal === "email" ? form.template_id : null,
+        filtros: montarFiltros(form.filtros),
+        canal: form.canal,
+        mensagem: form.canal === "whatsapp" ? form.mensagem : undefined,
+        tamanho_lote: form.tamanho_lote ? Number(form.tamanho_lote) : undefined,
+        repetir_ate: form.repetir_ate || undefined,
+      } as any);
       setShowModal(false);
-      setForm({ nome: "", template_id: 0, filtros: FORM_VAZIO });
+      setForm({ nome: "", template_id: 0, filtros: FORM_VAZIO, canal: "email", mensagem: "", tamanho_lote: "", repetir_ate: "" });
       await load();
     } catch (e: any) { setErro(e?.message || "Erro ao criar campanha."); }
     finally { setSaving(false); }
   }
 
   async function handleRun(c: any) {
-    if (!confirm('Disparar a campanha "' + c.nome + '" agora?')) return;
+    const acao = c.tamanho_lote ? "Enviar o próximo lote de" : "Disparar";
+    if (!confirm(`${acao} "${c.nome}" agora?`)) return;
     setRunning(c.id);
     try {
       const r: any = await executarCampanha(c.id);
-      alert("Campanha finalizada: " + (r?.sucessos ?? 0) + " enviados com sucesso, " + (r?.erros ?? 0) + " erros.");
+      const restante = r?.restantes ? ` ${r.restantes.toLocaleString("pt-BR")} empresas restam para os próximos lotes.` : "";
+      alert("Lote enviado: " + (r?.sucessos ?? 0) + " com sucesso, " + (r?.erros ?? 0) + " erros." + restante);
       await load();
     } catch (e: any) { alert(e?.message || "Erro ao executar campanha."); }
     finally { setRunning(null); }
@@ -175,6 +191,10 @@ export default function CampanhasPage() {
       nome: (c.nome || "Campanha") + " (cópia)",
       template_id: c.template_id || 0,
       filtros: { cidade: arr(f.cidade), cnae: arr(f.cnae), porte: arr(f.porte), busca: f.busca || "", divida_min: f.divida_min != null ? String(f.divida_min) : "" },
+      canal: c.canal === "whatsapp" ? "whatsapp" : "email",
+      mensagem: c.mensagem || "",
+      tamanho_lote: c.tamanho_lote != null ? String(c.tamanho_lote) : "",
+      repetir_ate: c.repetir_ate || "",
     });
     setPrevTotal(null);
     setShowModal(true);
@@ -186,9 +206,9 @@ export default function CampanhasPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Campanhas</h1>
-          <p className="text-sm text-slate-500 mt-1">Envie e-mails em massa com prévia do público antes de disparar.</p>
+          <p className="text-sm text-slate-500 mt-1">Envie e-mails ou WhatsApp em massa, de uma vez ou em lotes diários.</p>
         </div>
-        <button onClick={() => { setForm({ nome: "", template_id: 0, filtros: FORM_VAZIO }); setPrevTotal(null); setShowModal(true); }} disabled={templates.length === 0}
+        <button onClick={() => { setForm({ nome: "", template_id: 0, filtros: FORM_VAZIO, canal: "email", mensagem: "", tamanho_lote: "", repetir_ate: "" }); setPrevTotal(null); setShowModal(true); }}
           className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
           + Nova Campanha
         </button>
@@ -196,7 +216,7 @@ export default function CampanhasPage() {
 
       {templates.length === 0 && !loading && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm text-amber-800">
-          Você precisa de um template antes de criar campanhas. <a href="/dashboard/templates" className="font-bold underline">Criar template →</a>
+          Campanhas por e-mail precisam de um template. <a href="/dashboard/templates" className="font-bold underline">Criar template →</a> (campanhas por WhatsApp não precisam.)
         </div>
       )}
       {erro && <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4 text-sm text-red-700">{erro}</div>}
@@ -220,9 +240,17 @@ export default function CampanhasPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <h3 className="font-semibold text-slate-800">{c.nome}</h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
+                        {c.canal === "whatsapp" ? "💬 WhatsApp" : "📧 E-mail"}
+                      </span>
                       <span className={"text-xs px-2 py-0.5 rounded-full font-medium " + (STATUS_COR[c.status || "rascunho"] || STATUS_COR.rascunho)}>{c.status || "rascunho"}</span>
                     </div>
-                    <p className="text-xs text-slate-500">Template #{c.template_id}{c.created_at ? " · criada em " + new Date(c.created_at).toLocaleString("pt-BR") : ""}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.canal === "whatsapp" ? "Mensagem própria" : `Template #${c.template_id}`}
+                      {c.created_at ? " · criada em " + new Date(c.created_at).toLocaleString("pt-BR") : ""}
+                      {c.tamanho_lote ? ` · lotes de ${c.tamanho_lote.toLocaleString("pt-BR")}/dia` : ""}
+                      {c.ja_contatados != null && c.tamanho_lote ? ` · ${c.ja_contatados.toLocaleString("pt-BR")} contatados até agora` : ""}
+                    </p>
                     {chips.length > 0 && (
                       <div className="mt-2 flex gap-1 flex-wrap">
                         {chips.map((chip) => (
@@ -233,9 +261,11 @@ export default function CampanhasPage() {
                     {chips.length === 0 && <p className="text-xs text-amber-600 mt-2">⚠ Sem filtros — a campanha vai atingir a base inteira.</p>}
                   </div>
                   <div className="flex gap-2 shrink-0">
-                    <button onClick={() => handleRun(c)} disabled={running === c.id} className="text-xs bg-emerald-100 hover:bg-emerald-200 disabled:opacity-50 text-emerald-700 px-3 py-1.5 rounded-lg font-medium transition-colors">
-                      {running === c.id ? "Enviando…" : "▶ Executar"}
-                    </button>
+                    {c.status !== "concluida" && (
+                      <button onClick={() => handleRun(c)} disabled={running === c.id} className="text-xs bg-emerald-100 hover:bg-emerald-200 disabled:opacity-50 text-emerald-700 px-3 py-1.5 rounded-lg font-medium transition-colors">
+                        {running === c.id ? "Enviando…" : c.tamanho_lote ? "▶ Enviar próximo lote" : "▶ Executar"}
+                      </button>
+                    )}
                     <button onClick={() => handleDuplicar(c)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-medium transition-colors">Duplicar</button>
                     <button onClick={() => handleDelete(c.id)} className="text-slate-400 hover:text-red-500 transition-colors p-1.5" title="Excluir">✕</button>
                   </div>
@@ -257,12 +287,51 @@ export default function CampanhasPage() {
                   <input required value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex.: Previdenciário — POA" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                 </div>
                 <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Canal</label>
+                  <div className="flex gap-1.5">
+                    {(["email", "whatsapp"] as const).map((ch) => (
+                      <button key={ch} type="button" onClick={() => setForm({ ...form, canal: ch })}
+                        className={"flex-1 text-sm px-3 py-2 rounded-lg border transition-colors " + (form.canal === ch ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-300 hover:border-indigo-400")}>
+                        {ch === "email" ? "📧 E-mail" : "💬 WhatsApp"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {form.canal === "email" ? (
+                <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Template</label>
                   <select required value={form.template_id} onChange={(e) => setForm({ ...form, template_id: Number(e.target.value) })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
                     <option value={0}>Selecione…</option>
                     {templates.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
                   </select>
                 </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Mensagem de WhatsApp</label>
+                  <textarea required value={form.mensagem} onChange={(e) => setForm({ ...form, mensagem: e.target.value })} rows={4}
+                    placeholder="Olá {{empresa}}! ... use {{empresa}} e {{cidade}} para personalizar."
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <p className="text-xs text-slate-400 mt-1">Placeholders disponíveis: <code>{"{{empresa}}"}</code> e <code>{"{{cidade}}"}</code>.</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg bg-slate-50 border border-slate-200 p-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Enviar em lotes de (por dia)</label>
+                  <input type="number" min="1" value={form.tamanho_lote} onChange={(e) => setForm({ ...form, tamanho_lote: e.target.value })}
+                    placeholder={form.canal === "whatsapp" ? "Ex.: 300 (limite do Twilio)" : "Vazio = manda tudo de uma vez"}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Repetir automaticamente até</label>
+                  <input type="date" value={form.repetir_ate} onChange={(e) => setForm({ ...form, repetir_ate: e.target.value })} disabled={!form.tamanho_lote}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white disabled:bg-slate-100 disabled:text-slate-400" />
+                </div>
+                <p className="text-xs text-slate-500 md:col-span-2 -mt-2">
+                  Com lote definido, cada clique em "Enviar próximo lote" manda só essa quantidade (quem ainda não foi contatado). Com uma data de repetição, um envio automático diário assume isso até a data (ou até acabar o público).
+                </p>
               </div>
 
               <div>

@@ -45,3 +45,28 @@ def get_active_org(
     if not orgs:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario sem empresa vinculada")
     return orgs[0]["id"]
+
+
+def get_papel_ativo(
+    current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
+) -> str:
+    """Papel do usuario na empresa ativa: 'admin' | 'membro' | 'visitante'.
+    Operador Global (is_admin=True) e' tratado como 'admin' em qualquer
+    empresa, mesmo sem vinculo explicito em usuario_organizacoes."""
+    if current_user.get("is_admin"):
+        return "admin"
+    from ..db.service import get_papel_usuario_org
+    return get_papel_usuario_org(current_user["sub"], org_id) or "membro"
+
+
+def require_org_admin(
+    current_user: Dict = Depends(get_current_user),
+    papel: str = Depends(get_papel_ativo),
+) -> Dict:
+    """Admin DA EMPRESA ATIVA (ou Operador Global). Ao contrario de
+    require_admin (global, mexe em qualquer empresa), este so' libera quem
+    administra especificamente a organizacao da requisicao atual."""
+    if papel != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito ao admin desta empresa")
+    return current_user

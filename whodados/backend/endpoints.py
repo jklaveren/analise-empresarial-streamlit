@@ -16,6 +16,8 @@ from .endpoints_admin import router as admin_router
 from .endpoints_nlp import router as nlp_router
 from .endpoints_enriquecimento import router as enriquecimento_router
 from .endpoints_analytics import router as analytics_router
+from .endpoints_integracoes import router as integracoes_router
+from .endpoints_descadastro import router as descadastro_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -30,3 +32,5 @@ router.include_router(admin_router)
 router.include_router(nlp_router)
 router.include_router(enriquecimento_router)
 router.include_router(analytics_router)
+router.include_router(integracoes_router)
+router.include_router(descadastro_router)

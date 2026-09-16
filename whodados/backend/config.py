@@ -48,6 +48,10 @@ class Settings:
     PASSWORD_RESET_EXPIRE_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRE_MINUTES", "60"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT = os.getenv("LOG_FORMAT", "text")
+    # Segredo compartilhado com o cron externo (GitHub Actions) que avanca
+    # os lotes diarios de campanha -- sem isso definido, o endpoint de cron
+    # fica desligado (nunca aceita chamada sem o header certo).
+    CRON_SECRET = os.getenv("CRON_SECRET", "")
 
     @property
     def cors_origins_list(self) -> List[str]:

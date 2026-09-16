@@ -10,18 +10,27 @@ const NAV_LINKS = [
   { href: "/dashboard", label: "Empresas", icon: "📊" },
   { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑" },
   { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
+  { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
+  { href: "/dashboard/whatsapp", label: "WhatsApp", icon: "💬" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },
   { href: "/dashboard/configuracoes", label: "Configurações", icon: "⚙️" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { username, isLoading, logout } = useRequireAuth();
+  const { username, isLoading, logout, activeOrg } = useRequireAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const isVisitante = activeOrg?.papel === "visitante";
+  const navLinks = isVisitante ? NAV_LINKS.filter(l => l.href === "/dashboard") : NAV_LINKS;
 
-  if (isLoading) {
+  // !username inclui o instante entre "terminou de carregar" e o
+  // redirect pro /login efetivamente acontecer (useRequireAuth so'
+  // dispara o router.replace num efeito, que roda DEPOIS do render) --
+  // sem isso, esse instante renderizava o dashboard inteiro (menu,
+  // cabecalho) por um frame antes de sair da tela.
+  if (isLoading || !username) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
@@ -42,8 +51,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Link>
           <p className="text-sm text-indigo-100 mt-1">Análise Empresarial</p>
         </div>
+        {isVisitante && (
+          <div className="mx-3 mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 font-medium">
+            👁️ Modo visitante — dados de exemplo, sem acesso de edição
+          </div>
+        )}
         <nav className="flex-1 p-3 space-y-1">
-          {NAV_LINKS.map(link => {
+          {navLinks.map(link => {
             const active = pathname === link.href || (link.href !== "/dashboard" && pathname.startsWith(link.href));
             return (
               <Link

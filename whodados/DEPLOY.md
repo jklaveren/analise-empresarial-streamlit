@@ -6,7 +6,7 @@ O resultado final é:
 - **Frontend** rodando na Vercel (`whodados/frontend/`)
 - **API** rodando na Render (`whodados/backend/`)
 - **Banco** rodando no Supabase
-- **Dados** atualizados automaticamente via GitHub Actions (`.github/workflows/whodados-etl.yml` (raiz do repo))
+- **Dados** atualizados manualmente rodando o pipeline local (`nra_etl/` ou `whodados/pipeline/pipeline_levas.py`) — a automação via GitHub Actions foi removida em 2026-09 porque parava de funcionar (provável bloqueio/anti-abuso da Receita Federal para downloads vindos de IP de nuvem); rodando do seu computador funciona normalmente
 
 ---
 
@@ -36,7 +36,7 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 2. Settings → Secrets and variables → Actions → **Variables**:
    - `SUPABASE_CONNECTION_STRING` = connection string do Supabase
 
-> 💡 O workflow do ETL está em `.github/workflows/whodados-etl.yml` (raiz do repo).
+> 💡 A automação via GitHub Actions foi removida (falhava sempre, provável bloqueio da RF pra IP de nuvem). Rode o pipeline localmente: `python whodados/pipeline/pipeline_levas.py` com `DATABASE_URL` no ambiente.
 
 ---
 

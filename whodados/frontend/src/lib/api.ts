@@ -94,6 +94,7 @@ export interface Organizacao {
   nome: string;
   slug: string;
   ativo: boolean;
+  papel?: "admin" | "membro" | "visitante";
 }
 
 /** Empresas que o usuario logado pode operar (para o seletor de empresa ativa). */
@@ -121,6 +122,8 @@ export async function resetPassword(token: string, novaSenha: string) {
 }
 
 // Empresas
+export type PotencialTier = "alto" | "medio" | "baixo";
+
 export interface EmpresaItem {
   cnpj_completo: string;
   razao_social: string;
@@ -132,6 +135,8 @@ export interface EmpresaItem {
   divida_total: number;
   porte_nome: string | null;
   data_fundacao?: string | null;
+  potencial_score: number;
+  potencial_tier: PotencialTier;
 }
 
 /** Filtros do funil de empresas (aplicados no servidor). */
@@ -147,6 +152,8 @@ export interface EmpresaFiltros {
   fundacao_de?: string;   // YYYY-MM-DD
   fundacao_ate?: string;  // YYYY-MM-DD
   incluir_inativas?: boolean;
+  potencial?: PotencialTier[];
+  ordenar_por?: "razao_social" | "potencial";
 }
 
 function empresaFiltrosToQuery(f: EmpresaFiltros = {}): URLSearchParams {
@@ -162,6 +169,8 @@ function empresaFiltrosToQuery(f: EmpresaFiltros = {}): URLSearchParams {
   if (f.fundacao_de) p.append("fundacao_de", f.fundacao_de);
   if (f.fundacao_ate) p.append("fundacao_ate", f.fundacao_ate);
   if (f.incluir_inativas === false) p.append("incluir_inativas", "false");
+  (f.potencial ?? []).forEach(v => p.append("potencial", v));
+  if (f.ordenar_por) p.append("ordenar_por", f.ordenar_por);
   return p;
 }
 
@@ -224,12 +233,75 @@ export interface CrmKanbanRecord {
   classificacao?: string | null;
   motivo?: string | null;
   parceiro?: boolean;
+  atividades_pendentes?: number;
 }
 
 export type CrmKanban = Record<CrmStatus, CrmKanbanRecord[]>;
 
 export async function listarCrmKanban(): Promise<CrmKanban> {
   return request("/api/v1/crm");
+}
+
+// ==================== CRM: ATIVIDADES/TAREFAS ====================
+
+export interface UsuarioOrg {
+  id: number;
+  username: string;
+}
+
+export type StatusAtividade = "pendente" | "em_andamento" | "concluida";
+
+export interface AtividadeCrm {
+  id: number;
+  cnpj: string;
+  titulo: string;
+  tipo: string;
+  descricao: string | null;
+  responsavel_user_id: number | null;
+  responsavel_username?: string | null;
+  razao_social?: string;
+  prazo: string | null;
+  status: StatusAtividade;
+  criado_por: string | null;
+  criado_em: string;
+  concluido_em: string | null;
+}
+
+/** Todas as atividades da organizacao (board agregado, tipo Trello). */
+export function listarTodasAtividades(): Promise<AtividadeCrm[]> {
+  return request("/api/v1/crm/atividades");
+}
+
+export function moverAtividadeCrm(id: number, status: StatusAtividade): Promise<{ ok: boolean }> {
+  return request(`/api/v1/crm/atividades/${id}/mover`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function listarUsuariosOrg(): Promise<UsuarioOrg[]> {
+  return request("/api/v1/crm/usuarios");
+}
+
+export function listarAtividadesCrm(cnpj: string): Promise<AtividadeCrm[]> {
+  return request(`/api/v1/crm/${encodeURIComponent(cnpj)}/atividades`);
+}
+
+export function criarAtividadeCrm(cnpj: string, data: {
+  titulo: string; tipo?: string; descricao?: string; responsavel_user_id?: number; prazo?: string;
+}): Promise<AtividadeCrm> {
+  return request(`/api/v1/crm/${encodeURIComponent(cnpj)}/atividades`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function concluirAtividadeCrm(id: number): Promise<{ ok: boolean }> {
+  return request(`/api/v1/crm/atividades/${id}/concluir`, { method: "POST" });
+}
+
+export function deletarAtividadeCrm(id: number): Promise<{ ok: boolean }> {
+  return request(`/api/v1/crm/atividades/${id}`, { method: "DELETE" });
 }
 
 // ==================== CLASSIFICACAO DE PERFIL ====================
@@ -350,7 +422,7 @@ export interface Template {
 export interface Campanha {
   id?: number;
   nome: string;
-  template_id: number;
+  template_id: number | null;
   filtros: Record<string, any>;
   status?: string;
   total_destinatarios?: number;
@@ -359,6 +431,12 @@ export interface Campanha {
   eh_sequencia?: boolean;
   created_at?: string;
   created_by?: string;
+  canal?: "email" | "whatsapp";
+  mensagem?: string | null;
+  tamanho_lote?: number | null;
+  repetir_ate?: string | null;
+  ultimo_lote_em?: string | null;
+  ja_contatados?: number;
 }
 
 export async function listarTemplates(): Promise<Template[]> {
@@ -420,7 +498,7 @@ export async function criarCampanha(data: Partial<Campanha>): Promise<Campanha> 
   });
 }
 
-export async function executarCampanha(id: number): Promise<{ sucessos: number; erros: number }> {
+export async function executarCampanha(id: number): Promise<{ sucessos: number; erros: number; restantes?: number; status?: string }> {
   return request(`/api/v1/campanhas/${id}/executar`, { method: "POST" });
 }
 
@@ -763,6 +841,37 @@ export async function enviarWhatsApp(
     method: "POST",
     body: JSON.stringify({ telefone, mensagem, cnpj }),
   });
+}
+
+export interface ConversaWhatsApp {
+  telefone: string;
+  cnpj: string | null;
+  razao_social: string;
+  ultima_mensagem: string;
+  ultima_direcao: "entrada" | "saida";
+  ultima_em: string;
+  nao_lidas: number;
+}
+
+export interface MensagemWhatsApp {
+  id: number;
+  cnpj: string | null;
+  telefone: string;
+  direcao: "entrada" | "saida";
+  corpo: string;
+  status: string;
+  criado_em: string;
+  lida: boolean;
+}
+
+/** Caixa de entrada: uma linha por conversa (numero), mais recente primeiro. */
+export async function listarConversasWhatsApp(): Promise<ConversaWhatsApp[]> {
+  return request("/api/v1/integracoes/whatsapp/conversas");
+}
+
+/** Historico completo de uma conversa (mais antiga -> mais recente). */
+export async function listarMensagensWhatsApp(telefone: string): Promise<MensagemWhatsApp[]> {
+  return request(`/api/v1/integracoes/whatsapp/conversas/${encodeURIComponent(telefone)}`);
 }
 
 // ==================== CONSULTA EM LINGUAGEM NATURAL ====================

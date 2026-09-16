@@ -42,14 +42,21 @@ def get_smtp_config() -> Dict[str, Any]:
 
 def test_smtp_connection(host: str, port: int, username: str, password: str, use_tls: bool = True) -> Dict[str, Any]:
     try:
-        with smtplib.SMTP(host, port, timeout=10) as server:
-            if use_tls:
+        # Porta 465 e' SSL implicito desde o connect -- STARTTLS nela trava
+        # ou derruba a conexao sem erro claro. Qualquer outra porta usa
+        # texto puro + STARTTLS (o que a maioria dos provedores espera).
+        if int(port) == 465:
+            server_ctx = smtplib.SMTP_SSL(host, port, timeout=10)
+        else:
+            server_ctx = smtplib.SMTP(host, port, timeout=10)
+        with server_ctx as server:
+            if use_tls and int(port) != 465:
                 server.starttls()
             server.login(username, password)
         log.info(f"Teste SMTP bem-sucedido para {username}@{host}:{port}")
         return {"sucesso": True, "message": f"Conexao com {host}:{port} bem-sucedida!"}
     except smtplib.SMTPAuthenticationError:
-        return {"sucesso": False, "message": "Falha na autenticacao. Verifique usuario e senha."}
+        return {"sucesso": False, "message": "Falha na autenticacao. Verifique usuario e senha (Gmail/Outlook exigem 'Senha de app', nao a senha normal da conta)."}
     except smtplib.SMTPConnectError:
         return {"sucesso": False, "message": f"Nao foi possivel conectar a {host}:{port}."}
     except smtplib.SMTPException as e:
