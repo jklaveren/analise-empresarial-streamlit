@@ -224,8 +224,16 @@ def enviar_template_para_cnpjs(
 
         empresa = dados.get("razao_social") or dados.get("nome_fantasia") or cnpj
         cidade = dados.get("municipio") or ""
+        nome_socio = (dados.get("nome_socio") or "").strip()
+        # Saudacao inteligente: primeiro nome do socio responsavel (mais
+        # pessoal -- "Oi, Joao!") quando existir, senao cai pro nome da
+        # empresa. Nome da RF vem em CAIXA ALTA; .title() deixa apresentavel
+        # ("JOAO CARLOS" -> "Joao").
+        saudacao = nome_socio.split()[0].title() if nome_socio else empresa
         vars_dict = {
             "empresa": empresa,
+            "saudacao": saudacao,
+            "nome_socio": nome_socio.title() if nome_socio else "",
             "cnpj": cnpj,
             "cidade": cidade,
             "cnae": cnae or "",

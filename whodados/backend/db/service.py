@@ -1416,6 +1416,43 @@ def seed_default_templates() -> int:
         return criados
 
 
+def buscar_socios_principais(cnpjs_basicos: List[str]) -> Dict[str, str]:
+    """CNPJ_BASICO -> nome do socio 'responsavel' de cada empresa (pra
+    personalizar campanha com o nome de uma pessoa, nao so' da empresa).
+    Prioridade por qualificacao (codigos da Receita Federal): Socio-
+    Administrador > Titular > Administrador > Presidente > Diretor > Socio
+    comum > qualquer outra. Uma empresa pode ter varios socios com a mesma
+    qualificacao -- pega um so' (o primeiro por ordem alfabetica, so' pra
+    ser deterministico entre chamadas)."""
+    if not cnpjs_basicos:
+        return {}
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            WITH ranked AS (
+                SELECT "CNPJ_BASICO", "NOME_SOCIO",
+                       ROW_NUMBER() OVER (
+                           PARTITION BY "CNPJ_BASICO"
+                           ORDER BY CASE "QUALIF_SOCIO"
+                               WHEN '49' THEN 1
+                               WHEN '65' THEN 2
+                               WHEN '05' THEN 3
+                               WHEN '16' THEN 4
+                               WHEN '10' THEN 5
+                               WHEN '22' THEN 6
+                               ELSE 9
+                           END, "NOME_SOCIO"
+                       ) AS rn
+                FROM dados_socios
+                WHERE "CNPJ_BASICO" = ANY(%s) AND COALESCE("NOME_SOCIO", '') <> ''
+            )
+            SELECT "CNPJ_BASICO", "NOME_SOCIO" FROM ranked WHERE rn = 1
+            """,
+            (cnpjs_basicos,),
+        )
+        return {r["CNPJ_BASICO"]: r["NOME_SOCIO"] for r in cur.fetchall()}
+
+
 # ==================== DESCADASTRO DE E-MAIL (LGPD/opt-out) ====================
 # Global (nao por empresa): pedido de "nao me mande mais e-mail" vale pra
 # qualquer organizacao que tentar mandar pra esse endereco.

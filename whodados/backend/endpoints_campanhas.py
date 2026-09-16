@@ -10,7 +10,7 @@ from .db import (
     create_campanha, get_campanha, get_all_campanhas, update_campanha_status,
     get_template, create_notificacao, listar_empresas_db,
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
-    listar_campanhas_pendentes,
+    listar_campanhas_pendentes, buscar_socios_principais,
 )
 from .mailer import enviar_campanha
 from .services.whatsapp_service import enviar_whatsapp
@@ -182,11 +182,17 @@ def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id:
         )
         registrar_envio_campanha(campanha_id, e["cnpj_completo"], "email", status="sem_email_ligar")
 
+    # Nome do socio responsavel de cada empresa -- permite personalizar a
+    # saudacao com o nome de uma pessoa em vez de so' a razao social.
+    basicos_por_cnpj = {e["cnpj_completo"]: e["cnpj_completo"][:8] for e in empresas if e.get("cnpj_completo")}
+    socios_por_basico = buscar_socios_principais(list(set(basicos_por_cnpj.values())))
+
     dados_empresas = {
         e["cnpj_completo"]: {
             "razao_social": e.get("razao_social", ""), "nome_fantasia": e.get("nome_fantasia", ""),
             "municipio": e.get("municipio", ""), "cnae_principal": e.get("cnae_principal", ""),
             "porte_nome": e.get("porte_nome", ""),
+            "nome_socio": socios_por_basico.get(basicos_por_cnpj.get(e["cnpj_completo"]), ""),
         }
         for e in empresas if e.get("cnpj_completo")
     }
