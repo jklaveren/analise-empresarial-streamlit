@@ -294,6 +294,39 @@ export async function contarNotificacoesNaoLidas(): Promise<{ total: number }> {
   return request("/api/v1/notificacoes/nao-lidas");
 }
 
+// ==================== E-MAIL INDIVIDUAL ====================
+
+export interface MeuEmail {
+  email_from: string | null;
+  email_from_name: string | null;
+  assinatura_html: string | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_username: string | null;
+  smtp_use_tls: boolean | null;
+  tem_servidor_proprio: boolean;
+  /** O que a empresa oferece quando você não define o seu. */
+  padrao_da_empresa: {
+    email_from: string | null;
+    email_from_name: string | null;
+    smtp_host: string | null;
+    configurado: boolean;
+  };
+}
+
+/** Remetente/assinatura da pessoa logada na empresa ativa. */
+export async function getMeuEmail(): Promise<MeuEmail> {
+  return request("/api/v1/meu-email");
+}
+
+export async function salvarMeuEmail(dados: Partial<{
+  email_from: string; email_from_name: string; assinatura_html: string;
+  smtp_host: string; smtp_port: number; smtp_username: string;
+  smtp_password: string; smtp_use_tls: boolean;
+}>): Promise<MeuEmail> {
+  return request("/api/v1/meu-email", { method: "PUT", body: JSON.stringify(dados) });
+}
+
 // ==================== GASTOS ====================
 
 export interface Gasto {

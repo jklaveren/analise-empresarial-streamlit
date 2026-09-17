@@ -89,7 +89,8 @@ async def enviar_teste(template_id: int, data: Dict, current_user: Dict = Depend
         dados_empresa = get_empresa_by_cnpj_db(cnpj) or None
         if not dados_empresa:
             raise HTTPException(status_code=404, detail="Empresa (CNPJ) nao encontrada na base.")
-    return enviar_email_teste(para, dict(t), organizacao_id=org_id, dados_empresa=dados_empresa)
+    return enviar_email_teste(para, dict(t), organizacao_id=org_id, dados_empresa=dados_empresa,
+                              remetente=current_user.get("sub"))
 
 
 # ---- Card/imagem do template (usada no corpo do email via {{imagem}}) ----
@@ -138,7 +139,8 @@ async def preview_template(
         "nome_socio": socios.get(cnpj[:8], ""),
     }
     email_dest = (empresa.get("email") or "").strip() or f"contato@{cnpj[:8]}.com.br"
-    montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id=org_id)
+    montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id=org_id,
+                                     remetente=current_user.get("sub"))
     montado["destinatario"] = email_dest
     montado["empresa"] = empresa.get("razao_social") or cnpj
     montado["cnpj"] = cnpj

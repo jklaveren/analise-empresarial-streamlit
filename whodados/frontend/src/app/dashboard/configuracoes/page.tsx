@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig, listarIntegracoes, salvarIntegracao, IntegracaoConfig } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig, listarIntegracoes, salvarIntegracao, IntegracaoConfig, getMeuEmail, salvarMeuEmail, MeuEmail } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -705,7 +705,127 @@ function RegrasNegocioTab() {
   );
 }
 
-type Aba = "perfil" | "regras" | "lgpd" | "usuarios" | "empresas" | "email" | "integracoes" | "sobre";
+
+/**
+ * E-mail individual: o disparo sai do endereço e da assinatura de quem
+ * está logado, usando o servidor da empresa. Campo em branco continua
+ * herdando o padrão da empresa.
+ */
+function MeuEmailTab() {
+  const [cfg, setCfg] = useState<MeuEmail | null>(null);
+  const [form, setForm] = useState({ email_from: "", email_from_name: "", assinatura_html: "" });
+  const [salvando, setSalvando] = useState(false);
+  const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+
+  useEffect(() => {
+    getMeuEmail()
+      .then(c => {
+        setCfg(c);
+        setForm({
+          email_from: c.email_from || "",
+          email_from_name: c.email_from_name || "",
+          assinatura_html: c.assinatura_html || "",
+        });
+      })
+      .catch(() => setFb({ t: "e", m: "Não consegui carregar sua configuração de e-mail." }));
+  }, []);
+
+  async function salvar(e: React.FormEvent) {
+    e.preventDefault();
+    setSalvando(true);
+    setFb(null);
+    try {
+      setCfg(await salvarMeuEmail(form));
+      setFb({ t: "s", m: "Salvo. Seus próximos envios saem com este remetente." });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof Error ? err.message : "Erro ao salvar" });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (!cfg) return <p className="text-sm text-slate-400">Carregando...</p>;
+
+  const padrao = cfg.padrao_da_empresa;
+
+  return (
+    <form onSubmit={salvar} className="space-y-4">
+      <div className="rounded-xl bg-white border border-slate-200 p-5 space-y-4 shadow-sm">
+        <div>
+          <h2 className="font-semibold text-slate-800">Meu e-mail</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Campanhas e avisos que você dispara saem deste endereço, pelo servidor da empresa.
+            Em branco, usa o padrão da empresa.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Endereço do remetente</label>
+            <input
+              type="email"
+              value={form.email_from}
+              onChange={e => setForm({ ...form, email_from: e.target.value })}
+              placeholder={padrao.email_from || "voce@empresa.com.br"}
+              autoComplete="off"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+            />
+            {!form.email_from && padrao.email_from && (
+              <p className="text-[11px] text-slate-400 mt-1">Herdando da empresa: {padrao.email_from}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Nome que aparece</label>
+            <input
+              type="text"
+              value={form.email_from_name}
+              onChange={e => setForm({ ...form, email_from_name: e.target.value })}
+              placeholder={padrao.email_from_name || "Seu Nome | Empresa"}
+              autoComplete="off"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Minha assinatura (HTML) — <span className="font-normal text-slate-400">{"{{logo}}"} vira o logo da empresa</span>
+          </label>
+          <textarea
+            value={form.assinatura_html}
+            onChange={e => setForm({ ...form, assinatura_html: e.target.value })}
+            rows={5}
+            placeholder="<p>Seu Nome<br>Cargo · Empresa</p>"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono outline-none focus:border-indigo-500"
+          />
+        </div>
+
+        {!padrao.configurado && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            Esta empresa ainda não tem servidor de e-mail configurado, então nada é enviado de
+            verdade — os disparos ficam como simulados. Configure o Brevo dela em Empresas.
+          </div>
+        )}
+
+        {fb && (
+          <div className={`rounded-lg px-3 py-2 text-sm ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+            {fb.m}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={salvando}
+          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg px-5 py-2 text-sm font-medium"
+        >
+          {salvando ? "Salvando..." : "Salvar meu e-mail"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+type Aba = "perfil" | "meu-email" | "regras" | "lgpd" | "usuarios" | "empresas" | "email" | "integracoes" | "sobre";
 
 export default function ConfiguracoesPage() {
   const { isAdmin } = useAuth();
@@ -713,6 +833,7 @@ export default function ConfiguracoesPage() {
 
   const abas: { id: Aba; label: string; icone: string; somenteAdmin?: boolean }[] = [
     { id: "perfil", label: "Perfil", icone: "👤" },
+    { id: "meu-email", label: "Meu e-mail", icone: "✉️" },
     { id: "regras", label: "Regras do CRM/Monitor", icone: "🎯" },
     { id: "lgpd", label: "Regras & LGPD", icone: "📜" },
     { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
@@ -744,6 +865,7 @@ export default function ConfiguracoesPage() {
       </div>
 
       {aba === "perfil" && <PerfilTab />}
+      {aba === "meu-email" && <MeuEmailTab />}
       {aba === "regras" && <RegrasTab />}
       {aba === "lgpd" && <RegrasNegocioTab />}
       {aba === "usuarios" && isAdmin && <UsuariosTab />}

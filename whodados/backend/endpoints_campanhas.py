@@ -106,7 +106,8 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
     if canal == "whatsapp":
         resultado = _enviar_lote_whatsapp(campanha_id, lote, campanha.get("mensagem") or "")
     else:
-        resultado = _enviar_lote_email(campanha_id, lote, campanha, org_id)
+        resultado = _enviar_lote_email(campanha_id, lote, campanha, org_id,
+                                       remetente=current_user.get("sub"))
 
     restantes = len(pendentes) - len(lote)
     novo_status = "em_andamento" if restantes > 0 else "concluida"
@@ -162,7 +163,10 @@ def _enviar_lote_whatsapp(campanha_id: int, empresas: list, mensagem: str) -> Di
     return {"sucessos": sucessos, "erros": erros, "erros_list": erros_list}
 
 
-def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id: int) -> Dict:
+def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id: int,
+                       remetente: Optional[str] = None) -> Dict:
+    """remetente: quem disparou. O e-mail e' individual -- sai do endereco
+    e com a assinatura da pessoa, pelo servidor da empresa."""
     template = get_template(campanha["template_id"], organizacao_id=org_id)
     emails_por_cnpj, sem_email_com_fone = {}, []
     for e in empresas:
@@ -197,7 +201,7 @@ def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id:
         for e in empresas if e.get("cnpj_completo")
     }
     cnpjs = list(emails_por_cnpj.keys())
-    resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=org_id) \
+    resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=org_id, remetente=remetente) \
         if cnpjs else {"sucessos": 0, "erros": 0}
     for cnpj in cnpjs:
         registrar_envio_campanha(campanha_id, cnpj, "email", status="enviado")

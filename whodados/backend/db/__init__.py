@@ -26,7 +26,8 @@ from .service import (
     listar_organizacoes_do_usuario, usuario_tem_acesso_org, listar_todas_organizacoes,
     definir_acesso_usuario_orgs, get_orgs_do_user_id, criar_organizacao, renomear_organizacao,
     get_papel_usuario_org, definir_papel_usuario_org,
-    get_org_smtp_config, set_org_smtp_config, set_org_logo, get_org_logo,
+    get_org_smtp_config, set_org_smtp_config,
+    get_usuario_smtp_config, set_usuario_smtp_config, set_org_logo, get_org_logo,
     # WhatsApp (Twilio)
     registrar_mensagem_whatsapp, listar_conversas_whatsapp, listar_mensagens_whatsapp,
     buscar_empresa_por_telefone,
@@ -78,7 +79,8 @@ __all__ = [
     "listar_organizacoes_do_usuario", "usuario_tem_acesso_org", "listar_todas_organizacoes",
     "definir_acesso_usuario_orgs", "get_orgs_do_user_id", "criar_organizacao", "renomear_organizacao",
     "get_papel_usuario_org", "definir_papel_usuario_org",
-    "get_org_smtp_config", "set_org_smtp_config", "set_org_logo", "get_org_logo",
+    "get_org_smtp_config", "set_org_smtp_config",
+    "get_usuario_smtp_config", "set_usuario_smtp_config", "set_org_logo", "get_org_logo",
     # WhatsApp (Twilio)
     "registrar_mensagem_whatsapp", "listar_conversas_whatsapp", "listar_mensagens_whatsapp",
     "buscar_empresa_por_telefone",

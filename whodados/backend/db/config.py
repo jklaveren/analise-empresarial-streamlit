@@ -198,6 +198,26 @@ def _run_ensure_multiempresa(os):
         cur.execute("ALTER TABLE org_smtp_config ADD COLUMN IF NOT EXISTS logo_data BYTEA")
         cur.execute("ALTER TABLE org_smtp_config ADD COLUMN IF NOT EXISTS logo_mime VARCHAR(50)")
 
+        # E-mail e' INDIVIDUAL: quem dispara assina com o proprio endereco.
+        # A config da empresa (org_smtp_config) continua sendo o padrao -- o
+        # usuario so' precisa preencher o que for dele. Na pratica quase
+        # sempre e' so' o remetente e a assinatura, aproveitando o servidor
+        # da empresa; por isso servidor/usuario/senha sao opcionais aqui.
+        cur.execute("""CREATE TABLE IF NOT EXISTS usuario_smtp_config (
+            user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            smtp_host VARCHAR(200),
+            smtp_port INTEGER,
+            smtp_username VARCHAR(200),
+            smtp_password VARCHAR(255),
+            smtp_use_tls BOOLEAN,
+            email_from VARCHAR(255),
+            email_from_name VARCHAR(120),
+            assinatura_html TEXT,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (user_id, organizacao_id)
+        )""")
+
         # --- Seed das empresas (idempotente por slug) ---
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('SYVP', 'syvp') ON CONFLICT (slug) DO NOTHING")

@@ -80,8 +80,51 @@ def _obter_template_para_cnpj(template_base_id: int, cnae: Optional[str]) -> Dic
     base = get_template(template_base_id)
     return dict(base) if base else {}
 
+def _smtp_efetivo(organizacao_id: Optional[int], remetente: Optional[str] = None) -> Dict[str, Any]:
+    """Config SMTP que vai ser usada no envio.
+
+    E-mail e' individual: o remetente (endereco e nome) e' de quem dispara,
+    nao da empresa. Na pratica so' isso costuma mudar -- o servidor continua
+    sendo o da empresa -- entao a config do usuario e' aplicada POR CIMA da
+    config da empresa, campo a campo. Quem tiver servidor proprio tambem
+    pode sobrescrever host/porta/usuario/senha.
+
+    remetente=None (rotina automatica, sem pessoa por tras) usa a config da
+    empresa, que e' o comportamento certo pra e-mail do sistema.
+    """
+    base = _smtp_da_org(organizacao_id)
+    if not remetente or organizacao_id is None:
+        return base
+    try:
+        from ..db.service import get_usuario_smtp_config
+        meu = get_usuario_smtp_config(remetente, organizacao_id, incluir_password=True)
+    except Exception as e:
+        log.warning(f"Falha lendo e-mail individual de {remetente}: {e}")
+        return base
+    if not meu:
+        return base
+
+    cfg = dict(base)
+    # Servidor proprio so' vale inteiro: host sem a senha correspondente
+    # tentaria autenticar no servidor novo com a credencial da empresa.
+    if meu.get("smtp_host") and meu.get("smtp_username") and meu.get("smtp_password"):
+        cfg.update({
+            "host": meu["smtp_host"],
+            "port": meu.get("smtp_port") or cfg.get("port") or 587,
+            "username": meu["smtp_username"],
+            "password": meu["smtp_password"],
+            "use_tls": meu["smtp_use_tls"] if meu.get("smtp_use_tls") is not None else cfg.get("use_tls", True),
+        })
+    if meu.get("email_from"):
+        cfg["email_from"] = meu["email_from"]
+    if meu.get("email_from_name"):
+        cfg["email_from_name"] = meu["email_from_name"]
+    return cfg
+
+
 def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
-    """Config SMTP efetiva: a da empresa (se configurada) ou a global (.env)."""
+    """Config SMTP da EMPRESA (padrao). O remetente individual entra por cima
+    em _smtp_efetivo."""
     if organizacao_id is not None:
         try:
             from ..db.service import get_org_smtp_config
@@ -154,6 +197,29 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
         log.error(f"Erro ao enviar email para {para}: {e}")
         return {"sucesso": False, "para": para, "erro": str(e)}
 
+def _assinatura_efetiva(organizacao_id: Optional[int], remetente: Optional[str] = None) -> str:
+    """Assinatura do e-mail. A da pessoa vem primeiro (o e-mail e' dela); sem
+    assinatura propria, usa a da empresa."""
+    if remetente and organizacao_id is not None:
+        try:
+            from ..db.service import get_usuario_smtp_config
+            meu = get_usuario_smtp_config(remetente, organizacao_id)
+            if meu and meu.get("assinatura_html"):
+                return _resolver_logo(meu["assinatura_html"], organizacao_id)
+        except Exception as e:
+            log.warning(f"Falha lendo assinatura de {remetente}: {e}")
+    return _assinatura_da_org(organizacao_id)
+
+
+def _resolver_logo(assinatura: str, organizacao_id: int) -> str:
+    """Troca {{logo}} pela URL publica do logo da empresa."""
+    try:
+        base = getattr(settings, "API_PUBLIC_URL", "") or ""
+    except Exception:
+        base = ""
+    return assinatura.replace("{{logo}}", f"{base}/api/v1/organizacoes/{organizacao_id}/logo")
+
+
 def _assinatura_da_org(organizacao_id: Optional[int]) -> str:
     """HTML da assinatura da empresa, com {{logo}} resolvido para a URL publica
     do logo. Vazio se a empresa nao tiver assinatura."""
@@ -196,6 +262,7 @@ def _rodape_descadastro(email_dest: str) -> Dict[str, str]:
 def montar_email_para_cnpj(
     template: Dict, cnpj: str, email_dest: str,
     dados: Optional[Dict[str, str]] = None, organizacao_id: Optional[int] = None,
+    remetente: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Monta o e-mail FINAL de um destinatario: variaveis substituidas +
     assinatura da empresa + rodape de descadastro (LGPD).
@@ -233,7 +300,7 @@ def montar_email_para_cnpj(
     rodape = _rodape_descadastro(email_dest)
     return {
         "assunto": rendered.get("assunto", ""),
-        "corpo_html": rendered.get("corpo_html", "") + _assinatura_da_org(organizacao_id) + rodape["html"],
+        "corpo_html": rendered.get("corpo_html", "") + _assinatura_efetiva(organizacao_id, remetente) + rodape["html"],
         "corpo_texto": (rendered.get("corpo_texto") or "") + rodape["texto"],
         "template_usado": tpl.get("nome", ""),
         "categoria_cnae": categoria,
@@ -248,14 +315,17 @@ def enviar_template_para_cnpjs(
     emails_por_cnpj: Dict[str, str],
     dados_empresas: Optional[Dict[str, Dict[str, str]]] = None,
     organizacao_id: Optional[int] = None,
+    remetente: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Envia template para CNPJs, escolhendo o template correto por CNAE.
     Usa o SMTP e a assinatura da empresa (organizacao_id). Pula quem ja
     pediu descadastro (LGPD/opt-out) -- regra do negocio, nao do template."""
     from ..db.service import email_esta_descadastrado
     resultados = {"sucessos": 0, "erros": 0, "descadastrados": 0, "enviados": [], "erros_list": []}
-    smtp_cfg = _smtp_da_org(organizacao_id)
-    assinatura = _assinatura_da_org(organizacao_id)
+    # remetente = quem disparou. O e-mail e' individual: sai com o endereco e
+    # a assinatura da pessoa, usando o servidor da empresa.
+    smtp_cfg = _smtp_efetivo(organizacao_id, remetente)
+    assinatura = _assinatura_efetiva(organizacao_id, remetente)
     if campanha_id:
         try:
             update_campanha_status(campanha_id, "em_andamento", total_destinatarios=len(cnpjs))
@@ -271,7 +341,7 @@ def enviar_template_para_cnpjs(
             resultados["descadastrados"] += 1
             continue
         dados = dados_map.get(cnpj, {})
-        montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id)
+        montado = montar_email_para_cnpj(template, cnpj, email_dest, dados, organizacao_id, remetente)
         categoria = montado["categoria_cnae"]
         tpl = {"nome": montado["template_usado"]}
 
@@ -362,19 +432,25 @@ def notificar_tarefa_por_email(
         partes.append(f"Prazo: {prazo}")
     texto = "\n".join(partes)
     try:
-        return enviar_email(para, f"[WhoDados] {titulo}", html, texto, smtp=_smtp_da_org(organizacao_id))
+        # Sai de quem atribuiu a tarefa -- responder o aviso cai na pessoa
+        # certa, nao num endereco generico da empresa.
+        return enviar_email(para, f"[WhoDados] {titulo}", html, texto,
+                            smtp=_smtp_efetivo(organizacao_id, atribuida_por))
     except Exception as e:  # nunca deixa o e-mail quebrar a criacao da tarefa
         log.warning(f"Falha ao notificar tarefa por e-mail para {para}: {e}")
         return {"sucesso": False, "erro": str(e)}
 
 
-def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None, dados_empresa: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Envia UM e-mail de teste com o template renderizado, usando o SMTP e a
-    assinatura da empresa -- para conferir como o e-mail vai chegar antes de
-    disparar a campanha. Se dados_empresa for passado (ex.: uma empresa real por
-    CNPJ), a personalizacao usa os dados REAIS dela; senao usa valores de exemplo."""
-    smtp_cfg = _smtp_da_org(organizacao_id)
-    assinatura = _assinatura_da_org(organizacao_id)
+def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None,
+                       dados_empresa: Optional[Dict[str, Any]] = None,
+                       remetente: Optional[str] = None) -> Dict[str, Any]:
+    """Envia UM e-mail de teste com o template renderizado, com o remetente e a
+    assinatura de quem esta' testando -- para conferir como o e-mail vai chegar
+    antes de disparar a campanha. Se dados_empresa for passado (ex.: uma empresa
+    real por CNPJ), a personalizacao usa os dados REAIS dela; senao usa valores
+    de exemplo."""
+    smtp_cfg = _smtp_efetivo(organizacao_id, remetente)
+    assinatura = _assinatura_efetiva(organizacao_id, remetente)
     if dados_empresa:
         cnae = dados_empresa.get("cnae_principal") or ""
         categoria = classificar_cnae(cnae) if cnae else "servicos"

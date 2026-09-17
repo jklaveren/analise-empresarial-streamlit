@@ -1152,6 +1152,65 @@ def get_org_smtp_config(organizacao_id: int, incluir_password: bool = False) -> 
     return dados
 
 
+def get_usuario_smtp_config(username: str, organizacao_id: int,
+                            incluir_password: bool = False) -> Optional[Dict[str, Any]]:
+    """Config de e-mail INDIVIDUAL do usuario nesta empresa. Campo nao
+    preenchido volta None de proposito -- quem resolve a mistura com a
+    config da empresa e' o mailer."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT c.* FROM usuario_smtp_config c
+               JOIN app_users u ON u.id = c.user_id
+               WHERE u.username = %s AND c.organizacao_id = %s""",
+            (username, organizacao_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    dados = dict(row)
+    if incluir_password:
+        dados["smtp_password"] = decrypt_secret(dados.get("smtp_password"))
+    else:
+        dados.pop("smtp_password", None)
+    dados["configurado"] = bool(dados.get("email_from") or dados.get("smtp_host"))
+    return dados
+
+
+def set_usuario_smtp_config(username: str, organizacao_id: int, **campos) -> Optional[Dict[str, Any]]:
+    """Cria/atualiza o e-mail individual. So altera o que foi passado
+    (None = mantem). Senha vazia nao sobrescreve a que ja' existe."""
+    permitidos = ("smtp_host", "smtp_port", "smtp_username", "smtp_use_tls",
+                  "email_from", "email_from_name", "assinatura_html")
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id FROM app_users WHERE username = %s", (username,))
+        user = cur.fetchone()
+        if not user:
+            return None
+        cur.execute(
+            """INSERT INTO usuario_smtp_config (user_id, organizacao_id) VALUES (%s, %s)
+               ON CONFLICT (user_id, organizacao_id) DO NOTHING""",
+            (user["id"], organizacao_id),
+        )
+        sets, valores = [], []
+        for col in permitidos:
+            if campos.get(col) is not None:
+                sets.append(f"{col} = %s")
+                valores.append(campos[col])
+        senha = campos.get("smtp_password")
+        if senha:
+            sets.append("smtp_password = %s")
+            valores.append(encrypt_secret(senha))
+        if not sets:
+            return get_usuario_smtp_config(username, organizacao_id)
+        sets.append("updated_at = NOW()")
+        valores += [user["id"], organizacao_id]
+        cur.execute(
+            f"UPDATE usuario_smtp_config SET {', '.join(sets)} WHERE user_id = %s AND organizacao_id = %s",
+            valores,
+        )
+    return get_usuario_smtp_config(username, organizacao_id)
+
+
 def set_org_smtp_config(organizacao_id: int, smtp_host=None, smtp_port=None, smtp_username=None,
                         smtp_password=None, smtp_use_tls=None, email_from=None,
                         email_from_name=None, assinatura_html=None) -> Dict[str, Any]:
