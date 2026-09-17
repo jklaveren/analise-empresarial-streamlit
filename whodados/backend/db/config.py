@@ -449,6 +449,26 @@ def _run_ensure_multiempresa(os):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_carteira_org ON empresas_carteira(organizacao_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_carteira_categoria ON empresas_carteira(organizacao_id, categoria)")
 
+        # Lista de envio montada a mao. Antes a campanha so' aceitava filtro
+        # sobre a base -- nao dava pra escolher pra quem vai, nem corrigir um
+        # e-mail antes de disparar. Agora a campanha pode ter uma lista
+        # propria (planilha, selecao na tela, digitado).
+        cur.execute("""CREATE TABLE IF NOT EXISTS campanha_destinatarios (
+            id SERIAL PRIMARY KEY,
+            campanha_id INTEGER NOT NULL REFERENCES campanhas(id) ON DELETE CASCADE,
+            email VARCHAR(255) NOT NULL,
+            cnpj VARCHAR(14),
+            razao_social VARCHAR(255),
+            municipio VARCHAR(120),
+            nome_socio VARCHAR(255),
+            origem VARCHAR(30) DEFAULT 'manual',
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE (campanha_id, email)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_camp_dest ON campanha_destinatarios(campanha_id)")
+        # 'filtro' (padrao, comportamento antigo) ou 'lista'
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS origem_destinatarios VARCHAR(10) DEFAULT 'filtro'")
+
         # Descadastro de e-mail (LGPD/opt-out) -- GLOBAL, nao por empresa: se
         # alguem pede pra nao receber mais, isso vale pra NRA e SYVP, nao so'
         # pra quem mandou o e-mail que ela descadastrou. Toda campanha de

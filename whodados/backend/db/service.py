@@ -2272,6 +2272,71 @@ def deletar_atividade_crm(atividade_id: int, organizacao_id: int) -> bool:
 
 # ==================== CAMPANHAS EM LOTE (envio diario ate um limite) ====================
 
+# ==================== LISTA DE ENVIO DA CAMPANHA ====================
+#
+# A campanha pode ter destinatarios montados a mao em vez de sair de um
+# filtro sobre a base. E' o caminho pra quem quer escolher pra quem vai
+# (planilha do cliente, selecao na tela, um e-mail digitado na hora).
+
+def adicionar_destinatarios(campanha_id: int, itens: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Adiciona e-mails na lista da campanha. Repetido nao duplica (a chave e'
+    campanha + e-mail), entao da' pra ir somando de varias origens."""
+    adicionados, invalidos, repetidos = 0, 0, 0
+    with get_db_cursor() as cur:
+        for item in itens:
+            email = (item.get("email") or "").strip().lower()
+            if "@" not in email or "." not in email.split("@")[-1]:
+                invalidos += 1
+                continue
+            cnpj = re.sub(r"\D", "", str(item.get("cnpj") or "")) or None
+            cur.execute(
+                """INSERT INTO campanha_destinatarios
+                   (campanha_id, email, cnpj, razao_social, municipio, nome_socio, origem)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (campanha_id, email) DO NOTHING
+                   RETURNING id""",
+                (campanha_id, email, cnpj, item.get("razao_social"), item.get("municipio"),
+                 item.get("nome_socio"), item.get("origem") or "manual"),
+            )
+            if cur.fetchone():
+                adicionados += 1
+            else:
+                repetidos += 1
+    return {"adicionados": adicionados, "invalidos": invalidos, "repetidos": repetidos}
+
+
+def listar_destinatarios(campanha_id: int, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT * FROM campanha_destinatarios WHERE campanha_id = %s
+               ORDER BY razao_social NULLS LAST, email LIMIT %s OFFSET %s""",
+            (campanha_id, limit, offset),
+        )
+        return cur.fetchall()
+
+
+def contar_destinatarios(campanha_id: int) -> int:
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM campanha_destinatarios WHERE campanha_id = %s", (campanha_id,))
+        row = cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+def remover_destinatario(campanha_id: int, destinatario_id: int) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            "DELETE FROM campanha_destinatarios WHERE id = %s AND campanha_id = %s",
+            (destinatario_id, campanha_id),
+        )
+        return cur.rowcount > 0
+
+
+def limpar_destinatarios(campanha_id: int) -> int:
+    with get_db_cursor() as cur:
+        cur.execute("DELETE FROM campanha_destinatarios WHERE campanha_id = %s", (campanha_id,))
+        return cur.rowcount
+
+
 def cnpjs_ja_contatados_campanha(campanha_id: int) -> set:
     """CNPJs que essa campanha ja contatou (em qualquer lote anterior).
     Usado pra calcular quem ainda falta no proximo lote."""

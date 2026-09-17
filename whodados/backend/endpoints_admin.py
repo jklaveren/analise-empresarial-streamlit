@@ -1,7 +1,7 @@
 """Admin Endpoints - WhoDados."""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from typing import Dict, Any
-from .auth import get_current_user
+from .auth import get_current_user, get_active_org
 from .mailer import (
     get_smtp_config, test_smtp_connection, test_email_send,
     get_smtp_presets
@@ -56,14 +56,14 @@ async def test_connection(data: Dict, current_user: Dict = Depends(require_admin
 
 
 @router.post("/smtp/test-send")
-async def send_test_email(data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+async def send_test_email(data: Dict, current_user: Dict = Depends(require_admin), org_id: int = Depends(get_active_org)) -> Dict[str, Any]:
     """Envia e-mail de teste usando a configuracao atual."""
     para = data.get("para", "").strip()
     if not para or "@" not in para:
         raise HTTPException(status_code=400, detail="Email invalido")
 
-    logger.info(f"Enviando e-mail de teste para {para}")
-    return test_email_send(para)
+    logger.info(f"Enviando e-mail de teste para {para} (org {org_id})")
+    return test_email_send(para, organizacao_id=org_id)
 
 
 @router.get("/sistema/status")

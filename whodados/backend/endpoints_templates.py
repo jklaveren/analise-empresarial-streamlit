@@ -86,7 +86,7 @@ async def enviar_teste(template_id: int, data: Dict, current_user: Dict = Depend
     dados_empresa = None
     cnpj = (data.get("cnpj") or "").strip()
     if cnpj:
-        dados_empresa = get_empresa_by_cnpj_db(cnpj) or None
+        dados_empresa = get_empresa_by_cnpj_db(cnpj, organizacao_id=org_id) or None
         if not dados_empresa:
             raise HTTPException(status_code=404, detail="Empresa (CNPJ) nao encontrada na base.")
     return enviar_email_teste(para, dict(t), organizacao_id=org_id, dados_empresa=dados_empresa,

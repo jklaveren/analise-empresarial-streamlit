@@ -65,25 +65,26 @@ def test_smtp_connection(host: str, port: int, username: str, password: str, use
         return {"sucesso": False, "message": f"Erro: {str(e)}"}
 
 
-def test_email_send(para: str) -> Dict[str, Any]:
-    if not settings.SMTP_HOST:
+def test_email_send(para: str, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
+    from .service import enviar_email, _smtp_da_org
+    cfg = _smtp_da_org(organizacao_id)
+    if not cfg.get("host") and not settings.SMTP_HOST:
         return {
             "sucesso": False,
-            "message": "SMTP nao configurado. Defina SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD no .env"
+            "message": "SMTP nao configurado. Defina SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD"
         }
-    from .service import enviar_email
     html_body = f"""
     <html><body style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
     <h2 style="color: #4f46e5;">Teste de Configuracao - WhoDados</h2>
     <p>Este e-mail de teste foi enviado com sucesso!</p>
     <p><strong>Detalhes da configuracao:</strong></p>
     <ul>
-        <li>Servidor: {settings.SMTP_HOST}:{settings.SMTP_PORT}</li>
-        <li>Usuario: {settings.SMTP_USERNAME}</li>
-        <li>TLS: {'Sim' if settings.SMTP_USE_TLS else 'Nao'}</li>
+        <li>Servidor: {cfg.get('host') or settings.SMTP_HOST}:{cfg.get('port') or settings.SMTP_PORT}</li>
+        <li>Remetente: {cfg.get('email_from') or settings.EMAIL_FROM} ({cfg.get('email_from_name') or settings.EMAIL_FROM_NAME})</li>
+        <li>TLS: {'Sim' if cfg.get('use_tls', True) else 'Nao'}</li>
     </ul>
     </body></html>"""
-    result = enviar_email(para=para, assunto="[WhoDados] Teste de Configuracao", corpo_html=html_body, corpo_texto="Teste OK")
+    result = enviar_email(para=para, assunto="[WhoDados] Teste de Configuracao", corpo_html=html_body, corpo_texto="Teste OK", smtp=cfg)
     if result.get("sucesso"):
         return {"sucesso": True, "message": f"E-mail de teste enviado para {para}", "detalhe": result}
     return {"sucesso": False, "message": f"Falha: {result.get('erro', 'Erro')}", "detalhe": result}

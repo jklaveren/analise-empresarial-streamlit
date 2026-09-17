@@ -11,6 +11,7 @@ from .db import (
     get_template, create_notificacao, listar_empresas_db,
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
     listar_campanhas_pendentes, buscar_socios_principais,
+    org_escopo_base, email_esta_descadastrado,
 )
 from .mailer import enviar_campanha
 from .services.whatsapp_service import enviar_whatsapp
@@ -77,6 +78,85 @@ async def get_campanha_by_id(campanha_id: int, current_user: Dict = Depends(get_
     return c
 
 
+def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
+    """Quem entra no proximo lote, e de onde essa lista saiu.
+
+    E' a MESMA selecao usada no disparo -- a previa chama esta funcao pra
+    mostrar exatamente o que vai sair, nao uma estimativa parecida.
+    """
+    filtros = campanha.get("filtros") or {}
+    ja_contatados = cnpjs_ja_contatados_campanha(campanha["id"])
+
+    empresas = listar_empresas_db(
+        cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), porte=filtros.get("porte"),
+        busca=filtros.get("busca"), divida_min=filtros.get("divida_min"),
+        potencial=filtros.get("potencial"), categoria=filtros.get("categoria"),
+        limit=100000, offset=0, organizacao_id=org_id,
+    )
+    pendentes = [e for e in empresas if e.get("cnpj_completo") and e["cnpj_completo"] not in ja_contatados]
+    tamanho_lote = campanha.get("tamanho_lote")
+    lote = pendentes[:tamanho_lote] if tamanho_lote else pendentes
+    return {
+        "fonte": "carteira" if org_escopo_base(org_id) == "carteira" else "Receita Federal",
+        "no_filtro": len(empresas),
+        "ja_contatados": len(empresas) - len(pendentes),
+        "pendentes": len(pendentes),
+        "lote": lote,
+        "restantes_depois": max(len(pendentes) - len(lote), 0),
+    }
+
+
+@router.get("/campanhas/{campanha_id}/previa")
+async def previa_do_lote(campanha_id: int, current_user: Dict = Depends(get_current_user),
+                         org_id: int = Depends(get_active_org)):
+    """De onde vem a carga e o que realmente vai sair no proximo disparo.
+
+    Existe porque "mandar a campanha" escondia decisoes que mudam muito o
+    resultado: quanta gente do filtro nem tem e-mail, quantos ja' foram
+    contatados, quantos pediram descadastro, e quantos endereços sao
+    repetidos (o mesmo e-mail de contabilidade responde por dezenas de
+    empresas na base da Receita -- disparar pros dois e' o mesmo destinatario
+    recebendo duas vezes).
+    """
+    campanha = get_campanha(campanha_id, organizacao_id=org_id)
+    if not campanha:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+
+    sel = _selecionar_lote(campanha, org_id)
+    lote = sel.pop("lote")
+
+    com_email, sem_email_com_fone, sem_contato, descadastrados = [], 0, 0, 0
+    vistos: Dict[str, int] = {}
+    for e in lote:
+        email = (e.get("email") or "").strip().lower()
+        if email and "@" in email:
+            if email_esta_descadastrado(email):
+                descadastrados += 1
+                continue
+            vistos[email] = vistos.get(email, 0) + 1
+            com_email.append({
+                "cnpj": e.get("cnpj_completo"), "razao_social": e.get("razao_social"),
+                "municipio": e.get("municipio"), "email": email,
+            })
+        elif (e.get("contato_fone") or "").strip(" ()-"):
+            sem_email_com_fone += 1
+        else:
+            sem_contato += 1
+
+    repetidos = sum(n - 1 for n in vistos.values() if n > 1)
+    return {
+        **sel,
+        "no_lote": len(lote),
+        "vao_receber": len(com_email),
+        "enderecos_distintos": len(vistos),
+        "repetidos_no_lote": repetidos,
+        "sem_email_viram_ligacao": sem_email_com_fone,
+        "sem_nenhum_contato": sem_contato,
+        "descadastrados_lgpd": descadastrados,
+        "amostra": com_email[:10],
+    }
+
+
 def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
     """Manda o proximo lote (ou a campanha inteira, se tamanho_lote nao
     estiver definido -- comportamento antigo preservado). Pode ser chamado
@@ -85,19 +165,10 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
     ja foi coberto, ou 'em_andamento' quando ainda falta gente."""
     campanha_id = campanha["id"]
     canal = campanha.get("canal") or "email"
-    filtros = campanha.get("filtros") or {}
-    ja_contatados = cnpjs_ja_contatados_campanha(campanha_id)
 
-    empresas = listar_empresas_db(
-        cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), porte=filtros.get("porte"),
-        busca=filtros.get("busca"), divida_min=filtros.get("divida_min"),
-        potencial=filtros.get("potencial"),
-        limit=100000, offset=0,
-    )
-    pendentes = [e for e in empresas if e.get("cnpj_completo") and e["cnpj_completo"] not in ja_contatados]
-
-    tamanho_lote = campanha.get("tamanho_lote")
-    lote = pendentes[:tamanho_lote] if tamanho_lote else pendentes
+    sel = _selecionar_lote(campanha, org_id)
+    lote = sel["lote"]
+    pendentes_total = sel["pendentes"]
 
     if not lote:
         update_campanha_status(campanha_id, "concluida", concluida_em=datetime.now(timezone.utc))
@@ -109,7 +180,7 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
         resultado = _enviar_lote_email(campanha_id, lote, campanha, org_id,
                                        remetente=current_user.get("sub"))
 
-    restantes = len(pendentes) - len(lote)
+    restantes = pendentes_total - len(lote)
     novo_status = "em_andamento" if restantes > 0 else "concluida"
     update_campanha_status(
         campanha_id, novo_status,
