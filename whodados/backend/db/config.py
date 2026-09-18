@@ -133,6 +133,17 @@ def ensure_tables():
         cur.execute("ALTER TABLE empresas_potencial ADD COLUMN IF NOT EXISTS categoria_cnae VARCHAR(20)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_tier ON empresas_potencial(potencial_tier)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_categoria ON empresas_potencial(categoria_cnae)")
+        # Tabela de lotes de leads (criacao de lotes com filtros de potencial, etc.)
+        cur.execute("""CREATE TABLE IF NOT EXISTS lotes_leads (
+            id SERIAL PRIMARY KEY,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            nome VARCHAR(200) NOT NULL,
+            filtros JSONB NOT NULL DEFAULT '{}'::jsonb,
+            total_encontrado INTEGER DEFAULT 0,
+            criado_por VARCHAR(50),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lotes_leads_org ON lotes_leads(organizacao_id)")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
     _ensure_multiempresa()

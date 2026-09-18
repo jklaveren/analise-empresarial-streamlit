@@ -4,7 +4,7 @@ import PreviewTemplate from "@/components/PreviewTemplate";
 import { useEffect, useState } from "react";
 import {
   listarCampanhas, criarCampanha, executarCampanha, deletarCampanha,
-  listarTemplates, getOpcoesFiltro, listarEmpresas,
+  listarTemplates, getOpcoesFiltro, contarEmpresas,
 } from "@/lib/api";
 
 type FiltrosForm = { cidade: string[]; cnae: string[]; porte: string[]; busca: string; divida_min: string };
@@ -137,11 +137,11 @@ export default function CampanhasPage() {
     if (!showModal) return;
     const t = setTimeout(async () => {
       setPrevCarregando(true);
-      try {
-        const res: any = (await listarEmpresas(montarFiltros(form.filtros) as any, 1 as any)) as any;
-        const total = Number(res?.total ?? (res?.empresas || res?.items || []).length);
-        setPrevTotal(Number.isFinite(total) ? total : null);
-      } catch { setPrevTotal(null); } finally { setPrevCarregando(false); }
+        try {
+          const res: any = await contarEmpresas(montarFiltros(form.filtros) as any);
+          const total = Number(res?.total ?? 0);
+          setPrevTotal(Number.isFinite(total) ? total : null);
+        } catch { setPrevTotal(null); } finally { setPrevCarregando(false); }
     }, 500);
     return () => clearTimeout(t);
   }, [form.filtros, showModal]);

@@ -47,6 +47,8 @@ from .service import (
     # Descadastro de e-mail (LGPD/opt-out)
     email_esta_descadastrado, descadastrar_email,
     buscar_socios_principais, buscar_empresas_rapido,
+    # Lotes de leads
+    create_lote_db, get_lote_db, listar_lotes_db, delete_lote_db,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,
@@ -95,6 +97,7 @@ __all__ = [
     "registrar_historico_atividade", "listar_historico_atividade",
     "atualizar_prazo_atividade", "get_status_atividade",
     "email_esta_descadastrado", "descadastrar_email", "buscar_socios_principais", "buscar_empresas_rapido",
+    "create_lote_db", "get_lote_db", "listar_lotes_db", "delete_lote_db",
     # Analytics (agregacoes sobre dados_empresas / dados_socios)
     "analytics_resumo", "analytics_por_cidade", "analytics_por_setor", "analytics_por_porte",
     "analytics_top_empresas", "analytics_socios_ranking", "analytics_socio_detalhe",

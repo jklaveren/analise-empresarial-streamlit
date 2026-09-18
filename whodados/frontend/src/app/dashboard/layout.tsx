@@ -18,6 +18,7 @@ const NAV_LINKS = [
   { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
   { href: "/dashboard/gastos", label: "Gastos", icon: "🧾" },
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
+  { href: "/dashboard/lotes", label: "Lotes", icon: "📦" },
   { href: "/dashboard/whatsapp", label: "WhatsApp", icon: "💬" },
   { href: "/dashboard/templates", label: "Templates", icon: "📝" },
   { href: "/dashboard/notificacoes", label: "Notificações", icon: "🔔" },

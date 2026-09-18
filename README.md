@@ -2,15 +2,14 @@
 
 Sistema de análise e prospecção empresarial com dados públicos (Receita Federal + PGFN).
 
-> 📦 **O stack de produção (cloud) está em [`whodados/`](./whodados/)** — Next.js + FastAPI + Supabase + GitHub Actions.
-> A raiz do repo contém o protótipo Streamlit legacy (mantido por compatibilidade).
+> 📦 **Todo o stack da aplicação está em [`whodados/`](./whodados/)** — Next.js + FastAPI + Supabase.
 
 ---
 
 ## 📌 Visão Geral
 
 O WhoDados é uma plataforma de inteligência empresarial que permite:
-- Analisar empresas do Rio Grande do Sul
+- Analisar empresas do Rio Grande do Sul e outros dados cadastrais
 - Investigar sócios e grupos econômicos
 - Visualizar dívidas ativas (FGTS, Previdenciário, Não Previdenciário)
 - Gerenciar leads e CRM
@@ -22,15 +21,13 @@ O WhoDados é uma plataforma de inteligência empresarial que permite:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  VERCEL (Next.js) - Frontend                                │
-│  web/                                                        │
+│  VERCEL (Next.js) - Frontend (`whodados/frontend/`)          │
 │  ✅ Login, Dashboard, Detalhe, Gráficos (Recharts)          │
 └──────────────────────┬──────────────────────────────────────┘
                        │  API REST
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  RENDER (FastAPI) - Backend                                 │
-│  api/                                                        │
+│  RENDER (FastAPI) - Backend (`whodados/backend/`)           │
 │  ✅ JWT Auth, Endpoints de dados + CRM                      │
 └──────────────────────┬──────────────────────────────────────┘
                        │  SQLAlchemy
@@ -38,144 +35,66 @@ O WhoDados é uma plataforma de inteligência empresarial que permite:
 ┌─────────────────────────────────────────────────────────────┐
 │  SUPABASE (PostgreSQL) - Banco de dados                     │
 │  ✅ Empresas, Sócios, Dívidas, CRM, Usuários                │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│  GITHUB ACTIONS - Pipeline ETL automático                    │
-│  ✅ Atualiza dados mensalmente (dia 1 do mês)               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📂 Estrutura do Projeto
+## 📂 Estrutura do Projeto (`whodados/`)
 
 ```
-analise-empresarial-streamlit/
-├── app_main.py                 # App Streamlit (desenvolvimento local)
-├── api/                        # API FastAPI (backend)
-├── web/                        # Frontend Next.js (produção)
-├── data_extraction/            # Pipeline de extração de dados
-│   ├── pipeline.py             # Script ETL (substitui o Colab)
-│   ├── raw/                    # Arquivos baixados (não commitado)
-│   └── out/                    # CSVs gerados (não commitado)
-├── scripts/                    # Scripts utilitários
-├── paginas/                    # Páginas do Streamlit
-├── requirements.txt            # Dependências principais
-├── requirements-dev.txt        # Dependências do pipeline ETL
-├── render.yaml                 # Configuração do Render
-├── vercel.json                 # Configuração da Vercel
-├── DEPLOY.md                   # Guia de deploy completo
-└── README.md                   # Este arquivo
+whodados/
+├── backend/                      # FastAPI (deploy no Render)
+│   ├── main.py                   # Entry point
+│   ├── endpoints.py              # Endpoints da API (/empresas, /crm, etc.)
+│   └── requirements.txt          # Dependências da API
+├── frontend/                     # Next.js (deploy na Vercel)
+│   ├── src/app/                  # Páginas (Dashboard, Login, etc.)
+│   ├── src/components/           # Componentes UI
+│   └── package.json              # Dependências do frontend
+├── pipeline/                     # Pipeline ETL de dados
+│   ├── pipeline.py               # Script principal / subcomandos ETL
+│   ├── raw/                      # Zips baixados (.gitignored)
+│   └── out/                      # CSVs gerados (.gitignored)
+├── scripts/                      # Scripts utilitários e sync para DB
+│   └── sync_data_to_db.py        # Sincroniza CSVs para o Supabase
+├── render.yaml                   # Configuração do Render
+└── DEPLOY.md                     # Guia de deploy detalhado
 ```
 
 ---
 
-## 🚀 Deploy Rápido
+## 🚀 Guia Rápido de Deploy
 
-### 1. Provisionar o Supabase (5 min)
-1. Acesse [supabase.com](https://supabase.com) → "New Project"
-2. Nome: `whodados`, Region: `South America (São Paulo)`
-3. Copie a **Connection String** em Settings → Database
+Consulte o guia completo em [`whodados/DEPLOY.md`](./whodados/DEPLOY.md).
 
-### 2. Configurar Secrets no GitHub
-- Settings → Secrets and variables → Actions → New secret:
-  - `RF_SHARE_TOKEN` = seu token da Receita Federal
-- Settings → Secrets and variables → Variables → New variable:
-  - `SUPABASE_CONNECTION_STRING` = connection string do Supabase
-
-### 3. Deploy da API no Render (5 min)
-1. [render.com](https://render.com) → "New" → "Blueprint"
-2. Conecte o GitHub e selecione o repositório
-3. O Render detecta `render.yaml` automaticamente
-4. Configure `DATABASE_URL` com a connection string do Supabase
-5. Deploy → anote a URL gerada
-
-### 4. Deploy do Frontend na Vercel (5 min)
-1. [vercel.com](https://vercel.com) → "Import Project"
-2. Selecione o repositório
-3. **Root Directory**: `web`
-4. Environment Variable: `NEXT_PUBLIC_API_URL` = URL da API do Render
-5. Deploy
-
-### 5. Ativar ETL Automático
-1. GitHub → Actions → "Atualizar Dados (Pipeline ETL)"
-2. Clique em "Run workflow"
-3. Aguarde ~10-20 min na primeira execução
+1. **Supabase**: Provisionar banco PostgreSQL e copiar connection string.
+2. **Render (API)**: Conectar repositório, usar `whodados/render.yaml` (Root Directory: `whodados`), configurar `DATABASE_URL`.
+3. **Vercel (Frontend)**: Conectar repositório, Root Directory: `whodados/frontend`, configurar `NEXT_PUBLIC_API_URL`.
 
 ---
 
-## 📋 Detalhes por Etapa
+## 💻 Desenvolvimento Local
 
-### Pipeline ETL (substitui o Colab)
+### 1. Backend (FastAPI)
 ```bash
-# Rodar manualmente
-python data_extraction/pipeline.py
-
-# Via GitHub Actions (automático todo dia 1 do mês)
+pip install -r whodados/backend/requirements.txt
+uvicorn whodados.backend.main:app --reload --port 8000
 ```
+Docs: `http://localhost:8000/docs`
 
-### Banco de Dados
+### 2. Frontend (Next.js)
 ```bash
-# Sincronizar CSVs para o Supabase
-DATABASE_URL="<sua-connection-string>" python scripts/sync_data_to_db.py
+cd whodados/frontend
+npm install
+npm run dev
 ```
+App: `http://localhost:3000`
 
-### Desenvolvimento Local
+### 3. Criar Usuário Admin
 ```bash
-# Instalar dependências
-pip install -r requirements.txt
-
-# Rodar app Streamlit
-streamlit run app_main.py
-
-# Rodar API localmente
-cd api && uvicorn main:app --reload
+python whodados/scripts/criar_usuario.py admin --admin
 ```
-
----
-
-## 📊 Dados Esperados
-
-O pipeline baixa e processa:
-- **Receita Federal**: Empresas, Estabelecimentos, Sócios, CNAEs, Municípios
-- **PGFN**: Dívidas ativas (FGTS, Previdenciário, Não Previdenciário)
-
-Arquivos gerados em `data_extraction/output/`:
-- `subset_rs_final_completo.csv` — Empresas com dívidas e contato
-- `socios_rs.csv` — Sócios das matrizes RS
-
----
-
-## 🔧 Configuração
-
-### Variáveis de Ambiente
-| Variável | Descrição | Exemplo |
-|----------|-----------|---------|
-| `DATABASE_URL` | Connection string do Supabase | `postgresql://...` |
-| `DATA_SOURCE` | `files` (CSV) ou `database` | `database` |
-| `NEXT_PUBLIC_API_URL` | URL da API FastAPI | `https://whodados-api.onrender.com` |
-| `RF_SHARE_TOKEN` | Token da Receita Federal | `gn672Ad4CF8N6TK` |
-
-### Custos
-| Serviço | Plano | Custo |
-|---------|-------|-------|
-| Vercel | Free | R$ 0 |
-| Render | Free | R$ 0 |
-| Supabase | Free | R$ 0 |
-| GitHub Actions | Free | R$ 0 |
-
----
-
-## ❓ Troubleshooting
-
-| Problema | Solução |
-|----------|---------|
-| Dados não atualizam | Verifique a aba Actions no GitHub |
-| API retorna 401 | Token expirado — refaça login |
-| App não conecta com API | Confirme `NEXT_PUBLIC_API_URL` |
-| Banco vazio | Execute o workflow ETL manualmente |
 
 ---
 

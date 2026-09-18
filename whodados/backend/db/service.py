@@ -2535,3 +2535,43 @@ def listar_mensagens_whatsapp(
     except Exception as e:
         log.warning(f"listar_mensagens_whatsapp falhou, retornando lista vazia: {e}")
         return []
+
+
+# ==================== LOTES DE LEADS ====================
+
+def create_lote_db(organizacao_id: int, nome: str, filtros: Dict, total_encontrado: int, criado_por: Optional[str]) -> Dict[str, Any]:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO lotes_leads (organizacao_id, nome, filtros, total_encontrado, criado_por)
+               VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+            (organizacao_id, nome, json.dumps(filtros or {}), total_encontrado, criado_por)
+        )
+        row = cur.fetchone()
+        if row and row.get("filtros") and isinstance(row["filtros"], str):
+            try: row["filtros"] = json.loads(row["filtros"])
+            except: pass
+        return row
+
+def get_lote_db(lote_id: int, organizacao_id: int) -> Optional[Dict[str, Any]]:
+    with get_db_cursor() as cur:
+        cur.execute("SELECT * FROM lotes_leads WHERE id = %s AND organizacao_id = %s", (lote_id, organizacao_id))
+        row = cur.fetchone()
+        if row and row.get("filtros") and isinstance(row["filtros"], str):
+            try: row["filtros"] = json.loads(row["filtros"])
+            except: pass
+        return row
+
+def listar_lotes_db(organizacao_id: int) -> List[Dict[str, Any]]:
+    with get_db_cursor() as cur:
+        cur.execute("SELECT * FROM lotes_leads WHERE organizacao_id = %s ORDER BY created_at DESC", (organizacao_id,))
+        rows = cur.fetchall()
+        for r in rows:
+            if r and r.get("filtros") and isinstance(r["filtros"], str):
+                try: r["filtros"] = json.loads(r["filtros"])
+                except: pass
+        return rows
+
+def delete_lote_db(lote_id: int, organizacao_id: int) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute("DELETE FROM lotes_leads WHERE id = %s AND organizacao_id = %s", (lote_id, organizacao_id))
+        return cur.rowcount > 0

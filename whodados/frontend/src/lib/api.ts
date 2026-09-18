@@ -777,6 +777,45 @@ export async function deletarCampanha(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/campanhas/${id}`, { method: "DELETE" });
 }
 
+// ==================== LOTES DE LEADS ====================
+
+export interface LoteLeads {
+  id: number;
+  organizacao_id: number;
+  nome: string;
+  filtros: any;
+  total_encontrado: number;
+  criado_por: string | null;
+  created_at: string;
+  amostra_empresas?: any[];
+}
+
+export async function listarLotes(): Promise<LoteLeads[]> {
+  return request("/api/v1/lotes");
+}
+
+export async function criarLote(data: { nome: string; filtros: any }): Promise<LoteLeads> {
+  return request("/api/v1/lotes", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getLote(id: number): Promise<LoteLeads> {
+  return request(`/api/v1/lotes/${id}`);
+}
+
+export async function deletarLote(id: number): Promise<{ ok: boolean }> {
+  return request(`/api/v1/lotes/${id}`, { method: "DELETE" });
+}
+
+export async function criarCampanhaDoLote(id: number, data: { nome_campanha?: string; template_id?: number; canal?: string; mensagem?: string; tamanho_lote?: number }): Promise<any> {
+  return request(`/api/v1/lotes/${id}/criar-campanha`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
 // ==================== NOTIFICACOES ====================
 
 export interface Notificacao {
