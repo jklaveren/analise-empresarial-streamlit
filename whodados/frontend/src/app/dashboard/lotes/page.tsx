@@ -3,18 +3,23 @@
 import { useEffect, useState } from "react";
 import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates } from "@/lib/api";
 
+const PORTES_OPCOES = ["MICRO", "EPP", "DEMAIS"];
+
 export default function LotesPage() {
   const [lotes, setLotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState<string | null>(null);
 
-  // Form para criar lote
+  // Form para criar lote (focado em CNAE, Capital, Fundação, Potencial, etc.)
   const [nomeLote, setNomeLote] = useState("");
   const [potencialFiltro, setPotencialFiltro] = useState<string[]>([]);
   const [cidadeFiltro, setCidadeFiltro] = useState("");
-  const [dividaMin, setDividaMin] = useState("");
   const [cnaeFiltro, setCnaeFiltro] = useState("");
+  const [capitalMin, setCapitalMin] = useState("");
+  const [fundacaoDe, setFundacaoDe] = useState("");
+  const [porteFiltro, setPorteFiltro] = useState<string[]>([]);
+  const [dividaMin, setDividaMin] = useState("");
   const [criando, setCriando] = useState(false);
 
   // Lote selecionado para detalhe / modal de campanha
@@ -60,16 +65,22 @@ export default function LotesPage() {
       const filtros: any = {};
       if (potencialFiltro.length > 0) filtros.potencial = potencialFiltro;
       if (cidadeFiltro.trim()) filtros.cidade = [cidadeFiltro.trim()];
-      if (dividaMin) filtros.divida_min = parseFloat(dividaMin);
       if (cnaeFiltro.trim()) filtros.cnae = cnaeFiltro.split(",").map(s => s.trim()).filter(Boolean);
+      if (capitalMin) filtros.capital_min = parseFloat(capitalMin);
+      if (fundacaoDe.trim()) filtros.fundacao_de = fundacaoDe.trim();
+      if (porteFiltro.length > 0) filtros.porte = porteFiltro;
+      if (dividaMin) filtros.divida_min = parseFloat(dividaMin);
 
       await criarLote({ nome: nomeLote.trim(), filtros });
       setSucesso("Lote criado com sucesso!");
       setNomeLote("");
       setPotencialFiltro([]);
       setCidadeFiltro("");
-      setDividaMin("");
       setCnaeFiltro("");
+      setCapitalMin("");
+      setFundacaoDe("");
+      setPorteFiltro([]);
+      setDividaMin("");
       carregar();
     } catch (e: any) {
       setErro(e?.message || "Erro ao criar lote.");
@@ -128,12 +139,18 @@ export default function LotesPage() {
     );
   }
 
+  function togglePorte(p: string) {
+    setPorteFiltro(prev =>
+      prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">📦 Lotes de Leads e Potencial</h1>
-          <p className="text-sm text-slate-500">Crie e gerencie lotes segmentados com filtros avançados para campanhas de prospecção.</p>
+          <h1 className="text-2xl font-bold text-slate-800">📦 Lotes de Leads e Perfil</h1>
+          <p className="text-sm text-slate-500">Crie lotes por CNAE, Capital Social, Fundação, Potencial e Cidade para campanhas em massa.</p>
         </div>
       </div>
 
@@ -146,7 +163,7 @@ export default function LotesPage() {
 
       {/* Formulário de Criação de Lote */}
       <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">✨ Criar Novo Lote Segmentado</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">✨ Criar Lote por Perfil Empresarial</h2>
         <form onSubmit={handleCriarLote} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -155,9 +172,41 @@ export default function LotesPage() {
                 type="text"
                 value={nomeLote}
                 onChange={e => setNomeLote(e.target.value)}
-                placeholder="Ex: Porto Alegre - Alto Potencial Q1"
+                placeholder="Ex: Indústria - Capital > 100k - POA"
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">CNAE / Setor (cabe vários separados por vírgula)</label>
+              <input
+                type="text"
+                value={cnaeFiltro}
+                onChange={e => setCnaeFiltro(e.target.value)}
+                placeholder="Ex: 47113, 47121"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Capital Social Mínimo (R$)</label>
+              <input
+                type="number"
+                value={capitalMin}
+                onChange={e => setCapitalMin(e.target.value)}
+                placeholder="Ex: 50000"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Fundada a partir de (Data)</label>
+              <input
+                type="date"
+                value={fundacaoDe}
+                onChange={e => setFundacaoDe(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
               />
             </div>
             <div>
@@ -171,41 +220,64 @@ export default function LotesPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Dívida Mínima (R$)</label>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Dívida Mínima (Opcional)</label>
               <input
                 type="number"
                 value={dividaMin}
                 onChange={e => setDividaMin(e.target.value)}
-                placeholder="Ex: 5000"
+                placeholder="Ex: 0"
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Filtro de Potencial</label>
-            <div className="flex gap-2">
-              {["alto", "medio", "baixo"].map(tier => {
-                const ativo = potencialFiltro.includes(tier);
-                return (
-                  <button
-                    key={tier}
-                    type="button"
-                    onClick={() => togglePotencial(tier)}
-                    className={`px-4 py-2 rounded-xl text-xs font-medium transition-all ${
-                      ativo
-                        ? tier === "alto"
-                          ? "bg-emerald-600 text-white shadow-sm"
-                          : tier === "medio"
-                          ? "bg-amber-600 text-white shadow-sm"
-                          : "bg-slate-600 text-white shadow-sm"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    {tier === "alto" ? "🔥 Alto Potencial" : tier === "medio" ? "⚡ Médio Potencial" : "💤 Baixo Potencial"}
-                  </button>
-                );
-              })}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Filtro de Potencial</label>
+              <div className="flex gap-2">
+                {["alto", "medio", "baixo"].map(tier => {
+                  const ativo = potencialFiltro.includes(tier);
+                  return (
+                    <button
+                      key={tier}
+                      type="button"
+                      onClick={() => togglePotencial(tier)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                        ativo
+                          ? tier === "alto"
+                            ? "bg-emerald-600 text-white shadow-sm"
+                            : tier === "medio"
+                            ? "bg-amber-600 text-white shadow-sm"
+                            : "bg-slate-600 text-white shadow-sm"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {tier === "alto" ? "🔥 Alto" : tier === "medio" ? "⚡ Médio" : "💤 Baixo"}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Porte da Empresa</label>
+              <div className="flex gap-2">
+                {PORTES_OPCOES.map(p => {
+                  const ativo = porteFiltro.includes(p);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => togglePorte(p)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                        ativo ? "bg-indigo-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -215,7 +287,7 @@ export default function LotesPage() {
               disabled={criando}
               className="rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-2.5 text-sm font-medium text-white shadow-md hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
             >
-              {criando ? "Calculando e Salvando..." : "🚀 Criar e Salvar Lote"}
+              {criando ? "Calculando e Salvando..." : "🚀 Criar e Salvar Lote por Perfil"}
             </button>
           </div>
         </form>
@@ -231,7 +303,7 @@ export default function LotesPage() {
         {loading ? (
           <div className="p-8 text-center text-slate-500">Carregando lotes...</div>
         ) : lotes.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">Nenhum lote criado ainda. Use o formulário acima para criar o primeiro lote.</div>
+          <div className="p-12 text-center text-slate-400">Nenhum lote criado ainda. Use o formulário acima para criar o primeiro lote por perfil.</div>
         ) : (
           <div className="divide-y divide-slate-100">
             {lotes.map(lote => (
@@ -243,8 +315,11 @@ export default function LotesPage() {
                       {lote.total_encontrado?.toLocaleString("pt-BR")} empresas encontradas
                     </span>
                     <span>Criado em: {new Date(lote.created_at).toLocaleDateString("pt-BR")}</span>
-                    {lote.filtros?.potencial && (
-                      <span className="bg-slate-100 px-2 py-0.5 rounded">Potencial: {lote.filtros.potencial.join(", ")}</span>
+                    {lote.filtros?.cnae && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">CNAE: {lote.filtros.cnae.join(", ")}</span>
+                    )}
+                    {lote.filtros?.capital_min && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Capital ≥ R$ {Number(lote.filtros.capital_min).toLocaleString("pt-BR")}</span>
                     )}
                     {lote.filtros?.cidade && (
                       <span className="bg-slate-100 px-2 py-0.5 rounded">Cidade: {lote.filtros.cidade.join(", ")}</span>
@@ -301,7 +376,8 @@ export default function LotesPage() {
                         <th className="p-3">CNPJ</th>
                         <th className="p-3">Razão Social</th>
                         <th className="p-3">Município</th>
-                        <th className="p-3">E-mail / Fone</th>
+                        <th className="p-3">Capital Social</th>
+                        <th className="p-3">Contato</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -310,6 +386,7 @@ export default function LotesPage() {
                           <td className="p-3 font-mono">{emp.cnpj_completo}</td>
                           <td className="p-3 font-medium text-slate-800">{emp.razao_social || emp.nome_fantasia}</td>
                           <td className="p-3 text-slate-600">{emp.municipio}</td>
+                          <td className="p-3 text-slate-600">R$ {Number(emp.capital_social || 0).toLocaleString("pt-BR")}</td>
                           <td className="p-3 text-slate-500">{emp.email || emp.contato_fone || "—"}</td>
                         </tr>
                       ))}
@@ -410,7 +487,7 @@ export default function LotesPage() {
                   disabled={enviandoCampanha}
                   className="px-5 py-2 rounded-xl bg-indigo-600 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  {enviandoCampanha ? "Criando..." : "Confirmar e Criar Campanha"}
+                  {enviandoCampanha ? "Criando..." : "Confirmar e Campanha"}
                 </button>
               </div>
             </form>
