@@ -54,6 +54,30 @@ CATEGORIA_DESCRICOES = {
 }
 
 
+def _descricao_cnae_fallback(cnae: Optional[str], descricao_informada: Optional[str] = None) -> str:
+    """Descricao do CNAE sem nunca vazar o numero cru no texto.
+
+    Se a descricao ja veio da query (JOIN com cnaes), usa ela. Senao tenta
+    buscar na tabela cnaes. Se nao achar, retorna "" — nunca o codigo
+    numerico, que era o bug que fazia o template mostrar "6201-5/01"
+    no meio da frase.
+    """
+    if (descricao_informada or "").strip():
+        return descricao_informada.strip()
+    if not (cnae or "").strip():
+        return ""
+    try:
+        from ..db.service import get_db_cursor  # import local p/ evitar ciclo
+        with get_db_cursor() as cur:
+            cur.execute("SELECT descricao_cnae FROM cnaes WHERE codigo_cnae = %s LIMIT 1", (cnae.strip(),))
+            row = cur.fetchone()
+            if row and row.get("descricao_cnae"):
+                return row["descricao_cnae"]
+    except Exception:
+        pass
+    return ""
+
+
 def _render_template(template: Dict, vars_dict: Dict[str, str]) -> Dict[str, str]:
     """Substitui {{variavel}} no assunto, corpo_html e corpo_texto."""
     resultado = {}
@@ -289,7 +313,7 @@ def montar_email_para_cnpj(
         "cnpj": cnpj,
         "cidade": dados.get("municipio") or "",
         "cnae": cnae or "",
-        "cnae_descricao": dados.get("cnae_descricao") or cnae or "",
+        "cnae_descricao": _descricao_cnae_fallback(cnae, dados.get("cnae_descricao")),
         "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
         "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
         "nome_fantasia": dados.get("nome_fantasia") or "",
@@ -459,7 +483,7 @@ def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] 
             "cnpj": dados_empresa.get("cnpj_completo") or "",
             "cidade": dados_empresa.get("municipio") or "",
             "cnae": cnae,
-            "cnae_descricao": dados_empresa.get("cnae_descricao") or cnae,
+            "cnae_descricao": _descricao_cnae_fallback(cnae, dados_empresa.get("cnae_descricao")),
             "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
             "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
             "nome_fantasia": dados_empresa.get("nome_fantasia") or "",

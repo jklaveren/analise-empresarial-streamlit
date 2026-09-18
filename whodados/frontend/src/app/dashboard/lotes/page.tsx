@@ -324,7 +324,23 @@ export default function LotesPage() {
                     {lote.filtros?.cidade && (
                       <span className="bg-slate-100 px-2 py-0.5 rounded">Cidade: {lote.filtros.cidade.join(", ")}</span>
                     )}
+                    {lote.filtros?.potencial && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Potencial: {lote.filtros.potencial.join(", ")}</span>
+                    )}
+                    {lote.filtros?.porte && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Porte: {lote.filtros.porte.join(", ")}</span>
+                    )}
+                    {lote.filtros?.fundacao_de && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Fundada após: {lote.filtros.fundacao_de}</span>
+                    )}
+                    {lote.filtros?.divida_min != null && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Dívida ≥ R$ {Number(lote.filtros.divida_min).toLocaleString("pt-BR")}</span>
+                    )}
+                    {lote.filtros?.busca && (
+                      <span className="bg-slate-100 px-2 py-0.5 rounded">Busca: {lote.filtros.busca}</span>
+                    )}
                   </div>
+                  <p className="text-[11px] text-slate-400 mt-1">O lote salva os filtros + o total calculado na hora. A campanha herda exatamente esses filtros.</p>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -365,6 +381,10 @@ export default function LotesPage() {
               <button onClick={() => setLoteDetalhe(null)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">✕</button>
             </div>
             <div className="p-5 flex-1 overflow-y-auto space-y-3">
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600">
+                <p className="font-semibold mb-1">Filtros salvos neste lote:</p>
+                <pre className="whitespace-pre-wrap font-mono text-[11px]">{JSON.stringify(loteDetalhe.filtros || {}, null, 2)}</pre>
+              </div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Amostra de Empresas (Até 50 registros)</h4>
               {loteDetalhe.amostra_empresas?.length === 0 ? (
                 <p className="text-sm text-slate-500 text-center py-6">Nenhuma empresa encontrada com estes filtros.</p>
@@ -376,6 +396,7 @@ export default function LotesPage() {
                         <th className="p-3">CNPJ</th>
                         <th className="p-3">Razão Social</th>
                         <th className="p-3">Município</th>
+                        <th className="p-3">CNAE</th>
                         <th className="p-3">Capital Social</th>
                         <th className="p-3">Contato</th>
                       </tr>
@@ -386,6 +407,7 @@ export default function LotesPage() {
                           <td className="p-3 font-mono">{emp.cnpj_completo}</td>
                           <td className="p-3 font-medium text-slate-800">{emp.razao_social || emp.nome_fantasia}</td>
                           <td className="p-3 text-slate-600">{emp.municipio}</td>
+                          <td className="p-3 text-slate-600">{emp.cnae_descricao || emp.cnae_principal || "—"}</td>
                           <td className="p-3 text-slate-600">R$ {Number(emp.capital_social || 0).toLocaleString("pt-BR")}</td>
                           <td className="p-3 text-slate-500">{emp.email || emp.contato_fone || "—"}</td>
                         </tr>

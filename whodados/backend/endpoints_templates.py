@@ -135,6 +135,7 @@ async def preview_template(
         "nome_fantasia": empresa.get("nome_fantasia", ""),
         "municipio": empresa.get("municipio", ""),
         "cnae_principal": empresa.get("cnae_principal", ""),
+        "cnae_descricao": empresa.get("cnae_descricao", ""),
         "porte_nome": empresa.get("porte_nome", ""),
         "nome_socio": socios.get(cnpj[:8], ""),
     }

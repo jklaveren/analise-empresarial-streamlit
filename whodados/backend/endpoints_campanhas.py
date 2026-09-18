@@ -266,6 +266,7 @@ def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id:
         e["cnpj_completo"]: {
             "razao_social": e.get("razao_social", ""), "nome_fantasia": e.get("nome_fantasia", ""),
             "municipio": e.get("municipio", ""), "cnae_principal": e.get("cnae_principal", ""),
+            "cnae_descricao": e.get("cnae_descricao", ""),
             "porte_nome": e.get("porte_nome", ""),
             "nome_socio": socios_por_basico.get(basicos_por_cnpj.get(e["cnpj_completo"]), ""),
         }
