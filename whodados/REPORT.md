@@ -1,24 +1,26 @@
 # Relatorio Completo - WhoDados
 
+> Atualizado em 2026-09-19. Estado verificado no codigo (contagens reais: 114 rotas, 30 tabelas, 16 paginas, suite 21 passed).
+
 ## 1. Visao Geral
 
 | Item | Valor |
 |------|-------|
 | Nome | WhoDados (API + Web) |
-| Versao | 2.0.0 |
+| Versao | 2.0.0 (`backend/config.py::APP_VERSION`) |
 | Tipo | SaaS de inteligencia empresarial B2B |
 | Stack Backend | Python, FastAPI, PostgreSQL (Supabase) |
-| Stack Frontend | Next.js 15, React 19, TypeScript, Tailwind 4 |
+| Stack Frontend | Next.js 15.3.8, React 19.2.8, TypeScript 5, Tailwind 4, TanStack Query 5, Recharts 3 |
 | Banco | PostgreSQL via Supabase |
-| Data Sources | Receita Federal (CSV) + PGFN (CSV) |
+| Data Sources | Receita Federal (2026-09) + PGFN (2026_trimestre_02) — 1.682.255 matrizes RS |
 | Autenticacao | JWT (Bearer) + bcrypt |
-| Deploy Alvo | Vercel + Railway/Fly + Supabase |
+| Deploy Alvo | Vercel (frontend) + Render (API) + Supabase (banco) |
 
 ## 2. Proposito e Escopo
 
 Processa dados publicos da Receita Federal e PGFN para inteligencia de vendas B2B no Rio Grande do Sul.
 
-Funcionalidades: listagem de empresas, CRM kanban, templates de email, campanhas, notificacoes, dashboard com metricas, auditoria completa.
+Funcionalidades: listagem/filtros de empresas com score de potencial, detalhe + socios + dividas, CRM kanban com atividades/anexos, lotes de leads, templates de email, campanhas (email/WhatsApp, com sequencias e agendamento), carteira propria por empresa, gastos, notificacoes, dashboard com metricas, consulta em linguagem natural, enriquecimento de contato (admin, com exclusao LGPD), multitenancy por organizacao, auditoria completa.
 
 SEM webscraping. Apenas downloads oficiais.
 
@@ -27,354 +29,215 @@ SEM webscraping. Apenas downloads oficiais.
 ```
 whodados/
   backend/
-    auth/         # JWT + dependencies
-    config.py
-    data/         # Loader CSVs locais (cache)
-    db/           # Pool + queries
-    endpoints.py
-    endpoints_part1.py   # Auth + Empresas + CRM
-    endpoints_part2.py   # Templates + Campanhas + Notifs
-    logger.py
-    main.py
-    mailer/       # SMTP
-    schemas.py
-    security/     # Rate limit, headers, audit
+    auth/            # JWT + dependencies (get_active_org, require_admin, require_org_admin)
+    classifier/      # CNAE
+    data/            # Loader CSVs locais (cache)
+    db/              # config.py (30 tabelas) + service.py + analytics.py
+    mailer/          # SMTP (service.py)
+    security/        # rate_limiter, headers, audit, visitante
+    services/        # whatsapp_service.py
+    agents/          # enriquecimento_service.py
+    nlp/             # consulta em linguagem natural
+    endpoints*.py    # 18 arquivos (17 com rotas + agregador endpoints.py)
+    main.py / config.py / schemas.py / logger.py / crypto_utils.py
+    tests/           # 5 arquivos, 21 testes (2026-09-19: 21 passed)
   frontend/
     src/
-      app/        # Rotas
-      components/ # Charts, MultiSelect
-      lib/        # api.ts, auth-context
-  pipeline/       # ETL
-  scripts/        # CLI utils
-  .github/workflows/etl.yml
-  SECURITY.md
+      app/           # 16 paginas (rotas)
+      components/    # Charts, MultiSelect, FunilInsights, TopEmpresasRanking, etc.
+      lib/           # api.ts, auth-context.tsx, query-provider.tsx
+  pipeline/          # pipeline_bigquery.py (fonte alternativa via BigQuery)
+  scripts/           # sync_data_to_db.py, sync_dividas_only.py, criar_usuario.py, criar_admin.py, *.sql
+  render.yaml
+  DEPLOY.md / REPORT.md (este arquivo) / SECURITY.md
+.github/workflows/
+  keep-alive.yml              # ping /health a cada 3 dias (Supabase/Render free)
+  campanhas-lote-diario.yml   # disparo diario de campanhas
 ```
+
+> O ETL principal (`pipeline_levas.py`) roda LOCAL em `C:/whodados/whodados_etl/` (fora do repo; automacao via Actions removida em 2026-09 — ver DEPLOY.md).
 
 ## 4. Backend
 
 ### 4.1 main.py
 
-FastAPI com lifespan. 3 middlewares: CORS, SecurityHeaders, RateLimiter.
+FastAPI com lifespan (`ensure_tables_exist` + `seed_default_templates`). Middlewares: CORS, SecurityHeaders, RateLimiter, Visitante. `GET /health` (status, versao, secret_key_ok, banco_ok), `GET /`, docs em `/docs`.
 
-### 4.2 Auth
+### 4.2 Auth (`auth/`)
 
-service.py: hash_senha (bcrypt 12 rounds), criar_access_token (JWT HS256), autenticar_usuario, criar_usuario.
+`service.py`: hash bcrypt, JWT HS256, autenticar/criar usuario, password reset (`password_reset_tokens`). `dependencies.py`: `get_current_user`, `require_admin`, `get_active_org` (escopo X-Org-Id; sem header so cai na empresa em leitura com empresa unica, escrita sem header = 400), `get_papel_ativo`, `require_org_admin`.
 
-dependencies.py: get_current_user, require_admin.
+### 4.3 Endpoints REST (prefixo /api/v1) — 114 rotas em 17 arquivos
 
-### 4.3 Endpoints REST (prefix /api/v1)
+| Arquivo | Rotas | Assunto |
+|---------|-------|---------|
+| endpoints_auth.py | 6 | login, forgot/reset-password, me, senha |
+| endpoints_empresas.py | 4 | listar, count, detalhe |
+| endpoints_analytics.py | 8 | resumo, por-cidade/setor/porte, top-empresas, socios ranking/detalhe, opcoes-filtro |
+| endpoints_crm.py | 23 | kanban, atividades (+anexos/historico/comentario/prazo/responsavel), classificacao |
+| endpoints_campanhas.py | 6 | CRUD, previa, executar, executar-pendentes |
+| endpoints_templates.py | 10 | CRUD, preview, test-send, imagem |
+| endpoints_lotes.py | 5 | lotes de leads (filtros de potencial + CNAE) |
+| endpoints_carteira.py | 5 | carteira propria por empresa, importar |
+| endpoints_gastos.py | 7 | aba de gastos |
+| endpoints_notificacoes.py | 3 | listar, nao-lidas, marcar lida |
+| endpoints_organizacoes.py | 4 | organizacoes, meu-email, logo |
+| endpoints_admin.py | 19 | smtp, status sistema, SLA, organizacoes, usuarios |
+| endpoints_monitor.py | 3 | monitor de emails enviados |
+| endpoints_nlp.py | 1 | consulta em linguagem natural |
+| endpoints_enriquecimento.py | 3 | enriquecer contato (admin, LGPD) |
+| endpoints_integracoes.py | 6 | integracoes + WhatsApp (enviar, conversas, webhook) |
+| endpoints_descadastro.py | 1 | pagina publica de descadastro (LGPD) |
+| endpoints_push.py | 4 | push PWA (vapid-key, subscribe, unsubscribe, broadcast por empresa/global) |
+| endpoints.py | 0 | agregador (router unico) |
 
-Part 1: /auth/login, /auth/me, /empresas, /empresas/{cnpj}, /crm/{cnpj}, /crm, /dashboard/metricas.
+### 4.4 Banco (`db/config.py::ensure_tables_exist`) — 30 tabelas
 
-Part 2: /templates, /templates/{id}, /campanhas, /campanhas/{id}, /campanhas/{id}/executar, /notificacoes, /notificacoes/{id}/ler.
+App/usuarios: `app_users`, `password_reset_tokens`, `organizacoes`, `usuario_organizacoes`, `app_config`, `audit_log`, `login_attempts`.
+CRM: `crm`, `crm_atividades`, `crm_atividade_historico`, `crm_atividade_anexos`, `empresas_carteira`, `lotes_leads`.
+Email/campanhas: `email_templates`, `campanhas`, `campanha_envios`, `campanha_destinatarios`, `emails_enviados`, `emails_descadastrados`.
+Comunicacao: `notificacoes`, `integracao_configs`, `whatsapp_mensagens`, `org_smtp_config`, `usuario_smtp_config`.
+Dados (espelho local, tambem criadas pelo sync): `pipeline_metadata`, `municipios`, `cnaes`.
+Outros: `gastos`, `enriquecimento_contatos`.
 
-### 4.4 Banco
-
-8 tabelas: app_users, crm, email_templates, campanhas, emails_enviados, notificacoes, audit_log, login_attempts.
-
-service.py: CRUDs + create_audit_log, record_login_attempt, is_account_locked, get_audit_logs.
+> Tabelas de DADOS pesadas (`dados_empresas` 1,68M linhas, `dados_socios` 940k) sao criadas/carregadas pelo ETL (`sync_data_to_db.py` + `database_config.py` na raiz do repo).
 
 ### 4.5 Data Loading
 
-Loader CSV local com cache em memoria: carregar_empresas, carregar_empresa_detalhe, filtrar_empresas, get_metricas.
+Loader CSV local com cache em memoria + queries SQL (`db/service.py`, `db/analytics.py`): filtros por cidade/CNAE/faixas de divida e capital, blacklist de falencia/rec. judicial, metricas e rankings.
 
-### 4.6 Mailer
+### 4.6 Mailer (`mailer/service.py`)
 
-enviar_email (SMTP TLS), enviar_template_para_cnpjs, enviar_campanha.
+SMTP TLS por empresa (remetente e' a pessoa, nao a empresa), templates com `cnae_descricao`, campanhas em lote, sequencias e agendamento.
 
-### 4.7 Configuracao
+### 4.7 Configuracao (`config.py::Settings`)
 
-Settings com lru_cache. 20+ variaveis: database, JWT, SMTP, rate limit, brute force, auditoria, etc.
+DATABASE_URL, APP_ENV, SECRET_KEY (>=32 chars, checada no /health), CORS_ORIGINS, SMTP_*, RATE_LIMIT_*, LOGIN_MAX_ATTEMPTS/LOCKOUT, AUDIT_ENABLED, API_CACHE_TTL_SECONDS, RF_SHARE_TOKEN, PGFN_TRIMESTRE, DATA_SOURCE.
 
-### 4.8 Seguranca
+### 4.8 Seguranca (`security/`)
 
-rate_limiter.py: 60 req/min por IP, Redis ou in-memory, HTTP 429.
+`rate_limiter.py` (60 req/min/IP, Redis-ready), `headers.py` (CSP, HSTS, X-Frame-Options DENY), `audit.py` (acoes sensiveis em `audit_log`), `visitante.py`, brute-force lockout, JWT HS256 + bcrypt, descadastro LGPD.
 
-headers.py: CSP, HSTS, X-Frame-Options DENY, X-Content-Type-Options nosniff.
+### 4.9 Schemas (`schemas.py`)
 
-audit.py: 23 acoes auditadas, log em thread, persiste em audit_log.
+Pydantic: Login, Token, Usuario, Empresa, CRM, Atividades, Lotes, Templates, Campanhas, Gastos, Notificacoes, Metricas.
 
-### 4.9 Schemas
-
-Pydantic: LoginRequest, TokenResponse, UsuarioSchema, EmpresaSchema, CRMUpdate, TemplateCreate, CampanhaCreate, NotificacaoResponse, MetricasResponse.
-
-
-## 5. Frontend (Next.js 15)
+## 5. Frontend (Next.js 15.3.8)
 
 ### 5.1 Stack
 
-Next.js 15.3.4 | React 19.2.8 | Recharts ^3.10.1 | Tailwind CSS 4 | TypeScript 5
+next 15.3.8 | react 19.2.8 | @tanstack/react-query 5 | recharts 3.10 | tailwindcss 4 | typescript 5 | eslint 9.
 
-### 5.2 Rotas
+### 5.2 Rotas (16 paginas)
 
 | Rota | Descricao |
 |------|-----------|
 | / | Landing/redirect |
-| /login | Formulario login |
-| /dashboard | Lista empresas |
+| /login, /forgot-password, /reset-password | Auth |
+| /dashboard | Lista empresas (filtros persistidos no navegador) |
 | /dashboard/empresa/[cnpj] | Detalhe + CRM |
-| /dashboard/campanhas | Campanhas |
-| /dashboard/templates | Templates |
-| /dashboard/notificacoes | Notificacoes |
+| /dashboard/socios | Ranking/detalhe de socios (linkado a empresa via query param) |
+| /dashboard/crm | Kanban (cria atividade direto do board) |
+| /dashboard/atividades | Acompanhamento de tarefas |
+| /dashboard/lotes | Lotes de leads (CNAE, capital, fundacao, porte; divida opcional) |
+| /dashboard/campanhas | Campanhas (usa o template escolhido) |
+| /dashboard/templates | Templates (preview de e-mail) |
+| /dashboard/whatsapp | WhatsApp por empresa |
+| /dashboard/gastos | Gastos |
+| /dashboard/notificacoes | Notificacoes (badge no menu) |
+| /dashboard/configuracoes | Configuracoes |
 
-/dashboard/enriquecimento foi REMOVIDO.
+### 5.3 Layout (dashboard/layout.tsx)
 
-### 5.3 Sidebar (dashboard/layout.tsx)
-
-4 links: Dashboard, Campanhas, Templates, Notificacoes.
-useRequireAuth() redireciona para /login.
+Sidebar responsiva + OrgSwitcher (X-Org-Id) + `useRequireAuth()`.
 
 ### 5.4 API Client (lib/api.ts)
 
-- getToken/setToken/removeToken em localStorage (chave whodados_token)
-- req<T>(path, options) - fetch com Bearer token
-- ApiError com status HTTP
+Token em localStorage (`whodados_token`), `req<T>` com Bearer, `ApiError`. Cobre: auth, metricas, empresas, CRM/atividades, lotes, carteira, templates, campanhas, gastos, notificacoes, socios, WhatsApp, NLP, enriquecimento.
 
-Funcoes: login, getMe, getMetricas, listarEmpresas, getEmpresaDetalhe, atualizarCrm, getCrm, getKanban, listarTemplates, getTemplate, criarTemplate, deletarTemplate, listarCampanhas, getCampanha, criarCampanha, executarCampanha, deletarCampanha, listarNotificacoes, marcarNotificacaoLida.
+### 5.5 Auth Context / Query Provider
 
-### 5.5 Auth Context (lib/auth-context.tsx)
-
-- AuthProvider com login/logout
-- useAuth() - hook
-- useRequireAuth() - redirect
-- Decodifica JWT via atob para username e is_admin
+`auth-context.tsx` (login/logout, JWT decodificado p/ username + is_admin), `query-provider.tsx` (React Query).
 
 ### 5.6 Componentes
 
-AnalyticsCharts.tsx - Graficos Recharts (capital, dividas, CNAE/porte).
-MultiSelect.tsx - Filtro multiplo.
+AnalyticsCharts, ConsultaNaturalBox, FunilInsights, TopEmpresasRanking, PotencialBadge, MultiSelect, OrgSwitcher, PreviewTemplate, AcompanhamentoAtividade.
 
----
+## 6. Pipeline de Dados
 
-## 6. Pipeline de Dados (pipeline/pipeline.py)
+### 6.1 Fontes (censo 2026-09-19)
 
-### 6.1 Fontes
+Receita Federal `2026-09` (WebDAV `arquivos.receitafederal.gov.br`, token `RF_SHARE_TOKEN`, UA `WhoDados-ETL/1.0`) + PGFN `2026_trimestre_02` (`dadosabertos.pgfn.gov.br`, 3 zips: FGTS, Previdenciario, Nao_Previdenciario).
 
-Receita Federal:
-- URL: arquivos.receitafederal.gov.br
-- Token: RF_SHARE_TOKEN (env)
-- 30 arquivos: Empresas0-9, Estabelecimentos0-9, Socios0-9 + Cnaes + Municipios
+### 6.2 Implementacoes
 
-PGFN:
-- URL: dadosabertos.pgfn.gov.br
-- Variavel: PGFN_TRIMESTRE (env, default 2026_trimestre_01)
-- 3 arquivos: FGTS, Nao_Previdenciario, Previdenario
+- `C:/whodados/whodados_etl/whodados/pipeline/pipeline_levas.py` (fora do repo): processamento em levas (baixa→filtra→apaga, pico ~2 GB), retomavel via `_progresso.json`, `MANTER_ZIPS=0`. Saida: 1 CSV master (`subset_rs_final_completo.csv` → `dados_empresas`) + 1 de socios (`socios_rs.csv` → `dados_socios`); intermediarios apagados apos upload ok.
+- `whodados/pipeline/pipeline_bigquery.py`: fonte alternativa via BigQuery.
+- Etapas: estabelecimentos (matrizes RS ativas) → empresas → socios → dividas PGFN → Simples/MEI → tabelas de dominio (cnaes, municipios, naturezas, qualificacoes) → consolidacao → upload Supabase (`scripts/sync_data_to_db.py`, schema em `database_config.py`).
+- Automacao via GitHub Actions REMOVIDA em 2026-09 (RF bloqueia IP de nuvem); ETL roda local via `BAIXAR_DADOS.bat`.
 
-### 6.2 Etapas
+### 6.3 Resultado vigente
 
-1. baixar_rf() - curl
-2. baixar_pgfn() - wget
-3. filtrar_estabelecimentos() - matrizes RS (UF=RS, matriz, ativa)
-4. filtrar_empresas() - razao social, capital, porte
-5. filtrar_socios() - socios das matrizes
-6. consolidar_dividas_pgfn() - soma dividas por CNPJ
-7. gerar_master() - merge em subset_rs_final_completo.csv
+1.682.255 matrizes ativas RS → `subset_rs_final_completo.csv` (393 MB); `dados_socios` 940.442 linhas; 167.569 empresas com divida (Federal R$ 113,77 bi + Previdenciaria R$ 20,81 bi + FGTS R$ 2,41 bi = R$ 136,99 bi). Indices: cnpj_completo, cnpj_basico, cnae, cod_municipio.
 
-### 6.3 Saida
+### 6.4 CI/CD restante
 
-pipeline/out/subset_rs_final_completo.csv
-
-Colunas: CNPJ_BASICO, CNPJ_COMPLETO, NOME_FANTASIA, DATA_FUNDACAO, CNAE_PRINCIPAL, LOGRADOURO, NUMERO, BAIRRO, CEP, COD_MUNICIPIO, DDD, TELEFONE, EMAIL, CONTATO_FONE, CAPITAL_SOCIAL, DIVIDA_TOTAL.
-
-### 6.4 CI/CD
-
-.github/workflows/etl.yml - GitHub Actions.
-
----
+`.github/workflows/keep-alive.yml` (ping /health 3/3 dias) + `campanhas-lote-diario.yml` (disparo diario).
 
 ## 7. Scripts (scripts/)
 
-criar_admin.py - Cria usuario admin no Supabase.
-sync_data_to_db.py - Sincroniza CSV para Supabase.
-
----
+`sync_data_to_db.py` (CSV→Supabase + indices + metadata p/ tela "Sobre"), `sync_dividas_only.py`, `criar_usuario.py` / `criar_admin.py`, `nivel1_dados_empresas.sql`, `nivel1_dados_socios.sql`, `fix_tipos_dominio.sql`.
 
 ## 8. Variaveis de Ambiente
 
-### Backend (.env)
-
-DATABASE_URL - Supabase connection string
-APP_ENV - development | production
-DEBUG - true | false
-CORS_ORIGINS - URLs separadas por virgula
-SECRET_KEY - JWT secret (forte em prod!)
-ACCESS_TOKEN_EXPIRE_MINUTES - 60 padrao
-REFRESH_TOKEN_EXPIRE_DAYS - 7 (preparado)
-BCRYPT_ROUNDS - 12
-SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_USE_TLS
-EMAIL_FROM, EMAIL_FROM_NAME
-RATE_LIMIT_ENABLED - true
-RATE_LIMIT_REQUESTS - 60
-RATE_LIMIT_WINDOW_SECONDS - 60
-AUDIT_ENABLED - true
-LOGIN_MAX_ATTEMPTS - 5
-LOGIN_LOCKOUT_MINUTES - 15
-REDIS_URL - redis://... (opcional)
-RF_SHARE_TOKEN - token Receita Federal
-PGFN_TRIMESTRE - 2026_trimestre_01
-
-### Frontend (.env.local)
-
-NEXT_PUBLIC_API_URL - URL da API
-
----
+Backend: DATABASE_URL, APP_ENV, SECRET_KEY, CORS_ORIGINS, API_CACHE_TTL_SECONDS, DATA_SOURCE, SMTP_*, RATE_LIMIT_*, LOGIN_*, AUDIT_ENABLED, RF_SHARE_TOKEN, PGFN_TRIMESTRE. Frontend (`env.local`): NEXT_PUBLIC_API_URL.
 
 ## 9. Dependencias
 
-### Backend
-
-fastapi>=0.115.0, uvicorn[standard]>=0.32.0, pydantic>=2.9.0, pydantic-settings>=2.5.0, psycopg2-binary>=2.9.10, python-jose[cryptography]>=3.3.0, passlib[bcrypt]>=1.7.4, python-multipart>=0.0.12, pandas>=2.2.3, numpy>=1.26.0, python-dotenv>=1.0.0.
-
-### Pipeline
-
-pandas>=2.0.0, psycopg2-binary>=2.9.9 (curl e wget como subprocessos).
-
-### Frontend
-
-next@15.3.4, react@19.2.8, react-dom@19.2.8, recharts@^3.10.1.
-
-Dev: typescript@5, tailwindcss@4, eslint@9, @types/node@20, @types/react@19, @types/react-dom@19.
-
----
+Backend: fastapi, uvicorn[standard], pydantic, pydantic-settings, psycopg2-binary, python-jose[cryptography], cryptography, passlib[bcrypt] + bcrypt==4.0.1 (pin), python-multipart, pandas, numpy, python-dotenv, anthropic, twilio.
+Pipeline/ETL: pandas, requests, psycopg2-binary, SQLAlchemy.
+Frontend: next 15.3.8, react 19.2.8, @tanstack/react-query 5, recharts 3.10; dev: tailwindcss 4, typescript 5, eslint 9.
 
 ## 10. Seguranca Implementada
 
-7 camadas:
-1. CORS Middleware
-2. Security Headers (CSP, HSTS, X-Frame-Options, etc.)
-3. Rate Limiting (60 req/min, Redis-ready)
-4. Brute Force Protection (5 tentativas / 15min lockout)
-5. JWT Authentication (HS256, bcrypt 12 rounds)
-6. Audit Logging (todas as acoes sensiveis)
-7. Supabase RLS (preparado)
+CORS, security headers, rate limiting, brute-force lockout, JWT+bCrypt, multitenancy por organizacao (X-Org-Id + 403/400 estritos), audit log, descadastro LGPD, RLS Supabase (ver SECURITY.md), `/health` expoe `secret_key_ok`/`banco_ok`.
 
----
+## 11. Validacao (2026-09-19)
 
-## 11. Validacao de Sintaxe
+`python -m pytest whodados/backend/tests` → **21 passed** (test_active_org 6, test_crypto_e_seguranca 6, test_filtros_empresas 6, test_multitenant_scoping 2, test_lotes 1). Correcoes do dia: SyntaxError em `test_lotes.py:35` e `test_active_org.py` realinhado a nova assinatura/comportamento de `get_active_org` (400 sem header em escrita/multi-empresa).
 
-Todos os arquivos compilam sem erro (exit:0):
+## 12. Mudancas Recentes (git)
 
-- backend/main.py
-- backend/security/rate_limiter.py
-- backend/security/headers.py
-- backend/security/audit.py
-- backend/db/service.py
-- backend/db/config.py
-- backend/endpoints_part1.py
-- backend/endpoints_part2.py
-- pipeline/pipeline.py
-
-Verificacao de webscraping residual: ZERO referencias no codigo-fonte.
-
----
-
-## 12. Mudancas Recentes
-
-### Removido (webscraping que nao deveria estar)
-
-- backend/mailer/enrichment.py (scraping DuckDuckGo)
-- frontend/src/app/dashboard/enriquecimento/ (pagina inteira)
-- backend/endpoints_part2.py (endpoints /enriquecer/*)
-- backend/schemas.py (EnriquecimentoResponse)
-- pipeline/pipeline.py (scraping PGFN -> substituido por env var)
-- pipeline/requirements-dev.txt (beautifulsoup4, lxml removidos)
-- frontend/src/lib/api.ts (funcoes de enriquecimento removidas)
-- frontend/src/app/dashboard/layout.tsx (link Enriquecer removido)
-
-### Adicionado (seguranca)
-
-- backend/security/__init__.py
-- backend/security/rate_limiter.py
-- backend/security/headers.py
-- backend/security/audit.py
-- Tabelas audit_log e login_attempts
-- Funcoes create_audit_log, record_login_attempt, is_account_locked, get_audit_logs
-- Variaveis RATE_LIMIT_*, LOGIN_*, AUDIT_ENABLED
-- SECURITY.md
-
----
+`949277e` fix CNAE-descricao em template + filtros salvos em lotes · `fbe5457` form de lotes (CNAE/capital/fundacao/porte) · `81b22f1` modulo de lotes · `037a75f` remove pipelines WebDAV quebrados + limpa workflows + fix SMTP por org · `a7f9f24` remetente pessoa fisica · `cef1dfd` WhatsApp/Brevo por empresa · `2ff79a9` carteira propria/isolamento · `0b9cece` tabela `empresas_potencial` pre-calculada · `ac9dcaf` score potencial/WhatsApp/lotes/hierarquia/LGPD/BigQuery.
 
 ## 13. Pontos de Atencao
 
-### Funcionalidades Pendentes
+| Item | Estado |
+|------|--------|
+| Refresh token | Preparado, nao implementado |
+| Cache multi-replica | Em memoria (1 instancia) |
+| Rate limit multi-replica | Requer Redis |
+| RLS no Supabase | Ativar em producao (SECURITY.md) |
+| SECRET_KEY forte | Checar via /health (`secret_key_ok`) |
+| `database_config.py` duplicado | Raiz do repo = canonico; copia em `whodados_etl/` so p/ ETL local (cabecalho de sincronia nos dois arquivos) |
+| Credenciais GCP | `*bigquery*.json` ignorado no .gitignore; credencial de servico fica em `C:/whodados/` (fora do repo) |
 
-| Item | Descricao |
-|------|-----------|
-| Refresh Token | Preparado mas nao implementado |
-| DELETE campanhas | Frontend chama mas backend nao expoe DELETE |
-| Email real | Usa placeholder contato@...com |
-| Sequencias | Campo eh_sequencia existe mas fluxo nao funciona |
-| Agendamento | Campo agendada_para existe mas scheduler nao existe |
-| Cache multi-replica | Empresas em memoria so funciona em 1 instancia |
+## 14. Deploy (resumo; detalhe em DEPLOY.md)
 
-### Seguranca
-
-| Item | Prioridade |
-|------|-----------|
-| RLS no Supabase | ALTA - ativar em producao |
-| SECRET_KEY forte | ALTA - gerar com secrets.token_urlsafe(32) |
-| Redis para rate limit | MEDIA - para multi-replica |
-| 2FA admin | BAIXA |
-| CSP unsafe-inline | BAIXA - revisar script-src |
-
-### Performance
-
-| Item | Impacto |
-|------|---------|
-| Cache em memoria | Funciona bem para 1 processo |
-| Paginacao em /empresas | Ja implementado |
-| CSV socios | Filtrar antes de carregar |
-
----
-
-## 14. Deploy no Supabase
-
-1. Secrets (Vercel/Railway):
-   - SECRET_KEY
-   - DATABASE_URL
-   - CORS_ORIGINS
-   - APP_ENV=production
-
-2. SQL no Supabase:
-```sql
-ALTER TABLE crm ENABLE ROW LEVEL SECURITY;
-ALTER TABLE campanhas ENABLE ROW LEVEL SECURITY;
-ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE email_templates ENABLE ROW LEVEL SECURITY;
-
-CREATE INDEX idx_cnpj ON crm(cnpj);
-CREATE INDEX idx_user ON crm(criado_por);
-CREATE INDEX idx_campaign_status ON campanhas(status);
-```
-
-3. Criar admin:
-```bash
-python scripts/criar_admin.py admin sua_senha forte
-```
-
-4. Sync dados:
-```bash
-python scripts/sync_data_to_db.py
-```
-
-5. Build frontend:
-```bash
-cd frontend && npm run build
-```
-
----
+Supabase → `sync_data_to_db.py` cria tabelas; Render Blueprint (`render.yaml`: `uvicorn backend.main:app`, `DATABASE_URL`, `CORS_ORIGINS`); Vercel (root `whodados/frontend`, `NEXT_PUBLIC_API_URL`); ETL manual local (`BAIXAR_DADOS.bat`); keep-alive via Actions.
 
 ## 15. Resumo
 
 | Aspecto | Valor |
 |---------|-------|
-| Endpoints REST | 16 |
-| Paginas frontend | 7 |
-| Tabelas banco | 8 |
-| Camadas seguranca | 7 |
-| Webscraping | 0 (removido) |
-| Status | Pronto para producao |
-| Deploy | Vercel + Railway + Supabase |
+| Rotas REST | 118 em 18 arquivos |
+| Paginas frontend | 16 |
+| Tabelas banco | 30 (empresas_potencial dropada em 2026-09: −209 MB) |
+| Testes | 33 passed |
+| Push PWA | Web Push via VAPID (sem FCM/APNs); broadcast por empresa + global |
+| Webscraping | 0 |
+| Status | Producao (free tier R$ 0/mes) |
+| Deploy | Vercel + Render + Supabase |
 
 ---
 

@@ -15,6 +15,10 @@ try:
 except ImportError:  # execucao fora do pacote
     from backend.db.config import get_db_cursor
 try:
+    from .cache import cached
+except ImportError:
+    from backend.db.cache import cached
+try:
     from ..logger import get_logger
 except ImportError:  # pragma: no cover
     import logging
@@ -34,27 +38,35 @@ _BASE_FROM = """
 """
 
 
-def _colunas_empresas(cur) -> set:
-    """Nomes das colunas reais de dados_empresas (o ETL legado pode nao ter
-    criado DIVIDA_TOTAL ainda -- nesse caso tratamos divida como 0)."""
+def _colunas_empresas(cur) -> dict:
+    """{COLUNA: tipo} reais de dados_empresas (o ETL legado pode nao ter
+    criado DIVIDA_TOTAL ainda -- nesse caso tratamos divida como 0).
+    O tipo decide a expressao: NUMERIC usa a coluna direto (usa indice),
+    TEXT usa o cast defensivo legado."""
     cur.execute(
-        "SELECT column_name FROM information_schema.columns "
+        "SELECT column_name, data_type FROM information_schema.columns "
         "WHERE table_name = 'dados_empresas'"
     )
-    return {r["column_name"] for r in cur.fetchall()}
+    return {r["column_name"]: r["data_type"] for r in cur.fetchall()}
 
 
-def _expr_divida(cols: set) -> str:
+def _expr_divida(cols: dict) -> str:
     if "DIVIDA_TOTAL" in cols:
+        if cols.get("DIVIDA_TOTAL") == "numeric":
+            return 'COALESCE(e."DIVIDA_TOTAL", 0)'
         return 'COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0)'
     for alt in ("DIVIDA_FEDERAL", "DIVIDA_PREVIDENCIARIA", "DIVIDA_FGTS", "DIVIDA"):
         if alt in cols:
+            if cols.get(alt) == "numeric":
+                return f'COALESCE(e."{alt}", 0)'
             return f'COALESCE(NULLIF(e."{alt}"::text, \'\')::numeric, 0)'
     return "0::numeric"
 
 
-def _expr_capital(cols: set) -> str:
+def _expr_capital(cols: dict) -> str:
     if "CAPITAL_SOCIAL" in cols:
+        if cols.get("CAPITAL_SOCIAL") == "numeric":
+            return 'COALESCE(e."CAPITAL_SOCIAL", 0)'
         return 'COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0)'
     return "0::numeric"
 
@@ -63,23 +75,9 @@ def _tem_divida(cols: set) -> bool:
     return "DIVIDA_TOTAL" in cols
 
 # PORTE_NOME nao existe mais na tabela -- e derivado do PORTE_EMPRESA (codigo).
-# Espelha o mapeamento antigo do pipeline pra manter a API igual pro frontend.
-# (Mesma expressao vive em service.py; duplicada aqui pra manter cada modulo
-# self-contained -- se um dia forem consolidar, mover pra config.py.)
-_PORTE_NOME_SQL = (
-    "CASE e.\"PORTE_EMPRESA\" "
-    "WHEN '01' THEN 'NAO INFORMADO' "
-    "WHEN '02' THEN 'ME' "
-    "WHEN '03' THEN 'EPP' "
-    "WHEN '05' THEN 'MEDIO E GRANDE' "
-    "ELSE 'DEMAIS' END"
-)
-_PORTE_NOME_TO_CODE = {
-    "NAO INFORMADO": "01",
-    "ME": "02",
-    "EPP": "03",
-    "MEDIO E GRANDE": "05",
-}
+# Fonte unica (codigos RF) em db/filtros.py, compartilhada com service.py.
+from .filtros import PORTE_NOME_SQL as _PORTE_NOME_SQL  # noqa: E402
+from .filtros import cidades_normalizadas, clausula_cnae, codigos_porte  # noqa: E402
 
 
 def _tabela_existe(cur, nome: str) -> bool:
@@ -114,17 +112,17 @@ def _filtros_sql(
 
     if cidades:
         cond.append("m.nome_municipio = ANY(%s)")
-        params.append(list(cidades))
+        params.append(cidades_normalizadas(list(cidades)))
     if cnaes:
-        cond.append('e."CNAE_PRINCIPAL" = ANY(%s)')
-        params.append(list(cnaes))
+        sql_cnae, p_cnae = clausula_cnae(list(cnaes))
+        cond.append(sql_cnae)
+        params.extend(p_cnae)
     if portes:
         # Frontend manda nomes ('ME', 'EPP', ...); a tabela guarda so o
         # codigo. Traduz de volta.
-        codigos = [_PORTE_NOME_TO_CODE[p] for p in portes if p in _PORTE_NOME_TO_CODE]
-        if codigos:
-            cond.append('e."PORTE_EMPRESA" = ANY(%s)')
-            params.append(codigos)
+        codigos = codigos_porte(list(portes))
+        cond.append('e."PORTE_EMPRESA" = ANY(%s)')
+        params.append(codigos or ["__nenhum__"])
     if tem_divida:
         if divida_min is not None:
             cond.append(f"{div_expr} >= %s")
@@ -151,6 +149,7 @@ def _vazio(cur) -> bool:
 
 # ==================== KPIs (Home) ====================
 
+@cached("analytics_resumo")
 def analytics_resumo(**filtros) -> Dict[str, Any]:
     """Indicadores-chave da base filtrada (equivale aos 8 KPIs da Home)."""
     zero = {
@@ -170,35 +169,66 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
             where, params = _filtros_sql(
                 **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
             )
-            cur.execute(
-                f"""
-                SELECT
-                    COUNT(*) AS total_empresas,
-                    COALESCE(SUM({div_expr}), 0) AS divida_total,
-                    COALESCE(SUM({cap_expr}), 0) AS capital_total,
-                    COALESCE(AVG({div_expr}), 0) AS divida_media,
-                    COALESCE(AVG({cap_expr}), 0) AS capital_medio,
-                    COUNT(DISTINCT e."COD_MUNICIPIO") AS qtd_cidades,
-                    COUNT(DISTINCT e."CNAE_PRINCIPAL") AS qtd_setores,
-                    COUNT(*) FILTER (WHERE {div_expr} > 0) AS qtd_com_divida
-                {_BASE_FROM}
-                WHERE 1=1 {where}
-                """,
-                params,
-            )
-            row = cur.fetchone() or {}
-
-            # contagem separada de inativas (ignora o proprio toggle)
-            where_i, params_i = _filtros_sql(
+            # qtd_inativas ignora o proprio toggle (como sempre foi): conta as
+            # excluidas pelos OUTROS filtros, nao pelas ja excluidas.
+            where_sem_toggle, params_sem_toggle = _filtros_sql(
                 **{**filtros, "incluir_inativas": True},
                 div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div,
             )
-            cur.execute(
-                f'SELECT COUNT(*) AS n {_BASE_FROM} '
-                f'WHERE COALESCE(e."RAZAO_SOCIAL", \'\') ~* %s {where_i}',
-                [_REGEX_INATIVAS, *params_i],
-            )
-            inativas = (cur.fetchone() or {}).get("n", 0)
+            if not filtros.get("cidades"):
+                # Caso dominante (tela abrindo ou funil sem cidade): nenhuma
+                # clausula precisa de JOIN -- roda tudo sobre dados_empresas,
+                # e as distintas viram semi-joins sondando os indices das
+                # tabelas de dominio (milhares de probes em vez de ordenar
+                # 1,68M duas vezes).
+                where_e2 = where.replace('e."', 'e2."')
+                where_st_e2 = where_sem_toggle.replace('e."', 'e2."')
+                cur.execute(
+                    f"""
+                    SELECT
+                        COUNT(*) AS total_empresas,
+                        COALESCE(SUM({div_expr}), 0) AS divida_total,
+                        COALESCE(SUM({cap_expr}), 0) AS capital_total,
+                        COALESCE(AVG({div_expr}), 0) AS divida_media,
+                        COALESCE(AVG({cap_expr}), 0) AS capital_medio,
+                        COUNT(*) FILTER (WHERE {div_expr} > 0) AS qtd_com_divida,
+                        COUNT(*) FILTER (WHERE COALESCE(e."RAZAO_SOCIAL", '') ~* %s
+                                         {where_st_e2}) AS qtd_inativas,
+                        (SELECT COUNT(*) FROM municipios m
+                          WHERE EXISTS (SELECT 1 FROM dados_empresas e2
+                                        WHERE e2."COD_MUNICIPIO" = m.cod_municipio
+                                        {where_e2})) AS qtd_cidades,
+                        (SELECT COUNT(*) FROM cnaes c
+                          WHERE EXISTS (SELECT 1 FROM dados_empresas e2
+                                        WHERE e2."CNAE_PRINCIPAL" = c.codigo_cnae
+                                        {where_e2})) AS qtd_setores
+                    FROM dados_empresas e
+                    WHERE 1=1 {where}
+                    """,
+                    [_REGEX_INATIVAS, *params_sem_toggle, *params, *params,
+                     *params],
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        COUNT(*) AS total_empresas,
+                        COALESCE(SUM({div_expr}), 0) AS divida_total,
+                        COALESCE(SUM({cap_expr}), 0) AS capital_total,
+                        COALESCE(AVG({div_expr}), 0) AS divida_media,
+                        COALESCE(AVG({cap_expr}), 0) AS capital_medio,
+                        COUNT(DISTINCT e."COD_MUNICIPIO") AS qtd_cidades,
+                        COUNT(DISTINCT e."CNAE_PRINCIPAL") AS qtd_setores,
+                        COUNT(*) FILTER (WHERE {div_expr} > 0) AS qtd_com_divida,
+                        COUNT(*) FILTER (WHERE COALESCE(e."RAZAO_SOCIAL", '') ~* %s
+                                         {where_sem_toggle}) AS qtd_inativas
+                    {_BASE_FROM}
+                    WHERE 1=1 {where}
+                    """,
+                    [*params, _REGEX_INATIVAS, *params_sem_toggle],
+                )
+            row = cur.fetchone() or {}
+            inativas = (row or {}).get("qtd_inativas", 0)
 
             return {
                 "total_empresas": int(row.get("total_empresas") or 0),
@@ -221,6 +251,7 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
 
 # ==================== Foco por Cidade ====================
 
+@cached("analytics_por_cidade")
 def analytics_por_cidade(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
     try:
         with get_db_cursor() as cur:
@@ -271,6 +302,7 @@ def analytics_por_cidade(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
 
 # ==================== Radar de Setores ====================
 
+@cached("analytics_por_setor")
 def analytics_por_setor(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
     try:
         with get_db_cursor() as cur:
@@ -322,6 +354,7 @@ def analytics_por_setor(limite: int = 20, **filtros) -> List[Dict[str, Any]]:
         return []
 
 
+@cached("analytics_por_porte")
 def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
     try:
         with get_db_cursor() as cur:
@@ -353,6 +386,7 @@ def analytics_por_porte(**filtros) -> List[Dict[str, Any]]:
 
 # ==================== Top empresas (rankings) ====================
 
+@cached("analytics_top_empresas")
 def analytics_top_empresas(
     ordenar_por: str = "divida", limite: int = 10, **filtros
 ) -> List[Dict[str, Any]]:
@@ -371,27 +405,74 @@ def analytics_top_empresas(
             pediu_divida = ordenar_por != "capital"
             usar_divida = pediu_divida and tem_div
             coluna = div_expr if usar_divida else cap_expr
+            # Ordenacao usa a coluna NUA ( nao COALESCE() ): com NUMERIC o
+            # indice cobre ORDER BY direto. O truque que garante o plano:
+            # top-10 CNPJs primeiro (sobeio indice, ms) e so depois os JOINs
+            # pros 10 -- sem isso o planner prefere varredura paralela + sort
+            # (13s) ao inves do indice.
+            if cols.get("DIVIDA_TOTAL" if usar_divida else "CAPITAL_SOCIAL") == "numeric":
+                col_ord = "DIVIDA_TOTAL" if usar_divida else "CAPITAL_SOCIAL"
+            else:
+                col_ord = None  # legado TEXT: sem indice util, ordena expressao
             where, params = _filtros_sql(
                 **filtros, div_expr=div_expr, cap_expr=cap_expr, tem_divida=tem_div
             )
-            cur.execute(
-                f"""
-                SELECT
-                    e."CNPJ_COMPLETO" AS cnpj_completo,
-                    e."RAZAO_SOCIAL" AS razao_social,
-                    COALESCE(m.nome_municipio, '') AS municipio,
-                    e."CNAE_PRINCIPAL" AS cnae_principal,
-                    COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    ({_PORTE_NOME_SQL}) AS porte_nome,
-                    {cap_expr} AS capital_social,
-                    {div_expr} AS divida_total
-                {_BASE_FROM}
-                WHERE 1=1 {where}
-                ORDER BY {coluna} DESC
-                LIMIT %s
-                """,
-                [*params, limite],
-            )
+            if col_ord is not None:
+                # O WHERE do funil usa os aliases e./m.; dentro da
+                # subconsulta a base e t. (ep. nao existe mais). O JOIN com
+                # municipios so entra se o filtro de cidade o exigir.
+                where_t = where.replace('e."', 't."')
+                join_m = ('LEFT JOIN municipios m ON m.cod_municipio = '
+                          't."COD_MUNICIPIO"') if "m." in where else ""
+                # Sem paralelismo aqui: com workers o planner prefere
+                # varredura paralela + sort (13s) ao indice (ms). Serial, o
+                # backward scan ganha no custo e e escolhido. So nesta
+                # transacao (SET LOCAL), nao global.
+                cur.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+                cur.execute(
+                    f"""
+                    SELECT
+                        e."CNPJ_COMPLETO" AS cnpj_completo,
+                        e."RAZAO_SOCIAL" AS razao_social,
+                        COALESCE(m.nome_municipio, '') AS municipio,
+                        e."CNAE_PRINCIPAL" AS cnae_principal,
+                        COALESCE(c.descricao_cnae, '') AS cnae_descricao,
+                        ({_PORTE_NOME_SQL}) AS porte_nome,
+                        {cap_expr} AS capital_social,
+                        {div_expr} AS divida_total
+                    FROM (
+                        SELECT t."CNPJ_COMPLETO" FROM dados_empresas t
+                        {join_m}
+                        WHERE 1=1 {where_t}
+                        ORDER BY t."{col_ord}" DESC
+                        LIMIT %s
+                    ) top
+                    JOIN dados_empresas e ON e."CNPJ_COMPLETO" = top."CNPJ_COMPLETO"
+                    LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
+                    LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
+                    ORDER BY e."{col_ord}" DESC
+                    """,
+                    [*params, limite],
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        e."CNPJ_COMPLETO" AS cnpj_completo,
+                        e."RAZAO_SOCIAL" AS razao_social,
+                        COALESCE(m.nome_municipio, '') AS municipio,
+                        e."CNAE_PRINCIPAL" AS cnae_principal,
+                        COALESCE(c.descricao_cnae, '') AS cnae_descricao,
+                        ({_PORTE_NOME_SQL}) AS porte_nome,
+                        {cap_expr} AS capital_social,
+                        {div_expr} AS divida_total
+                    {_BASE_FROM}
+                    WHERE 1=1 {where}
+                    ORDER BY {coluna} DESC
+                    LIMIT %s
+                    """,
+                    [*params, limite],
+                )
             return [
                 {
                     "cnpj_completo": r["cnpj_completo"],
@@ -515,6 +596,7 @@ def analytics_socio_detalhe(nome_socio: str) -> List[Dict[str, Any]]:
 
 # ==================== Opcoes de filtro ====================
 
+@cached("analytics_opcoes_filtro")
 def analytics_opcoes_filtro() -> Dict[str, Any]:
     """Valores distintos para popular os multiselects da tela (cidades,
     portes) e a lista de CNAEs com descricao."""

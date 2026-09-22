@@ -52,6 +52,16 @@ class Settings:
     # os lotes diarios de campanha -- sem isso definido, o endpoint de cron
     # fica desligado (nunca aceita chamada sem o header certo).
     CRON_SECRET = os.getenv("CRON_SECRET", "")
+    # Web Push (PWA): par de chaves VAPID. A publica vai pro frontend via
+    # GET /push/vapid-public-key; a privada NUNCA sai do servidor (Render env).
+    # Gerar com: python -c "from backend.push import gerar_vapid; print(gerar_vapid())"
+    VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+    VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:contato@whodados.com")
+
+    @property
+    def push_enabled(self) -> bool:
+        return bool(self.VAPID_PUBLIC_KEY and self.VAPID_PRIVATE_KEY)
 
     @property
     def cors_origins_list(self) -> List[str]:

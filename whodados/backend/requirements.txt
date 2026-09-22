@@ -14,3 +14,4 @@ numpy>=1.26.0
 python-dotenv>=1.0.0
 anthropic>=0.40.0
 twilio>=9.0.0
+pywebpush>=1.14.0  # Web Push (PWA) -- avisos no celular via VAPID, sem FCM/APNs

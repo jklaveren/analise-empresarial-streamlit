@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, type OpcoesFiltro } from "@/lib/api";
+import { MultiSelect } from "@/components/MultiSelect";
 
-const PORTES_OPCOES = ["MICRO", "EPP", "DEMAIS"];
+// Nomes que o backend entende (codigos RF 01/03/05); rotulo so pra tela.
+const PORTES_OPCOES = [
+  { value: "ME", label: "Micro" },
+  { value: "EPP", label: "Pequeno porte" },
+  { value: "DEMAIS", label: "Demais" },
+];
 
 export default function LotesPage() {
   const [lotes, setLotes] = useState<any[]>([]);
@@ -11,11 +17,11 @@ export default function LotesPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState<string | null>(null);
 
-  // Form para criar lote (focado em CNAE, Capital, Fundação, Potencial, etc.)
+  // Form para criar lote (focado em CNAE, Capital, Fundação, etc.)
   const [nomeLote, setNomeLote] = useState("");
-  const [potencialFiltro, setPotencialFiltro] = useState<string[]>([]);
-  const [cidadeFiltro, setCidadeFiltro] = useState("");
-  const [cnaeFiltro, setCnaeFiltro] = useState("");
+  const [cidadeFiltro, setCidadeFiltro] = useState<string[]>([]);
+  const [cnaeFiltro, setCnaeFiltro] = useState<string[]>([]);
+  const [opcoes, setOpcoes] = useState<OpcoesFiltro | null>(null);
   const [capitalMin, setCapitalMin] = useState("");
   const [fundacaoDe, setFundacaoDe] = useState("");
   const [porteFiltro, setPorteFiltro] = useState<string[]>([]);
@@ -50,7 +56,17 @@ export default function LotesPage() {
 
   useEffect(() => {
     carregar();
+    getOpcoesFiltro().then(setOpcoes).catch(() => setOpcoes(null));
   }, []);
+
+  // Mesmas opcoes do dashboard: so da pra escolher o que existe na base
+  // (texto livre gerava lote vazio: "Porto Alegre" x "PORTO ALEGRE", CNAE
+  // de 5 digitos x codigo de 7 no banco).
+  const cidadeOptions = useMemo(() => (opcoes?.cidades ?? []).map(c => ({ value: c, label: c })), [opcoes]);
+  const cnaeOptions = useMemo(() => (opcoes?.cnaes ?? []).map(c => ({
+    value: c.codigo,
+    label: `${c.codigo} - ${c.descricao}${c.qtd ? ` (${c.qtd.toLocaleString("pt-BR")})` : ""}`,
+  })), [opcoes]);
 
   async function handleCriarLote(e: React.FormEvent) {
     e.preventDefault();
@@ -63,9 +79,8 @@ export default function LotesPage() {
     setSucesso(null);
     try {
       const filtros: any = {};
-      if (potencialFiltro.length > 0) filtros.potencial = potencialFiltro;
-      if (cidadeFiltro.trim()) filtros.cidade = [cidadeFiltro.trim()];
-      if (cnaeFiltro.trim()) filtros.cnae = cnaeFiltro.split(",").map(s => s.trim()).filter(Boolean);
+      if (cidadeFiltro.length > 0) filtros.cidade = cidadeFiltro;
+      if (cnaeFiltro.length > 0) filtros.cnae = cnaeFiltro;
       if (capitalMin) filtros.capital_min = parseFloat(capitalMin);
       if (fundacaoDe.trim()) filtros.fundacao_de = fundacaoDe.trim();
       if (porteFiltro.length > 0) filtros.porte = porteFiltro;
@@ -74,9 +89,8 @@ export default function LotesPage() {
       await criarLote({ nome: nomeLote.trim(), filtros });
       setSucesso("Lote criado com sucesso!");
       setNomeLote("");
-      setPotencialFiltro([]);
-      setCidadeFiltro("");
-      setCnaeFiltro("");
+      setCidadeFiltro([]);
+      setCnaeFiltro([]);
       setCapitalMin("");
       setFundacaoDe("");
       setPorteFiltro([]);
@@ -133,12 +147,6 @@ export default function LotesPage() {
     }
   }
 
-  function togglePotencial(tier: string) {
-    setPotencialFiltro(prev =>
-      prev.includes(tier) ? prev.filter(t => t !== tier) : [...prev, tier]
-    );
-  }
-
   function togglePorte(p: string) {
     setPorteFiltro(prev =>
       prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
@@ -150,7 +158,7 @@ export default function LotesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">📦 Lotes de Leads e Perfil</h1>
-          <p className="text-sm text-slate-500">Crie lotes por CNAE, Capital Social, Fundação, Potencial e Cidade para campanhas em massa.</p>
+          <p className="text-sm text-slate-500">Crie lotes por CNAE, Capital Social, Fundação e Cidade para campanhas em massa.</p>
         </div>
       </div>
 
@@ -178,14 +186,8 @@ export default function LotesPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">CNAE / Setor (cabe vários separados por vírgula)</label>
-              <input
-                type="text"
-                value={cnaeFiltro}
-                onChange={e => setCnaeFiltro(e.target.value)}
-                placeholder="Ex: 47113, 47121"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+              <label className="block text-xs font-medium text-slate-600 mb-1">CNAE / Setor (um ou vários)</label>
+              <MultiSelect options={cnaeOptions} selected={cnaeFiltro} onChange={setCnaeFiltro} placeholder={opcoes ? "CNAE..." : "Carregando CNAEs..."} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Capital Social Mínimo (R$)</label>
@@ -211,13 +213,7 @@ export default function LotesPage() {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Cidade (Opcional)</label>
-              <input
-                type="text"
-                value={cidadeFiltro}
-                onChange={e => setCidadeFiltro(e.target.value)}
-                placeholder="Ex: Porto Alegre"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+              <MultiSelect options={cidadeOptions} selected={cidadeFiltro} onChange={setCidadeFiltro} placeholder={opcoes ? "Cidade..." : "Carregando cidades..."} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Dívida Mínima (Opcional)</label>
@@ -233,36 +229,9 @@ export default function LotesPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Filtro de Potencial</label>
-              <div className="flex gap-2">
-                {["alto", "medio", "baixo"].map(tier => {
-                  const ativo = potencialFiltro.includes(tier);
-                  return (
-                    <button
-                      key={tier}
-                      type="button"
-                      onClick={() => togglePotencial(tier)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-                        ativo
-                          ? tier === "alto"
-                            ? "bg-emerald-600 text-white shadow-sm"
-                            : tier === "medio"
-                            ? "bg-amber-600 text-white shadow-sm"
-                            : "bg-slate-600 text-white shadow-sm"
-                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                      }`}
-                    >
-                      {tier === "alto" ? "🔥 Alto" : tier === "medio" ? "⚡ Médio" : "💤 Baixo"}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Porte da Empresa</label>
               <div className="flex gap-2">
-                {PORTES_OPCOES.map(p => {
+                {PORTES_OPCOES.map(({ value: p, label }) => {
                   const ativo = porteFiltro.includes(p);
                   return (
                     <button
@@ -273,7 +242,7 @@ export default function LotesPage() {
                         ativo ? "bg-indigo-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                       }`}
                     >
-                      {p}
+                      {label}
                     </button>
                   );
                 })}

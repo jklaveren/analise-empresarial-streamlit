@@ -80,3 +80,11 @@ whodados/.next/
 LegadoStream/
 CREDENCIAIS_LOGIN.txt
 whodados/CREDENCIAIS_LOGIN.txt
+
+# Credenciais GCP/BigQuery - nunca commitar (a service account fica em
+# C:/whodados/, fora do repo; o pipeline_bigquery.py le via env local)
+*bigquery*.json
+whodados-bigquery-*.json
+*service-account*.json
+service_account*.json
+credentials.json

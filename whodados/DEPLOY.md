@@ -6,7 +6,7 @@ O resultado final é:
 - **Frontend** rodando na Vercel (`whodados/frontend/`)
 - **API** rodando na Render (`whodados/backend/`)
 - **Banco** rodando no Supabase
-- **Dados** atualizados manualmente rodando o pipeline local (`nra_etl/` ou `whodados/pipeline/pipeline_levas.py`) — a automação via GitHub Actions foi removida em 2026-09 porque parava de funcionar (provável bloqueio/anti-abuso da Receita Federal para downloads vindos de IP de nuvem); rodando do seu computador funciona normalmente
+- **Dados** atualizados manualmente rodando o pipeline local (`whodados_etl/` ou `whodados/pipeline/pipeline_levas.py`) — a automação via GitHub Actions foi removida em 2026-09 porque parava de funcionar (provável bloqueio/anti-abuso da Receita Federal para downloads vindos de IP de nuvem); rodando do seu computador funciona normalmente
 
 ---
 
@@ -29,14 +29,13 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 
 ---
 
-## 2️⃣ Configurar Secrets no GitHub
+## 2️⃣ Variáveis e segredos
 
-1. Settings → Secrets and variables → Actions → **New repository secret**:
-   - `RF_SHARE_TOKEN` = seu token da Receita Federal (público: `gn672Ad4CF8N6TK`)
-2. Settings → Secrets and variables → Actions → **Variables**:
-   - `SUPABASE_CONNECTION_STRING` = connection string do Supabase
+O ETL é manual/local (a automação via GitHub Actions foi removida em 2026-09 — falhava sempre, provável bloqueio da RF pra IP de nuvem). Não há secrets de ETL no GitHub. Tudo que o deploy precisa:
 
-> 💡 A automação via GitHub Actions foi removida (falhava sempre, provável bloqueio da RF pra IP de nuvem). Rode o pipeline localmente: `python whodados/pipeline/pipeline_levas.py` com `DATABASE_URL` no ambiente.
+- **Render (API):** `DATABASE_URL` (connection string do Supabase), `SECRET_KEY` (forte, ≥32 chars — confira em `/health`), `CORS_ORIGINS`, `APP_ENV=production`.
+- **Vercel (frontend):** `NEXT_PUBLIC_API_URL` (URL da API no Render).
+- **Local (ETL):** `DATABASE_URL` no ambiente + `RF_SHARE_TOKEN` (padrão público: `gn672Ad4CF8N6TK`) ao rodar `BAIXAR_DADOS.bat`.
 
 ---
 
@@ -65,11 +64,38 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 
 ---
 
-## 5️⃣ Alimentar o banco (ETL)
+## 5️⃣ Alimentar o banco (ETL — manual, no seu computador)
 
-**Manual:** GitHub → Actions → "Atualizar Dados (Pipeline ETL) — WhoDados" → Run workflow
+A automação via GitHub Actions foi removida em 2026-09 (a Receita Federal bloqueia downloads vindos de IP de nuvem; do seu computador funciona normalmente).
 
-**Agendamento:** todo **dia 1 do mês às 02h UTC** (cron `0 2 1 * *`)
+1. Defina `DATABASE_URL` no ambiente (connection string do Supabase).
+2. Rode `C:\whodados\whodados_etl\BAIXAR_DADOS.bat` (ou `rodar_pipeline.cmd`) — baixa RF + PGFN em levas, consolida em `dados\out\` e sobe para o Supabase.
+3. Para reprocessar do zero, apague `dados\out\_progresso.json` antes de rodar.
+
+Última carga vigente: RF `2026-09` + PGFN `2026_trimestre_02` — 1.682.255 matrizes RS.
+
+---
+
+## 5b️⃣ Avisos push no celular (PWA — sem loja, sem FCM/APNs)
+
+O app já é instalável (manifest + ícones em `frontend/public/`) e o backend já envia Web Push via VAPID. Falta só gerar as chaves e configurar 3 envs:
+
+1. Gere um par VAPID novo (uma vez só):
+```bash
+cd whodados
+python -c "from backend.push import gerar_vapid; print(gerar_vapid())"
+```
+2. No **Render (API)**, adicione as envs:
+   - `VAPID_PUBLIC_KEY` = `public` gerado
+   - `VAPID_PRIVATE_KEY` = `private` gerado (nunca commite, nunca exponha)
+   - `VAPID_SUBJECT` = `mailto:seu-email@empresa.com`
+3. Redeploy a API (a tabela `push_subscriptions` é criada sozinha no boot).
+4. No app: **Notificações → Ativar** neste aparelho. Admin vê também o composer **📣 Avisar** (própria empresa; geral pode marcar "todas as empresas").
+
+Notas:
+- iOS exige o app **instalado na tela de início** (Safari → Compartilhar → Adicionar à Tela de Início, iOS 16.4+) e um toque em Ativar.
+- Cada aparelho recebe só os avisos da **empresa ativa no momento da ativação** (inscrição vinculada ao X-Org-Id).
+- Sem VAPID configurado, o broadcast cai com 503 no subscribe e o aviso vai só pro sino interno — nada quebra.
 
 ---
 
@@ -88,7 +114,7 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 | Problema | Solução |
 |----------|---------|
 | API retorna 401 | Token expirado — faça login novamente |
-| Dados não aparecem | Verifique se ETL rodou sem erros (Actions) |
+| Dados não aparecem | Verifique se o ETL local rodou sem erros (`dados\download.log` / `upload_supabase.log`) |
 | App não conecta API | Confirme `NEXT_PUBLIC_API_URL` na Vercel |
 | Render não encontra `backend.main` | `start_command` deve ter `backend.main:app` |
 
@@ -100,7 +126,7 @@ DATABASE_URL="<sua-connection-string>" python whodados/scripts/sync_data_to_db.p
 |---------|--------|----------|
 | Vercel | 100 GB/mês | ~1-5 GB |
 | Render | 750h/mês | ~720h |
-| Supabase | 500 MB | ~50-100 MB |
-| GitHub Actions | 2.000 min/mês | ~60 min |
+| Supabase | 500 MB | ~500 MB (dados_empresas 1,68M + socios 940k) |
+| GitHub Actions | 2.000 min/mês | ~negligível (só keep-alive + campanhas) |
 
 **Total: R$ 0/mês** para uso leve.

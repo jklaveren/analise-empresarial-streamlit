@@ -137,7 +137,7 @@ DATABASE_URL="postgresql://..." python whodados/scripts/sync_data_to_db.py
 
 Existiam workflows (`whodados-etl.yml`, `whodados-etl-levas.yml`, `whodados-dividas.yml`) que rodavam o ETL automaticamente. Foram **removidos em 2026-09** porque as execuções no runner do GitHub Actions passaram a falhar sempre (travando em menos de 1 minuto, mesmo código que funciona local) — indício de bloqueio/anti-abuso da Receita Federal contra IPs de datacenter/nuvem. `teste-conectividade-rf.yml` continua no repo como diagnóstico (só testa alcance, não baixa dados).
 
-Enquanto isso não é resolvido (self-hosted runner, proxy, ou outra fonte para os dados), rode o ETL **do seu computador**: `python whodados/pipeline/pipeline_levas.py` com `DATABASE_URL` no ambiente (veja `nra_etl/rodar_pipeline.cmd` para o fluxo usado hoje).
+Enquanto isso não é resolvido (self-hosted runner, proxy, ou outra fonte para os dados), rode o ETL **do seu computador**: `python whodados/pipeline/pipeline_levas.py` com `DATABASE_URL` no ambiente (veja `whodados_etl/rodar_pipeline.cmd` para o fluxo usado hoje).
 
 ---
 

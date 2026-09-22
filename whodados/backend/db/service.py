@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import re
 from typing import List, Dict, Optional, Any
+from .filtros import (
+    PORTE_NOME_SQL, cidades_normalizadas, clausula_cnae, codigos_porte,
+)
 try:
-    from .config import get_db_cursor
+    from .config import (get_db_cursor, get_tipos_dados_empresas, expr_numerica,
+                         data_fundacao_is_date, normalizar_data_param)
 except ImportError:
-    from backend.db.config import get_db_cursor
+    from backend.db.config import (get_db_cursor, get_tipos_dados_empresas, expr_numerica,
+                                   data_fundacao_is_date, normalizar_data_param)
 try:
     from ..logger import get_logger
 except ImportError:
@@ -19,6 +24,10 @@ try:
 except ImportError:  # fallback defensivo -- nunca deve ocorrer
     def encrypt_secret(x): return x
     def decrypt_secret(x): return x
+try:
+    from .cache import cached
+except ImportError:
+    from backend.db.cache import cached
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     with get_db_cursor() as cur:
@@ -545,6 +554,64 @@ def mark_notificacao_lida(notificacao_id: int, user_id: Optional[str] = None,
         return cur.rowcount > 0
 
 
+# ==================== PUSH SUBSCRIPTIONS (PWA / Web Push) ====================
+
+def salvar_push_subscription(username: str, organizacao_id: Optional[int], endpoint: str,
+                             p256dh: str, auth: str, user_agent: Optional[str] = None) -> Dict[str, Any]:
+    """Registra (ou atualiza) o navegador/celular que ativou avisos push.
+    Mesmo endpoint reinscrito (ex.: trocou de empresa ativa) atualiza o
+    dono/org em vez de duplicar -- UNIQUE(endpoint)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO push_subscriptions (username, organizacao_id, endpoint, p256dh, auth, user_agent)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (endpoint) DO UPDATE SET
+                   username = EXCLUDED.username,
+                   organizacao_id = EXCLUDED.organizacao_id,
+                   p256dh = EXCLUDED.p256dh,
+                   auth = EXCLUDED.auth,
+                   user_agent = EXCLUDED.user_agent,
+                   criado_em = NOW()
+               RETURNING *""",
+            (username, organizacao_id, endpoint, p256dh, auth, user_agent),
+        )
+        return cur.fetchone()
+
+
+def remover_push_subscription(endpoint: str, username: Optional[str] = None) -> bool:
+    """Desativa avisos de um aparelho. Com username, so remove o proprio
+    (ninguem desliga o push de outra pessoa)."""
+    sql = "DELETE FROM push_subscriptions WHERE endpoint = %s"
+    params: List[Any] = [endpoint]
+    if username:
+        sql += " AND username = %s"
+        params.append(username)
+    with get_db_cursor() as cur:
+        cur.execute(sql, params)
+        return cur.rowcount > 0
+
+
+def listar_push_subscriptions(organizacao_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Inscricoes alvo de um disparo: da empresa (broadcast por empresa) ou
+    todas (broadcast global). So aparelhos ainda com usuario ativo."""
+    sql = ("SELECT s.* FROM push_subscriptions s "
+           "JOIN app_users u ON u.username = s.username AND u.is_active = TRUE WHERE 1=1")
+    params: List[Any] = []
+    if organizacao_id is not None:
+        sql += " AND s.organizacao_id = %s"
+        params.append(organizacao_id)
+    with get_db_cursor() as cur:
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+
+def listar_todas_organizacoes_ids() -> List[int]:
+    """IDs das empresas ativas -- broadcast global grava um aviso (sino) por empresa."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id FROM organizacoes WHERE ativo = TRUE ORDER BY id")
+        return [r["id"] for r in cur.fetchall()]
+
+
 # ==================== MONITOR DE EMAILS (FOLLOW-UP) ====================
 
 def get_emails_for_monitor(
@@ -817,98 +884,14 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
 # concatenado. Manter derivado economiza ~30MB no Postgres e preserva a
 # API que o frontend consome (porte_nome e contato_fone continuam saindo
 # nos SELECTs, so mudou como sao produzidos).
-PORTE_NOME_SQL = (
-    "CASE e.\"PORTE_EMPRESA\" "
-    "WHEN '01' THEN 'NAO INFORMADO' "
-    "WHEN '02' THEN 'ME' "
-    "WHEN '03' THEN 'EPP' "
-    "WHEN '05' THEN 'MEDIO E GRANDE' "
-    "ELSE 'DEMAIS' END"
-)
+# PORTE_NOME_SQL / PORTE_NOME_TO_CODE vivem em db/filtros.py (codigos RF).
 CONTATO_FONE_SQL = (
     "'(' || COALESCE(e.\"DDD\", '') || ') ' || COALESCE(e.\"TELEFONE\", '')"
 )
-# Mapeamento inverso pra converter filtros do frontend (que ainda mandam
-# 'ME', 'EPP', ...) em codigos PORTE_EMPRESA no WHERE.
-PORTE_NOME_TO_CODE = {
-    "NAO INFORMADO": "01",
-    "ME": "02",
-    "EPP": "03",
-    "MEDIO E GRANDE": "05",
-}
 
-# Score de potencial (0-100), calculado on-the-fly a partir de sinais que ja
-# existem em dados_empresas -- sem coluna nova, sem reprocessar o ETL.
-# Pesos: porte (35) + capital social (25) + saude financeira/divida (20)
-# + maturidade (10) + contactabilidade (10). MEI zera o componente de porte
-# porque o cadastro de porte da RF costuma vir "NAO INFORMADO" pra MEI mesmo
-# quando o negocio e' relevante -- sem essa checagem MEI empataria com
-# "NAO INFORMADO" indevidamente.
-POTENCIAL_SCORE_SQL = """(
-    (CASE WHEN e."OPCAO_MEI" = 'S' THEN 5 ELSE
-        CASE e."PORTE_EMPRESA"
-            WHEN '05' THEN 35
-            WHEN '03' THEN 25
-            WHEN '02' THEN 12
-            ELSE 8
-        END
-    END)
-    + (CASE
-        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 1000000 THEN 25
-        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 100000 THEN 18
-        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) >= 10000 THEN 10
-        WHEN COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) > 0 THEN 4
-        ELSE 0
-      END)
-    + (CASE
-        WHEN COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) = 0 THEN 20
-        WHEN COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) < 50000 THEN 10
-        ELSE 0
-      END)
-    + (CASE
-        WHEN e."DATA_FUNDACAO" IS NULL THEN 4
-        WHEN e."DATA_FUNDACAO" <= (NOW() - INTERVAL '5 years')::date THEN 10
-        WHEN e."DATA_FUNDACAO" <= (NOW() - INTERVAL '1 year')::date THEN 6
-        ELSE 2
-      END)
-    + (CASE WHEN TRIM(COALESCE(e."EMAIL", '')) <> '' THEN 6 ELSE 0 END)
-    + (CASE WHEN TRIM(COALESCE(e."TELEFONE", '')) <> '' THEN 4 ELSE 0 END)
-)"""
-POTENCIAL_TIER_SQL = f"""(CASE
-    WHEN {POTENCIAL_SCORE_SQL} >= 65 THEN 'alto'
-    WHEN {POTENCIAL_SCORE_SQL} >= 40 THEN 'medio'
-    ELSE 'baixo'
-END)"""
-
-
-# Mesma classificacao de classifier/cnae.py::classificar_cnae, em SQL --
-# indexada, pra filtrar por setor sem precisar comparar contra uma lista
-# de centenas de codigos CNAE (uma igualdade contra coluna indexada bate
-# muito mais rapido que "CNAE_PRINCIPAL = ANY(<231 codigos>)").
-CATEGORIA_CNAE_SQL = """(CASE
-    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 10 AND 33 THEN 'industria'
-    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 35 AND 43 THEN 'industria'
-    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 45 AND 47 THEN 'comercio'
-    WHEN LEFT(e."CNAE_PRINCIPAL", 2) ~ '^\\d+$' AND LEFT(e."CNAE_PRINCIPAL", 2)::int BETWEEN 58 AND 63 THEN 'tecnologia'
-    ELSE 'servicos'
-END)"""
-
-
-def atualizar_potencial_empresas() -> int:
-    """Repopula empresas_potencial inteira a partir de dados_empresas.
-    Rodar depois de toda carga do ETL (a carga substitui dados_empresas do
-    zero -- to_sql replace -- entao qualquer coisa pre-calculada precisa
-    ser refeita junto). Uma unica passada em lote, bem mais barato que
-    recalcular a formula a cada consulta."""
-    with get_db_cursor() as cur:
-        cur.execute("TRUNCATE empresas_potencial")
-        cur.execute(f"""
-            INSERT INTO empresas_potencial (cnpj_completo, potencial_score, potencial_tier, categoria_cnae)
-            SELECT e."CNPJ_COMPLETO", ({POTENCIAL_SCORE_SQL}), ({POTENCIAL_TIER_SQL}), ({CATEGORIA_CNAE_SQL})
-            FROM dados_empresas e
-            WHERE e."CNPJ_COMPLETO" IS NOT NULL
-        """)
-        return cur.rowcount
+# Score de potencial / empresas_potencial: REMOVIDOS em 2026-09 (tabela
+# dropada em prod: score nunca calibrado ao ICP, 209 MB). Se um dia voltar,
+# recalibrar a formula antes de repovoar -- ver CHECKPOINT_2026-09-19.md.
 
 # ==================== CONFIGURACOES DA APLICACAO (app_config) ====================
 
@@ -1300,35 +1283,48 @@ def _where_empresas(
     import re as _re
     clauses: List[str] = []
     params: List[Any] = []
-    cidades = _norm_lista(cidade)
+    # Tipo real das colunas (NUMERIC/DATE no prod pos-nivel1, TEXT no legado):
+    # define se o filtro usa a coluna direto (usa indice) ou o cast defensivo.
+    tipos = get_tipos_dados_empresas()
+    div_expr = expr_numerica("DIVIDA_TOTAL", tipos)
+    cap_expr = expr_numerica("CAPITAL_SOCIAL", tipos)
+    fundacao_e_date = data_fundacao_is_date(tipos)
+    cidades = cidades_normalizadas(_norm_lista(cidade))
     if cidades:
         clauses.append("m.nome_municipio = ANY(%s)"); params.append(cidades)
     cnaes = _norm_lista(cnae)
     if cnaes:
-        clauses.append('e."CNAE_PRINCIPAL" = ANY(%s)'); params.append(cnaes)
+        sql_cnae, p_cnae = clausula_cnae(cnaes)
+        clauses.append(sql_cnae); params.extend(p_cnae)
     portes = _norm_lista(porte)
     if portes:
-        # Frontend manda nomes ("ME", "EPP", ...) mas a tabela guarda so o
-        # codigo ("02", "03", ...). Traduz de volta antes do bind.
-        codigos = [PORTE_NOME_TO_CODE[p] for p in portes if p in PORTE_NOME_TO_CODE]
-        if codigos:
-            clauses.append('e."PORTE_EMPRESA" = ANY(%s)'); params.append(codigos)
+        # Frontend manda nomes ("ME", "EPP", "MICRO"...) mas a tabela guarda
+        # so o codigo RF. Porte desconhecido = zero resultado (nao ignora).
+        codigos = codigos_porte(portes)
+        clauses.append('e."PORTE_EMPRESA" = ANY(%s)'); params.append(codigos or ["__nenhum__"])
     if busca:
         clauses.append('(e."RAZAO_SOCIAL" ILIKE %s OR e."NOME_FANTASIA" ILIKE %s)')
         params.extend([f"%{busca}%", f"%{busca}%"])
     if divida_min is not None:
-        clauses.append('COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0) >= %s'); params.append(divida_min)
+        clauses.append(f'{div_expr} >= %s'); params.append(divida_min)
     if divida_max is not None:
-        clauses.append('COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, \'\')::numeric, 0) <= %s'); params.append(divida_max)
+        clauses.append(f'{div_expr} <= %s'); params.append(divida_max)
     if capital_min is not None:
-        clauses.append('COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0) >= %s'); params.append(capital_min)
+        clauses.append(f'{cap_expr} >= %s'); params.append(capital_min)
     if capital_max is not None:
-        clauses.append('COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, \'\')::numeric, 0) <= %s'); params.append(capital_max)
-    # DATA_FUNDACAO vem como texto YYYYMMDD -> comparacao lexicografica = cronologica.
+        clauses.append(f'{cap_expr} <= %s'); params.append(capital_max)
+    # DATA_FUNDACAO e DATE no prod (compara como data) ou texto YYYYMMDD
+    # no legado (comparacao lexicografica = cronologica).
     if fundacao_de:
-        clauses.append('e."DATA_FUNDACAO" >= %s'); params.append(_re.sub(r"\D", "", str(fundacao_de)))
+        if fundacao_e_date:
+            clauses.append('e."DATA_FUNDACAO" >= %s::date'); params.append(normalizar_data_param(fundacao_de))
+        else:
+            clauses.append('e."DATA_FUNDACAO" >= %s'); params.append(_re.sub(r"\D", "", str(fundacao_de)))
     if fundacao_ate:
-        clauses.append('e."DATA_FUNDACAO" <= %s'); params.append(_re.sub(r"\D", "", str(fundacao_ate)))
+        if fundacao_e_date:
+            clauses.append('e."DATA_FUNDACAO" <= %s::date'); params.append(normalizar_data_param(fundacao_ate))
+        else:
+            clauses.append('e."DATA_FUNDACAO" <= %s'); params.append(_re.sub(r"\D", "", str(fundacao_ate)))
     if not incluir_inativas:
         clauses.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s'); params.append(_BLACKLIST_REGEX)
     # Filtro de contato: com_email / so_telefone (sem e-mail, com fone) / sem_contato.
@@ -1341,12 +1337,11 @@ def _where_empresas(
             clauses.append(f"(NOT ({tem_email}) AND {tem_fone})")
         elif contato == "sem_contato":
             clauses.append(f"(NOT ({tem_email}) AND NOT ({tem_fone}))")
-    tiers = _norm_lista(potencial)
-    if tiers:
-        clauses.append("ep.potencial_tier = ANY(%s)"); params.append(tiers)
-    categorias = _norm_lista(categoria)
-    if categorias:
-        clauses.append("ep.categoria_cnae = ANY(%s)"); params.append(categorias)
+    # Filtros de potencial/categoria (tabela empresas_potencial) foram
+    # REMOVIDOS em 2026-09 (tabela dropada: score nunca calibrado, 209 MB).
+    # Os parametros potencial/categoria seguem aceitos e ignorados pra nao
+    # quebrar campanhas/lotes antigos que os tenham salvos nos filtros.
+    _ = (potencial, categoria)
     where = (" AND " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -1536,11 +1531,12 @@ def listar_empresas_db(
                 capital_min, capital_max, fundacao_de, fundacao_ate, incluir_inativas,
                 contato, potencial, categoria,
             )
-            order_sql = (
-                'ep.potencial_score DESC NULLS LAST, e."RAZAO_SOCIAL"'
-                if ordenar_por == "potencial"
-                else 'e."RAZAO_SOCIAL"'
-            )
+            # ordenar_por=potencial removido junto com empresas_potencial:
+            # tudo ordena por razao social (o parametro segue aceito e ignorado).
+            order_sql = 'e."RAZAO_SOCIAL"'
+            tipos = get_tipos_dados_empresas()
+            cap_expr = expr_numerica("CAPITAL_SOCIAL", tipos)
+            div_expr = expr_numerica("DIVIDA_TOTAL", tipos)
             sql = f"""
                 SELECT
                     e."CNPJ_COMPLETO" AS cnpj_completo,
@@ -1549,18 +1545,17 @@ def listar_empresas_db(
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
-                    COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
+                    {cap_expr} AS capital_social,
+                    {div_expr} AS divida_total,
                     ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     e."EMAIL" AS email,
                     ({CONTATO_FONE_SQL}) AS contato_fone,
-                    COALESCE(ep.potencial_score, 0) AS potencial_score,
-                    COALESCE(ep.potencial_tier, 'baixo') AS potencial_tier
+                    NULL AS potencial_score,
+                    NULL AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
-                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE 1=1 {where}
                 ORDER BY {order_sql} LIMIT %s OFFSET %s
             """
@@ -1571,6 +1566,7 @@ def listar_empresas_db(
         return []
 
 
+@cached("contar_empresas_db")
 def contar_empresas_db(
     cidade=None, cnae=None, porte=None, busca: Optional[str] = None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
@@ -1596,7 +1592,6 @@ def contar_empresas_db(
                 SELECT COUNT(*) AS total
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
-                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE 1=1 {where}
             """
             cur.execute(sql, params)
@@ -1620,6 +1615,9 @@ def get_empresa_by_cnpj_db(cnpj: str, organizacao_id: Optional[int] = None) -> D
         with get_db_cursor() as cur:
             if not _tabela_existe(cur, "dados_empresas"):
                 return {}
+            tipos = get_tipos_dados_empresas()
+            cap_expr = expr_numerica("CAPITAL_SOCIAL", tipos)
+            div_expr = expr_numerica("DIVIDA_TOTAL", tipos)
             cur.execute(
                 f"""
                 SELECT
@@ -1630,17 +1628,16 @@ def get_empresa_by_cnpj_db(cnpj: str, organizacao_id: Optional[int] = None) -> D
                     COALESCE(m.nome_municipio, '') AS municipio,
                     e."CNAE_PRINCIPAL" AS cnae_principal,
                     COALESCE(c.descricao_cnae, '') AS cnae_descricao,
-                    COALESCE(NULLIF(e."CAPITAL_SOCIAL"::text, '')::numeric, 0) AS capital_social,
-                    COALESCE(NULLIF(e."DIVIDA_TOTAL"::text, '')::numeric, 0) AS divida_total,
+                    {cap_expr} AS capital_social,
+                    {div_expr} AS divida_total,
                     ({PORTE_NOME_SQL}) AS porte_nome,
                     e."DATA_FUNDACAO" AS data_fundacao,
                     ({CONTATO_FONE_SQL}) AS contato_fone,
-                    COALESCE(ep.potencial_score, 0) AS potencial_score,
-                    COALESCE(ep.potencial_tier, 'baixo') AS potencial_tier
+                    NULL AS potencial_score,
+                    NULL AS potencial_tier
                 FROM dados_empresas e
                 LEFT JOIN municipios m ON m.cod_municipio = e."COD_MUNICIPIO"
                 LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
-                LEFT JOIN empresas_potencial ep ON ep.cnpj_completo = e."CNPJ_COMPLETO"
                 WHERE e."CNPJ_COMPLETO" = %s
                 LIMIT 1
                 """,

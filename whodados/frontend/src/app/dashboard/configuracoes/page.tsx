@@ -684,8 +684,7 @@ function RegrasNegocioTab() {
       </RegraItem>
 
       <RegraItem titulo="🏆 Score de potencial das empresas">
-        <p>Calculado automaticamente (0-100) a partir de: porte (peso 35), capital social (25), saúde financeira/dívida (20), maturidade da empresa (10) e ter contato cadastrado (10). MEI não conta como porte alto mesmo que a Receita não informe o porte real.</p>
-        <p>Faixas: <strong>Alto</strong> (≥65), <strong>Médio</strong> (40-64), <strong>Baixo</strong> (&lt;40).</p>
+        <p>Removido em 2026-09: o score (0-100) nunca foi calibrado ao perfil de cliente ideal e quase toda a base caía em "médio". A tabela <strong>empresas_potencial</strong> (209 MB) foi eliminada do banco; filtros, ordenação e selo de potencial saíram das telas.</p>
       </RegraItem>
 
       <RegraItem titulo="👁️ Hierarquia de acesso">

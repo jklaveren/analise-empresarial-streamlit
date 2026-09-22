@@ -107,6 +107,11 @@ def ensure_tables():
         # mesmo esquema de chave-valor do pipeline_metadata, mas para
         # ajustes feitos pelo usuario pela tela de Configuracoes.
         cur.execute("CREATE TABLE IF NOT EXISTS app_config (chave VARCHAR(100) PRIMARY KEY, valor TEXT, atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
+        # Push subscriptions (PWA / Web Push): um registro por navegador/
+        # celular que ativou avisos. Sem FK pra organizacoes de proposito:
+        # esta funcao roda ANTES de _ensure_multiempresa no primeiro boot
+        # (tabela ainda nao existe), e FK quebraria a criacao.
+        ensure_push_tables()
         # Tabelas de lookup dos dados do ETL (municipios: cod->nome; cnaes:
         # codigo->descricao da atividade). Criadas aqui (vazias) pra os JOINs
         # dos endpoints de empresas/analytics nunca quebrarem, mesmo antes do
@@ -114,26 +119,9 @@ def ensure_tables():
         # reais (to_sql if_exists="replace") quando o pipeline roda.
         cur.execute("CREATE TABLE IF NOT EXISTS municipios (cod_municipio VARCHAR(10) PRIMARY KEY, nome_municipio VARCHAR(200))")
         cur.execute("CREATE TABLE IF NOT EXISTS cnaes (codigo_cnae VARCHAR(10) PRIMARY KEY, descricao_cnae VARCHAR(300))")
-        # Potencial pre-calculado (nao recalculado a cada consulta -- com
-        # 1.68M+ linhas em dados_empresas, o CASE de potencial combinado com
-        # filtros grandes (ex.: lista de 200+ CNAEs) estourava o timeout do
-        # banco). Repopulada inteira via atualizar_potencial_empresas() --
-        # rodar isso de novo sempre que o ETL recarregar dados_empresas
-        # (a carga usa to_sql replace, entao a tabela e' recriada do zero).
-        # CHAR(14), nao VARCHAR -- tem que bater exatamente com o tipo de
-        # dados_empresas."CNPJ_COMPLETO" (CHAR, do to_sql do pandas), senao
-        # o JOIN faz cast implicito linha a linha e ignora os indices dos
-        # dois lados (era o gargalo real por tras da consulta lenta).
-        cur.execute("""CREATE TABLE IF NOT EXISTS empresas_potencial (
-            cnpj_completo CHAR(14) PRIMARY KEY,
-            potencial_score NUMERIC,
-            potencial_tier VARCHAR(10),
-            categoria_cnae VARCHAR(20)
-        )""")
-        cur.execute("ALTER TABLE empresas_potencial ADD COLUMN IF NOT EXISTS categoria_cnae VARCHAR(20)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_tier ON empresas_potencial(potencial_tier)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_empresas_potencial_categoria ON empresas_potencial(categoria_cnae)")
-        # Tabela de lotes de leads (criacao de lotes com filtros de potencial, etc.)
+        # empresas_potencial: REMOVIDA em 2026-09 (DROP TABLE em prod; ver
+        # CHECKPOINT). Nao recriar aqui -- o boot nao deve ressuscitar a tabela.
+        # Tabela de lotes de leads (criacao de lotes com filtros, etc.)
         cur.execute("""CREATE TABLE IF NOT EXISTS lotes_leads (
             id SERIAL PRIMARY KEY,
             organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
@@ -147,6 +135,26 @@ def ensure_tables():
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
     _ensure_multiempresa()
+
+
+def ensure_push_tables():
+    """Cria a tabela de inscricoes push (idempotente). Separada do
+    ensure_tables pra dar pra chamar isolada nos testes."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) NOT NULL,
+            organizacao_id INTEGER,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent VARCHAR(255),
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_push_subs_org ON push_subscriptions(organizacao_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(username)")
+        conn.commit(); cur.close()
 
 
 def _ensure_multiempresa():
@@ -535,3 +543,69 @@ def check_health():
 ensure_tables_exist = ensure_tables
 check_database_health = check_health
 get_db_cursor = get_cur
+
+
+# ==================== TIPOS DE COLUNA (CACHE) ====================
+#
+# O ETL antigo gravava tudo como TEXT; o nivel1 converteu numericos pra
+# NUMERIC e DATA_FUNDACAO pra DATE. As queries precisam saber o tipo real
+# pra montar a expressao certa: com NUMERIC, `COALESCE(col,0)` usa indice;
+# com o cast legado `NULLIF(col::text,'')::numeric`, o planner ignora
+# qualquer indice e converte linha a linha (era o gargalo das faixas).
+# Uma consulta ao information_schema por processo/hora; sem banco ou sem
+# tabela, retorna {} e o chamador usa a expressao legada (compativel).
+import time as _time
+import threading as _threading
+
+_TIPOS_CACHE: dict = {}
+_TIPOS_TS: float = 0.0
+_TIPOS_LOCK = _threading.Lock()
+_TIPOS_TTL = 3600.0
+
+
+def get_tipos_dados_empresas() -> dict:
+    """{COLUNA: data_type} de dados_empresas (ex.: {'DIVIDA_TOTAL': 'numeric'})."""
+    global _TIPOS_CACHE, _TIPOS_TS
+    agora = _time.monotonic()
+    with _TIPOS_LOCK:
+        if _TIPOS_CACHE and agora - _TIPOS_TS < _TIPOS_TTL:
+            return _TIPOS_CACHE
+    try:
+        with get_cur() as cur:
+            cur.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = 'dados_empresas'"
+            )
+            tipos = {r["column_name"]: r["data_type"] for r in cur.fetchall()}
+    except Exception as e:
+        log.warning(f"get_tipos_dados_empresas falhou (usa expressao legada): {e}")
+        return {}
+    with _TIPOS_LOCK:
+        _TIPOS_CACHE = tipos
+        _TIPOS_TS = agora
+    return tipos
+
+
+def expr_numerica(coluna: str, tipos: dict | None = None) -> str:
+    """Expressao SQL que zera nulos de uma coluna numerica-ou-texto.
+    NUMERIC (prod atual) -> COALESCE direto, amigavel a indice.
+    Qualquer outra coisa (TEXT legado, tabela ausente) -> cast defensivo."""
+    if tipos is None:
+        tipos = get_tipos_dados_empresas()
+    if tipos.get(coluna) == "numeric":
+        return f'COALESCE(e."{coluna}", 0)'
+    return f'COALESCE(NULLIF(e."{coluna}"::text, \'\')::numeric, 0)'
+
+
+def data_fundacao_is_date(tipos: dict | None = None) -> bool:
+    if tipos is None:
+        tipos = get_tipos_dados_empresas()
+    return tipos.get("DATA_FUNDACAO") == "date"
+
+
+def normalizar_data_param(valor: str) -> str:
+    """YYYY-MM-DD ou YYYYMMDD -> YYYY-MM-DD (pro comparador ::date)."""
+    digitos = "".join(c for c in str(valor) if c.isdigit())
+    if len(digitos) == 8:
+        return f"{digitos[:4]}-{digitos[4:6]}-{digitos[6:]}"
+    return str(valor)[:10]

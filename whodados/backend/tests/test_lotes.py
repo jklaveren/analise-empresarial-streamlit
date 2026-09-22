@@ -32,4 +32,4 @@ def test_lote_db_functions():
         assert deleted is True
     except Exception as e:
         # Se o banco nao estiver rodando no ambiente de teste local, registramos o skip/pass gracioso
-        pytest.skip(fBanco indisponivel para teste integrado: {e}")
+        pytest.skip(f"Banco indisponivel para teste integrado: {e}")

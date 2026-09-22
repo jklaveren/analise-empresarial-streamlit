@@ -19,8 +19,41 @@ def test_where_cidade_e_cnae():
     where, params = _where_empresas(cidade=["Porto Alegre", "Canoas"], cnae=["0111301"])
     assert "m.nome_municipio = ANY(%s)" in where
     assert 'e."CNAE_PRINCIPAL" = ANY(%s)' in where
-    assert ["Porto Alegre", "Canoas"] in params
+    # municipios guarda MAIUSCULO sem acento: normaliza o que foi digitado.
+    assert ["PORTO ALEGRE", "CANOAS"] in params
     assert ["0111301"] in params
+
+
+def test_where_cidade_sem_acento():
+    _, params = _where_empresas(cidade=["São Leopoldo"])
+    assert ["SAO LEOPOLDO"] in params
+
+
+def test_where_cnae_prefixo_vira_faixa():
+    # Base guarda so CNAE de 7 digitos: '47113' tem que casar 4711301/4711302.
+    where, params = _where_empresas(cnae=["47113", "4711-3/01"])
+    assert "BETWEEN %s AND %s" in where
+    assert "4711300" in params and "4711399" in params
+    assert ["4711301"] in params
+
+
+def test_where_cnae_invalido_nao_devolve_base_toda():
+    where, _ = _where_empresas(cnae=["comercio"])
+    assert "FALSE" in where
+
+
+def test_where_porte_codigos_rf():
+    # RF: 01=micro, 03=EPP, 05=demais (nao existe '02' na base).
+    _, params = _where_empresas(porte=["MICRO", "EPP", "DEMAIS"])
+    assert ["01", "03", "05"] in params
+    _, params = _where_empresas(porte=["ME", "PEQUENO", "MEDIO E GRANDE"])
+    assert ["01", "03", "05"] in params
+
+
+def test_where_porte_desconhecido_nao_ignora():
+    where, params = _where_empresas(porte=["XYZ"])
+    assert '"PORTE_EMPRESA" = ANY(%s)' in where
+    assert ["__nenhum__"] in params
 
 
 def test_where_faixas():
@@ -39,8 +72,32 @@ def test_where_blacklist_rj():
     assert "!~*" not in where2
 
 
-def test_where_fundacao_normaliza_data():
+def test_where_fundacao_normaliza_data(monkeypatch):
+    # Schema legado (TEXT): compara YYYYMMDD sem formatacao.
+    monkeypatch.setattr("backend.db.service.get_tipos_dados_empresas", lambda: {})
     where, params = _where_empresas(fundacao_de="2020-01-15", fundacao_ate="2023-12-31")
     assert '"DATA_FUNDACAO"' in where
     assert "20200115" in params
     assert "20231231" in params
+
+
+def test_where_fundacao_date_usa_cast(monkeypatch):
+    # Prod pos-nivel1 (DATE): compara como data.
+    monkeypatch.setattr(
+        "backend.db.service.get_tipos_dados_empresas",
+        lambda: {"DATA_FUNDACAO": "date", "DIVIDA_TOTAL": "numeric", "CAPITAL_SOCIAL": "numeric"},
+    )
+    where, params = _where_empresas(fundacao_de="2020-01-15", fundacao_ate="20231231")
+    assert "::date" in where
+    assert "2020-01-15" in params
+    assert "2023-12-31" in params
+
+
+def test_where_faixas_usam_coluna_direta_quando_numeric(monkeypatch):
+    monkeypatch.setattr(
+        "backend.db.service.get_tipos_dados_empresas",
+        lambda: {"DIVIDA_TOTAL": "numeric", "CAPITAL_SOCIAL": "numeric"},
+    )
+    where, _ = _where_empresas(divida_min=1000, capital_max=50000)
+    assert "::text" not in where
+    assert "DIVIDA_TOTAL" in where and "CAPITAL_SOCIAL" in where

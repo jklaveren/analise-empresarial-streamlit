@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 # WHODADOS_DATA_DIR aponta para onde o pipeline em levas gravou os CSVs
-# (ex.: C:\whodados\nra_etl\dados\out), que nao fica dentro do repo.
+# (ex.: C:\whodados\whodados_etl\dados\out), que nao fica dentro do repo.
 DATA_DIR = (Path(os.environ["WHODADOS_DATA_DIR"]) if os.environ.get("WHODADOS_DATA_DIR")
             else BASE_DIR / "pipeline" / "out")
 

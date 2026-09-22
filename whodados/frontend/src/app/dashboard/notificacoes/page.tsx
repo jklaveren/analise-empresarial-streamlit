@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { listarNotificacoes, marcarNotificacaoLida, Notificacao } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
+import { PushToggle } from "@/components/PushToggle";
+import { BroadcastComposer } from "@/components/BroadcastComposer";
 import Link from "next/link";
 
 const TIPO_ICONS: Record<string, string> = {
@@ -9,6 +12,8 @@ const TIPO_ICONS: Record<string, string> = {
 };
 
 export default function NotificacoesPage() {
+  const { isAdmin, activeOrg } = useAuth();
+  const podeAvisar = isAdmin || activeOrg?.papel === "admin";
   const [items, setItems] = useState<Notificacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"todas" | "nao_lidas">("nao_lidas");
@@ -38,6 +43,12 @@ export default function NotificacoesPage() {
       </div>
 
       {loading && <div className="text-center py-12 text-slate-500">Carregando...</div>}
+      {!loading && (
+        <div className="space-y-3 mb-6">
+          <PushToggle />
+          {podeAvisar && <BroadcastComposer isGlobalAdmin={isAdmin} empresaNome={activeOrg?.nome ?? "sua empresa"} />}
+        </div>
+      )}
       {!loading && items.length === 0 && <div className="text-center py-16 text-slate-400"><div className="text-5xl mb-4">🔔</div><p className="text-lg font-medium">Nenhuma notificação {filter === "nao_lidas" ? "pendente" : "encontrada"}</p></div>}
 
       {items.length > 0 && (

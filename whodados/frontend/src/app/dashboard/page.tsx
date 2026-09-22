@@ -7,15 +7,8 @@ import { MultiSelect } from "@/components/MultiSelect";
 import { FunilInsights } from "@/components/FunilInsights";
 import { TopEmpresasRanking } from "@/components/TopEmpresasRanking";
 import { ConsultaNaturalBox } from "@/components/ConsultaNaturalBox";
-import { PotencialBadge } from "@/components/PotencialBadge";
 import { useAuth } from "@/lib/auth-context";
-import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro, PotencialTier } from "@/lib/api";
-
-const POTENCIAL_OPTIONS: { value: PotencialTier; label: string }[] = [
-  { value: "alto", label: "Alto" },
-  { value: "medio", label: "Médio" },
-  { value: "baixo", label: "Baixo" },
-];
+import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
 
 const PAGE_SIZE = 50;
 
@@ -29,7 +22,6 @@ interface FiltrosSalvos {
   cidade: string[]; porte: string[]; cnae: string[]; busca: string;
   dividaMin: string; dividaMax: string; capitalMin: string; capitalMax: string;
   fundacaoDe: string; fundacaoAte: string; incluirInativas: boolean;
-  potencial: PotencialTier[]; ordenarPorPotencial: boolean;
 }
 
 function lerFiltrosSalvos(): Partial<FiltrosSalvos> {
@@ -63,8 +55,6 @@ export default function DashboardPage() {
   const [fundacaoDe, setFundacaoDe] = useState(salvos.fundacaoDe ?? "");
   const [fundacaoAte, setFundacaoAte] = useState(salvos.fundacaoAte ?? "");
   const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? true);
-  const [potencial, setPotencial] = useState<PotencialTier[]>(salvos.potencial ?? []);
-  const [ordenarPorPotencial, setOrdenarPorPotencial] = useState(salvos.ordenarPorPotencial ?? false);
   const [page, setPage] = useState(0);
 
   // Opcoes dos multiselects -- cachea por 30min (cidades/portes/cnaes mudam
@@ -87,9 +77,8 @@ export default function DashboardPage() {
     fundacao_de: fundacaoDe || undefined,
     fundacao_ate: fundacaoAte || undefined,
     incluir_inativas: incluirInativas,
-    potencial: potencial.length ? potencial : undefined,
-    ordenar_por: ordenarPorPotencial ? "potencial" : "razao_social",
-  }), [cidade, porte, cnae, busca, dividaMin, dividaMax, capitalMin, capitalMax, fundacaoDe, fundacaoAte, incluirInativas, potencial, ordenarPorPotencial]);
+    ordenar_por: "razao_social",
+  }), [cidade, porte, cnae, busca, dividaMin, dividaMax, capitalMin, capitalMax, fundacaoDe, fundacaoAte, incluirInativas]);
 
   const filtrosKey = JSON.stringify(filtros);
   const [applied, setApplied] = useState<EmpresaFiltros>(filtros);
@@ -107,7 +96,6 @@ export default function DashboardPage() {
         const dados: FiltrosSalvos = {
           cidade, porte, cnae, busca, dividaMin, dividaMax,
           capitalMin, capitalMax, fundacaoDe, fundacaoAte, incluirInativas,
-          potencial, ordenarPorPotencial,
         };
         localStorage.setItem(FILTROS_STORAGE_KEY, JSON.stringify(dados));
       } catch { /* storage bloqueado -- so perde a conveniencia, segue normal */ }
@@ -165,7 +153,6 @@ export default function DashboardPage() {
     setCidade([]); setPorte([]); setCnae([]); setBusca("");
     setDividaMin(""); setDividaMax(""); setCapitalMin(""); setCapitalMax("");
     setFundacaoDe(""); setFundacaoAte(""); setIncluirInativas(true);
-    setPotencial([]); setOrdenarPorPotencial(false);
     try { localStorage.removeItem(FILTROS_STORAGE_KEY); } catch { /* ignora */ }
   };
 
@@ -197,12 +184,6 @@ export default function DashboardPage() {
           />
           <MultiSelect options={cidadeOptions} selected={cidade} onChange={setCidade} placeholder="Cidades..." />
           <MultiSelect options={porteOptions} selected={porte} onChange={setPorte} placeholder="Porte..." />
-          <MultiSelect
-            options={POTENCIAL_OPTIONS}
-            selected={potencial}
-            onChange={(v) => setPotencial(v as PotencialTier[])}
-            placeholder="Potencial..."
-          />
         </div>
 
         <MultiSelect options={cnaeOptions} selected={cnae} onChange={setCnae} placeholder="Setores (CNAE — código e descrição)..." />
@@ -230,10 +211,6 @@ export default function DashboardPage() {
             <input type="checkbox" checked={!incluirInativas} onChange={e => setIncluirInativas(!e.target.checked)} />
             Ocultar Falência / Rec. Judicial
           </label>
-          <label className="flex items-end gap-2 text-sm text-slate-600 pb-1">
-            <input type="checkbox" checked={ordenarPorPotencial} onChange={e => setOrdenarPorPotencial(e.target.checked)} />
-            Ordenar por potencial (maior primeiro)
-          </label>
         </div>
       </div>
 
@@ -257,7 +234,6 @@ export default function DashboardPage() {
                 <th className="px-4 py-3 text-left">CNAE</th>
                 <th className="px-4 py-3 text-right">Capital</th>
                 <th className="px-4 py-3 text-right">Dívida</th>
-                <th className="px-4 py-3 text-left">Potencial</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -274,7 +250,6 @@ export default function DashboardPage() {
                   <td className="px-4 py-3 text-xs">{e.cnae_principal || "-"}{e.cnae_descricao ? ` - ${e.cnae_descricao}` : ""}</td>
                   <td className="px-4 py-3 text-right">{formatBRL(e.capital_social)}</td>
                   <td className="px-4 py-3 text-right text-red-600">{formatBRL(e.divida_total)}</td>
-                  <td className="px-4 py-3"><PotencialBadge tier={e.potencial_tier} score={e.potencial_score} /></td>
                   <td className="px-4 py-3 text-right">
                     {!isVisitante && (
                       <Link href={`/dashboard/empresa/${encodeURIComponent(e.cnpj_completo)}`} className="rounded-lg bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-100">

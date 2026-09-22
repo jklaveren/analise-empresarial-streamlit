@@ -10,13 +10,15 @@ from .service import (
     create_campanha, get_campanha, get_all_campanhas, update_campanha_status,
     create_email_enviado, update_email_enviado, get_emails_enviados_by_campanha,
     create_notificacao, get_notificacoes, mark_notificacao_lida, contar_notificacoes_nao_lidas,
+    # Push (PWA / Web Push)
+    salvar_push_subscription, remover_push_subscription, listar_push_subscriptions,
+    listar_todas_organizacoes_ids,
     # Password reset
     create_password_reset_token, get_password_reset_token, mark_password_reset_token_used, update_user_password,
     # Monitor de emails (follow-up com semaforo)
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup, marcar_email_aberto,
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
-    atualizar_potencial_empresas,
     org_escopo_base, listar_carteira_db, contar_carteira_db, get_carteira_by_cnpj,
     categorias_da_carteira, salvar_na_carteira, remover_da_carteira,
     seed_default_templates, get_pipeline_metadata,
@@ -71,7 +73,6 @@ __all__ = [
     "get_emails_for_monitor", "get_monitor_stats", "get_emails_vermelhos_para_followup", "marcar_email_aberto",
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "contar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
-    "atualizar_potencial_empresas",
     "org_escopo_base", "listar_carteira_db", "contar_carteira_db", "get_carteira_by_cnpj",
     "categorias_da_carteira", "salvar_na_carteira", "remover_da_carteira",
     "seed_default_templates", "get_pipeline_metadata",

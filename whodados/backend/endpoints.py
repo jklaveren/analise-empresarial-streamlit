@@ -21,6 +21,7 @@ from .endpoints_analytics import router as analytics_router
 from .endpoints_integracoes import router as integracoes_router
 from .endpoints_descadastro import router as descadastro_router
 from .endpoints_lotes import router as lotes_router
+from .endpoints_push import router as push_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -40,3 +41,4 @@ router.include_router(analytics_router)
 router.include_router(integracoes_router)
 router.include_router(descadastro_router)
 router.include_router(lotes_router)
+router.include_router(push_router)

@@ -183,8 +183,9 @@ function empresaFiltrosToQuery(f: EmpresaFiltros = {}): URLSearchParams {
   if (f.fundacao_de) p.append("fundacao_de", f.fundacao_de);
   if (f.fundacao_ate) p.append("fundacao_ate", f.fundacao_ate);
   if (f.incluir_inativas === false) p.append("incluir_inativas", "false");
-  (f.potencial ?? []).forEach(v => p.append("potencial", v));
-  if (f.ordenar_por) p.append("ordenar_por", f.ordenar_por);
+  // potencial removido (tabela empresas_potencial dropada em 2026-09);
+  // o campo segue no tipo pra nao quebrar filtros salvos antigos.
+  if (f.ordenar_por && f.ordenar_por !== "potencial") p.append("ordenar_por", f.ordenar_por);
   return p;
 }
 
@@ -841,6 +842,40 @@ export async function listarNotificacoes(lidas?: boolean): Promise<Notificacao[]
 
 export async function marcarNotificacaoLida(id: number): Promise<{ ok: boolean }> {
   return request(`/api/v1/notificacoes/${id}/ler`, { method: "POST" });
+}
+
+// ==================== PUSH (PWA) + BROADCAST ====================
+
+export interface VapidInfo {
+  publicKey: string | null;
+  enabled: boolean;
+}
+
+export async function getVapidPublicKey(): Promise<VapidInfo> {
+  return request("/api/v1/push/vapid-public-key");
+}
+
+export async function subscribePush(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<{ ok: boolean }> {
+  return request("/api/v1/push/subscribe", { method: "POST", body: JSON.stringify(sub) });
+}
+
+export async function unsubscribePush(endpoint: string): Promise<{ ok: boolean }> {
+  return request("/api/v1/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }) });
+}
+
+export interface BroadcastResult {
+  ok: boolean;
+  organizacoes: number;
+  avisos_sino: number;
+  push: { enviados: number; falhos: number };
+  push_configurado: boolean;
+}
+
+export async function broadcastPush(titulo: string, mensagem: string, alvo: "minha_empresa" | "todas"): Promise<BroadcastResult> {
+  return request("/api/v1/push/broadcast", {
+    method: "POST",
+    body: JSON.stringify({ titulo, mensagem, alvo }),
+  });
 }
 
 // Sobre / status do sistema (aba "Sobre" em Configuracoes)

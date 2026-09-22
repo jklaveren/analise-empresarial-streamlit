@@ -3,9 +3,14 @@ database_config.py -- Configuracao e schema para sincronizar os dados
 extraidos da Receita Federal / PGFN (whodados/pipeline/pipeline.py) com o
 Postgres (Supabase).
 
-Usado por whodados/scripts/sync_data_to_db.py, executado automaticamente
-pelo GitHub Action em .github/workflows/whodados-etl.yml (ou manualmente
-via "workflow_dispatch" na aba Actions do GitHub).
+ARQUIVO CANONICO. Existe uma copia identica em C:/whodados/whodados_etl/
+(database_config.py) usada apenas para rodar o ETL local fora do repo:
+ao alterar ESTE arquivo, copie para la (e vice-versa) -- os dois precisam
+permanecer identicos (o sync nao verifica isso automaticamente).
+
+Usado por whodados/scripts/sync_data_to_db.py, executado manualmente no
+ETL local (C:/whodados/whodados_etl/BAIXAR_DADOS.bat). A automacao via GitHub
+Actions foi removida em 2026-09.
 
 As tabelas de DADOS criadas aqui (dados_empresas, dados_socios, municipios)
 sao distintas das tabelas da APLICACAO (crm, campanhas, notificacoes, etc.),
@@ -229,9 +234,17 @@ def criar_indices_dados() -> None:
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cnpj_completo '''
                 f'''ON {TABELA_EMPRESAS} ("CNPJ_COMPLETO")'''
             )
+            # Indices de faixa (range) do funil + ranking top-dividas.
+            # Criados aqui porque o sync usa to_sql replace (recria a tabela
+            # do zero e derruba os indices a cada carga) -- tudo que nao
+            # estiver nesta funcao SOME no proximo ETL.
             cur.execute(
-                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cnpj_basico '''
-                f'''ON {TABELA_EMPRESAS} ("CNPJ_BASICO")'''
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_divida_total '''
+                f'''ON {TABELA_EMPRESAS} ("DIVIDA_TOTAL")'''
+            )
+            cur.execute(
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_capital_social '''
+                f'''ON {TABELA_EMPRESAS} ("CAPITAL_SOCIAL")'''
             )
             # Usados pelos endpoints de analytics (GROUP BY / JOIN por setor
             # e por municipio) e pelo filtro de listagem de empresas.
