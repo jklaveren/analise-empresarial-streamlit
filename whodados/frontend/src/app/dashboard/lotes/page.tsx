@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, type OpcoesFiltro } from "@/lib/api";
+import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, contarEmpresas, type OpcoesFiltro } from "@/lib/api";
 import { MultiSelect } from "@/components/MultiSelect";
 
 // Nomes que o backend entende (codigos RF 01/03/05); rotulo so pra tela.
@@ -27,6 +27,8 @@ export default function LotesPage() {
   const [porteFiltro, setPorteFiltro] = useState<string[]>([]);
   const [dividaMin, setDividaMin] = useState("");
   const [criando, setCriando] = useState(false);
+  const [previa, setPrevia] = useState<number | null>(null);
+  const [prevendo, setPrevendo] = useState(false);
 
   // Lote selecionado para detalhe / modal de campanha
   const [loteDetalhe, setLoteDetalhe] = useState<any | null>(null);
@@ -68,6 +70,35 @@ export default function LotesPage() {
     label: `${c.codigo} - ${c.descricao}${c.qtd ? ` (${c.qtd.toLocaleString("pt-BR")})` : ""}`,
   })), [opcoes]);
 
+  // Filtros do form no formato que a API espera (mesmo objeto usado na
+  // previa e na criacao -- se divergirem, o total salvo nao bate com o lote).
+  const filtrosAtuais = useMemo(() => {
+    const f: any = {};
+    if (cidadeFiltro.length > 0) f.cidade = cidadeFiltro;
+    if (cnaeFiltro.length > 0) f.cnae = cnaeFiltro;
+    if (capitalMin) f.capital_min = parseFloat(capitalMin);
+    if (fundacaoDe.trim()) f.fundacao_de = fundacaoDe.trim();
+    if (porteFiltro.length > 0) f.porte = porteFiltro;
+    if (dividaMin) f.divida_min = parseFloat(dividaMin);
+    return f;
+  }, [cidadeFiltro, cnaeFiltro, capitalMin, fundacaoDe, porteFiltro, dividaMin]);
+
+  // Conta antes de salvar: da pra ajustar o filtro sem criar lote vazio.
+  // Espera 600ms parado pra nao contar a cada tecla.
+  useEffect(() => {
+    let vivo = true;
+    setPrevia(null);
+    if (Object.keys(filtrosAtuais).length === 0) return;
+    setPrevendo(true);
+    const t = setTimeout(() => {
+      contarEmpresas(filtrosAtuais)
+        .then(r => { if (vivo) setPrevia(r.total); })
+        .catch(() => { if (vivo) setPrevia(null); })
+        .finally(() => { if (vivo) setPrevendo(false); });
+    }, 600);
+    return () => { vivo = false; clearTimeout(t); setPrevendo(false); };
+  }, [filtrosAtuais]);
+
   async function handleCriarLote(e: React.FormEvent) {
     e.preventDefault();
     if (!nomeLote.trim()) {
@@ -78,15 +109,7 @@ export default function LotesPage() {
     setErro(null);
     setSucesso(null);
     try {
-      const filtros: any = {};
-      if (cidadeFiltro.length > 0) filtros.cidade = cidadeFiltro;
-      if (cnaeFiltro.length > 0) filtros.cnae = cnaeFiltro;
-      if (capitalMin) filtros.capital_min = parseFloat(capitalMin);
-      if (fundacaoDe.trim()) filtros.fundacao_de = fundacaoDe.trim();
-      if (porteFiltro.length > 0) filtros.porte = porteFiltro;
-      if (dividaMin) filtros.divida_min = parseFloat(dividaMin);
-
-      await criarLote({ nome: nomeLote.trim(), filtros });
+      await criarLote({ nome: nomeLote.trim(), filtros: filtrosAtuais });
       setSucesso("Lote criado com sucesso!");
       setNomeLote("");
       setCidadeFiltro([]);
@@ -250,7 +273,20 @@ export default function LotesPage() {
             </div>
           </div>
 
-          <div className="flex justify-end pt-2">
+          <div className="flex items-center justify-between pt-2 gap-4">
+            <div className="text-sm">
+              {prevendo ? (
+                <span className="text-slate-400">Contando empresas...</span>
+              ) : previa != null ? (
+                <span className={previa === 0 ? "text-amber-600 font-medium" : "text-slate-600"}>
+                  {previa === 0
+                    ? "Nenhuma empresa com esses filtros — ajuste antes de salvar."
+                    : <><strong className="text-indigo-600">{previa.toLocaleString("pt-BR")}</strong> empresas com esses filtros</>}
+                </span>
+              ) : (
+                <span className="text-slate-400">Escolha um filtro para ver o total.</span>
+              )}
+            </div>
             <button
               type="submit"
               disabled={criando}
