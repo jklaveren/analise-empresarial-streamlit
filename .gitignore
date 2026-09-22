@@ -34,6 +34,8 @@ whodados/pipeline/out/
 
 # Ambientes
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 .env.production
