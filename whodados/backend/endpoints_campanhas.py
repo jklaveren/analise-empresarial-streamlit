@@ -87,9 +87,17 @@ def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
     filtros = campanha.get("filtros") or {}
     ja_contatados = cnpjs_ja_contatados_campanha(campanha["id"])
 
+    # Passa o filtro INTEIRO. Antes so ia cidade/cnae/porte/busca/divida_min:
+    # uma campanha feita a partir de um lote com capital minimo ou data de
+    # fundacao disparava pra um conjunto maior do que o lote mostrava.
     empresas = listar_empresas_db(
         cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), porte=filtros.get("porte"),
-        busca=filtros.get("busca"), divida_min=filtros.get("divida_min"),
+        busca=filtros.get("busca"),
+        divida_min=filtros.get("divida_min"), divida_max=filtros.get("divida_max"),
+        capital_min=filtros.get("capital_min"), capital_max=filtros.get("capital_max"),
+        fundacao_de=filtros.get("fundacao_de"), fundacao_ate=filtros.get("fundacao_ate"),
+        incluir_inativas=filtros.get("incluir_inativas", True),
+        contato=filtros.get("contato"),
         potencial=filtros.get("potencial"), categoria=filtros.get("categoria"),
         limit=100000, offset=0, organizacao_id=org_id,
     )
