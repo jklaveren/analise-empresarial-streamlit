@@ -1,5 +1,16 @@
 """Testes do construtor de filtros do funil de empresas (sem banco)."""
+import pytest
+
 from backend.db.service import _where_empresas, _norm_lista
+
+
+@pytest.fixture(autouse=True)
+def _municipios_fake(monkeypatch):
+    """Cidade vira COD_MUNICIPIO via tabela municipios; aqui sem banco."""
+    monkeypatch.setattr(
+        "backend.db.service._mapa_municipios",
+        lambda: {"PORTO ALEGRE": ["8801"], "CANOAS": ["8803"], "SAO LEOPOLDO": ["8825"]},
+    )
 
 
 def test_norm_lista():
@@ -17,16 +28,21 @@ def test_where_vazio():
 
 def test_where_cidade_e_cnae():
     where, params = _where_empresas(cidade=["Porto Alegre", "Canoas"], cnae=["0111301"])
-    assert "m.nome_municipio = ANY(%s)" in where
+    assert '"COD_MUNICIPIO" = ANY(%s)' in where
     assert 'e."CNAE_PRINCIPAL" = ANY(%s)' in where
-    # municipios guarda MAIUSCULO sem acento: normaliza o que foi digitado.
-    assert ["PORTO ALEGRE", "CANOAS"] in params
+    # O nome digitado vira codigo de municipio antes do WHERE.
+    assert ["8801", "8803"] in params
     assert ["0111301"] in params
 
 
 def test_where_cidade_sem_acento():
     _, params = _where_empresas(cidade=["São Leopoldo"])
-    assert ["SAO LEOPOLDO"] in params
+    assert ["8825"] in params
+
+
+def test_where_cidade_inexistente_nao_devolve_base_toda():
+    _, params = _where_empresas(cidade=["Cidade Que Nao Existe"])
+    assert ["__nenhum__"] in params
 
 
 def test_where_cnae_prefixo_vira_faixa():

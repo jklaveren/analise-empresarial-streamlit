@@ -5,6 +5,7 @@ import re
 from typing import List, Dict, Optional, Any
 from .filtros import (
     PORTE_NOME_SQL, cidades_normalizadas, clausula_cnae, codigos_porte,
+    sem_acento_upper,
 )
 try:
     from .config import (get_db_cursor, get_tipos_dados_empresas, expr_numerica,
@@ -1270,6 +1271,46 @@ def _norm_lista(v) -> List[str]:
     return [str(x) for x in v if x is not None and str(x) != ""]
 
 
+# Cache do mapa nome do municipio -> codigos. O filtro de cidade precisa
+# virar COD_MUNICIPIO antes do WHERE: filtrando pelo JOIN, o planejador
+# estima as linhas dividindo pelos 5.572 municipios do Brasil (da 135 onde
+# Porto Alegre tem 152 mil), escolhe o plano errado e a listagem por cidade
+# leva 14s em vez de 0,2s. A tabela tem 5.572 linhas e muda uma vez por mes.
+_MUNICIPIOS_CACHE: Dict[str, List[str]] = {}
+_MUNICIPIOS_CACHE_TS: float = 0.0
+_MUNICIPIOS_TTL = 3600.0
+
+
+def _mapa_municipios() -> Dict[str, List[str]]:
+    global _MUNICIPIOS_CACHE, _MUNICIPIOS_CACHE_TS
+    import time as _time
+    if _MUNICIPIOS_CACHE and (_time.time() - _MUNICIPIOS_CACHE_TS) < _MUNICIPIOS_TTL:
+        return _MUNICIPIOS_CACHE
+    mapa: Dict[str, List[str]] = {}
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("SELECT nome_municipio, cod_municipio FROM municipios "
+                        "WHERE cod_municipio IS NOT NULL AND nome_municipio <> ''")
+            for row in cur.fetchall():
+                mapa.setdefault(sem_acento_upper(row["nome_municipio"]), []).append(row["cod_municipio"])
+    except Exception as e:
+        log.warning(f"_mapa_municipios falhou: {e}")
+        return _MUNICIPIOS_CACHE
+    _MUNICIPIOS_CACHE, _MUNICIPIOS_CACHE_TS = mapa, _time.time()
+    return mapa
+
+
+def codigos_municipio(nomes) -> List[str]:
+    """Nomes de cidade -> COD_MUNICIPIO. Nome desconhecido some da lista."""
+    mapa = _mapa_municipios()
+    codigos: List[str] = []
+    for nome in cidades_normalizadas(_norm_lista(nomes)):
+        for cod in mapa.get(nome, []):
+            if cod not in codigos:
+                codigos.append(cod)
+    return codigos
+
+
 def _where_empresas(
     cidade=None, cnae=None, porte=None, busca=None,
     divida_min=None, divida_max=None, capital_min=None, capital_max=None,
@@ -1289,9 +1330,11 @@ def _where_empresas(
     div_expr = expr_numerica("DIVIDA_TOTAL", tipos)
     cap_expr = expr_numerica("CAPITAL_SOCIAL", tipos)
     fundacao_e_date = data_fundacao_is_date(tipos)
-    cidades = cidades_normalizadas(_norm_lista(cidade))
-    if cidades:
-        clauses.append("m.nome_municipio = ANY(%s)"); params.append(cidades)
+    if _norm_lista(cidade):
+        # Cidade vira codigo (ver _mapa_municipios). Nome que nao existe =
+        # zero resultado, nao base inteira.
+        cods = codigos_municipio(cidade)
+        clauses.append('e."COD_MUNICIPIO" = ANY(%s)'); params.append(cods or ["__nenhum__"])
     cnaes = _norm_lista(cnae)
     if cnaes:
         sql_cnae, p_cnae = clausula_cnae(cnaes)

@@ -111,8 +111,11 @@ def _filtros_sql(
     params: list = []
 
     if cidades:
-        cond.append("m.nome_municipio = ANY(%s)")
-        params.append(cidades_normalizadas(list(cidades)))
+        # Mesma razao da listagem (ver _mapa_municipios em service.py): o
+        # filtro pelo nome via JOIN faz o planejador subestimar as linhas.
+        from .service import codigos_municipio
+        cond.append('e."COD_MUNICIPIO" = ANY(%s)')
+        params.append(codigos_municipio(list(cidades)) or ["__nenhum__"])
     if cnaes:
         sql_cnae, p_cnae = clausula_cnae(list(cnaes))
         cond.append(sql_cnae)
@@ -225,7 +228,12 @@ def analytics_resumo(**filtros) -> Dict[str, Any]:
                     {_BASE_FROM}
                     WHERE 1=1 {where}
                     """,
-                    [*params, _REGEX_INATIVAS, *params_sem_toggle],
+                    # Ordem = ordem dos %s no SQL acima: o regex e o
+                    # where_sem_toggle estao DENTRO do FILTER, que vem antes
+                    # do WHERE final. Invertido, o regex recebia a lista de
+                    # cidades ("~* ARRAY[...]") e o resumo por cidade caia no
+                    # except devolvendo tudo zerado.
+                    [_REGEX_INATIVAS, *params_sem_toggle, *params],
                 )
             row = cur.fetchone() or {}
             inativas = (row or {}).get("qtd_inativas", 0)

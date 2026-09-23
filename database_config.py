@@ -246,15 +246,34 @@ def criar_indices_dados() -> None:
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_capital_social '''
                 f'''ON {TABELA_EMPRESAS} ("CAPITAL_SOCIAL")'''
             )
+            # Tabelas de dominio: sem indice, o LEFT JOIN de toda listagem
+            # varre municipios/cnaes inteiros por linha retornada.
+            cur.execute(
+                f'''CREATE UNIQUE INDEX IF NOT EXISTS idx_municipios_cod '''
+                f'''ON {TABELA_MUNICIPIOS} (cod_municipio)'''
+            )
+            cur.execute(
+                f'''CREATE UNIQUE INDEX IF NOT EXISTS idx_cnaes_codigo '''
+                f'''ON {TABELA_CNAES} (codigo_cnae)'''
+            )
             # Usados pelos endpoints de analytics (GROUP BY / JOIN por setor
             # e por municipio) e pelo filtro de listagem de empresas.
+            # Ordenacao padrao da listagem (ORDER BY RAZAO_SOCIAL). Sem ele a
+            # primeira pagina vira sort de 750 mil linhas: 10s em vez de 0,1s.
+            cur.execute(
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_razao_social '''
+                f'''ON {TABELA_EMPRESAS} ("RAZAO_SOCIAL")'''
+            )
             cur.execute(
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cnae '''
                 f'''ON {TABELA_EMPRESAS} ("CNAE_PRINCIPAL")'''
             )
+            # Cidade + ordenacao numa tacada: a listagem filtrada por cidade
+            # ordena por RAZAO_SOCIAL, e sem o indice composto o banco le
+            # todas as linhas da cidade pra devolver 100 (14s em Porto Alegre).
             cur.execute(
-                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_cod_municipio '''
-                f'''ON {TABELA_EMPRESAS} ("COD_MUNICIPIO")'''
+                f'''CREATE INDEX IF NOT EXISTS idx_dados_empresas_municipio_razao '''
+                f'''ON {TABELA_EMPRESAS} ("COD_MUNICIPIO", "RAZAO_SOCIAL")'''
             )
             cur.execute(
                 f'''CREATE INDEX IF NOT EXISTS idx_dados_socios_cnpj_basico '''
