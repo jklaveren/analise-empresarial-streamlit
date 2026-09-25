@@ -1,6 +1,9 @@
 # 🛡️ WhoDados
 
-Sistema de análise e prospecção empresarial com dados públicos (Receita Federal + PGFN).
+### WhoDados — Plataforma B2B em Produção (NRA Advocacia)
+Plataforma B2B multitenant em produção para inteligência empresarial: investigação de sócios, sócios ocultos e dívidas ativas federais, com CRM, gestão de tarefas e campanhas multicanal (E-mail + WhatsApp).
+Construída com agentes Anthropic Claude AI para automação de pesquisas investigativas.
+Stack: Next.js (Vercel) + FastAPI JWT (Render) + PostgreSQL (Supabase) multiempresa hierárquica.
 
 > 📦 **Todo o stack da aplicação está em [`whodados/`](./whodados/)** — Next.js + FastAPI + Supabase.
 
