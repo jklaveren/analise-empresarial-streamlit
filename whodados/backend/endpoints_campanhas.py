@@ -10,7 +10,7 @@ from .db import (
     create_campanha, get_campanha, get_all_campanhas, update_campanha_status,
     get_template, create_notificacao, listar_empresas_db,
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
-    listar_campanhas_pendentes, buscar_socios_principais,
+    listar_campanhas_pendentes, buscar_socios_principais, contar_emails_enviados_hoje,
     org_escopo_base, email_esta_descadastrado,
 )
 from .mailer import enviar_campanha
@@ -165,7 +165,17 @@ async def previa_do_lote(campanha_id: int, current_user: Dict = Depends(get_curr
     }
 
 
-def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
+def _orcamento_email_hoje() -> Optional[int]:
+    """Quantos e-mails ainda cabem hoje no limite do provedor, ou None se a
+    checagem estiver desligada (EMAIL_LIMITE_DIARIO=0)."""
+    limite = int(getattr(settings, "EMAIL_LIMITE_DIARIO", 0) or 0)
+    if limite <= 0:
+        return None
+    return max(limite - contar_emails_enviados_hoje(), 0)
+
+
+def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int,
+                      max_envios: Optional[int] = None) -> Dict:
     """Manda o proximo lote (ou a campanha inteira, se tamanho_lote nao
     estiver definido -- comportamento antigo preservado). Pode ser chamado
     repetidas vezes: cada chamada avanca sobre quem ainda nao foi
@@ -181,6 +191,16 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int) -> Dict:
     if not lote:
         update_campanha_status(campanha_id, "concluida", concluida_em=datetime.now(timezone.utc))
         return {"sucessos": 0, "erros": 0, "restantes": 0, "status": "concluida"}
+
+    # Teto diario do provedor (so' e-mail; WhatsApp tem limite proprio no
+    # Twilio). Corta o lote no que ainda cabe hoje -- a campanha segue
+    # 'em_andamento' e o resto sai no proximo dia, sem virar erro de envio.
+    if canal == "email" and max_envios is not None:
+        if max_envios <= 0:
+            return {"sucessos": 0, "erros": 0, "restantes": pendentes_total,
+                    "status": campanha.get("status") or "em_andamento",
+                    "adiado_por_limite": True}
+        lote = lote[:max_envios]
 
     if canal == "whatsapp":
         resultado = _enviar_lote_whatsapp(campanha_id, lote, campanha.get("mensagem") or "")
@@ -295,7 +315,9 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
     if campanha.get("status") not in _STATUS_EXECUTAVEIS:
         raise HTTPException(status_code=400, detail="Campanha ja concluida")
-    return _executar_um_lote(campanha, current_user, org_id)
+    # Disparo manual entra no mesmo teto diario do cron.
+    return _executar_um_lote(campanha, current_user, org_id,
+                             max_envios=_orcamento_email_hoje())
 
 
 @router.post("/campanhas/executar-pendentes")
@@ -312,11 +334,26 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
     if not secret_esperado or x_cron_secret != secret_esperado:
         raise HTTPException(status_code=403, detail="CRON_SECRET invalido ou nao configurado")
 
+    # Fila: o orcamento do dia e' da CONTA inteira, nao por campanha. As
+    # campanhas consomem em ordem ate acabar; as que nao couberem hoje ficam
+    # 'em_andamento' e entram na proxima execucao do cron.
+    orcamento = _orcamento_email_hoje()
+    orcamento_inicial = orcamento
+
     resultados = []
     for campanha in listar_campanhas_pendentes():
         try:
-            r = _executar_um_lote(campanha, {"sub": "cron"}, campanha.get("organizacao_id"))
+            r = _executar_um_lote(campanha, {"sub": "cron"}, campanha.get("organizacao_id"),
+                                  max_envios=orcamento)
+            if orcamento is not None and (campanha.get("canal") or "email") == "email":
+                orcamento = max(orcamento - int(r.get("sucessos", 0) or 0), 0)
             resultados.append({"campanha_id": campanha["id"], "nome": campanha["nome"], **r})
         except Exception as e:
             resultados.append({"campanha_id": campanha["id"], "nome": campanha["nome"], "erro": str(e)})
-    return {"processadas": len(resultados), "resultados": resultados}
+    return {
+        "processadas": len(resultados),
+        "limite_diario": int(getattr(settings, "EMAIL_LIMITE_DIARIO", 0) or 0),
+        "orcamento_inicial": orcamento_inicial,
+        "orcamento_restante": orcamento,
+        "resultados": resultados,
+    }

@@ -483,12 +483,97 @@ def create_email_enviado(campaign_id: Optional[int], cnpj: str, email_destino: s
         )
         return cur.fetchone()
 
-def update_email_enviado(email_id: int, status: str, erro: Optional[str] = None) -> None:
+def update_email_enviado(email_id: int, status: str, erro: Optional[str] = None,
+                         message_id: Optional[str] = None) -> None:
+    """message_id: o Message-ID do SMTP. E' a chave que liga este registro aos
+    eventos do webhook do provedor (entrega, abertura, clique, bounce)."""
     with get_db_cursor() as cur:
-        if erro:
-            cur.execute("UPDATE emails_enviados SET status = %s, erro = %s, enviado_em = NOW() WHERE id = %s", (status, erro, email_id))
-        else:
-            cur.execute("UPDATE emails_enviados SET status = %s, enviado_em = NOW() WHERE id = %s", (status, email_id))
+        cur.execute(
+            """UPDATE emails_enviados
+                  SET status = %s,
+                      erro = COALESCE(%s, erro),
+                      message_id = COALESCE(%s, message_id),
+                      enviado_em = NOW()
+                WHERE id = %s""",
+            (status, erro, message_id, email_id),
+        )
+
+
+_EVENTO_COLUNA = {
+    "delivered": "entregue_em",
+    "opened": "aberto_em",
+    "unique_opened": "aberto_em",
+}
+_EVENTO_BOUNCE = ("hard_bounce", "soft_bounce", "blocked", "spam", "invalid_email", "deferred")
+
+
+def registrar_evento_email(evento: str, email: str, message_id: Optional[str] = None,
+                           link: Optional[str] = None, motivo: Optional[str] = None) -> bool:
+    """Grava um evento do provedor no registro de envio correspondente.
+
+    Casa primeiro por message_id; sem ele (ou sem correspondencia) cai no
+    envio mais recente para aquele destinatario, que e' o que o evento
+    quase sempre se refere.
+
+    Idempotente: o Brevo reenvia o mesmo evento em caso de falha, e as
+    colunas de data so' sao gravadas quando ainda estao nulas."""
+    evento = (evento or "").lower().strip()
+    email = (email or "").strip().lower()
+    if not evento or not email:
+        return False
+    try:
+        with get_db_cursor() as cur:
+            alvo = None
+            if message_id:
+                cur.execute(
+                    "SELECT id FROM emails_enviados WHERE message_id = %s ORDER BY id DESC LIMIT 1",
+                    (message_id,),
+                )
+                row = cur.fetchone()
+                alvo = row["id"] if row else None
+            if alvo is None:
+                cur.execute(
+                    """SELECT id FROM emails_enviados
+                        WHERE LOWER(email_destino) = %s
+                        ORDER BY criado_em DESC LIMIT 1""",
+                    (email,),
+                )
+                row = cur.fetchone()
+                alvo = row["id"] if row else None
+            if alvo is None:
+                return False
+
+            if evento == "click":
+                cur.execute(
+                    """UPDATE emails_enviados
+                          SET clicado_em = COALESCE(clicado_em, NOW()),
+                              cliques = COALESCE(cliques, 0) + 1,
+                              ultimo_link = COALESCE(%s, ultimo_link)
+                        WHERE id = %s""",
+                    (link, alvo),
+                )
+            elif evento in _EVENTO_BOUNCE:
+                cur.execute(
+                    f"""UPDATE emails_enviados
+                           SET bounce_em = COALESCE(bounce_em, NOW()),
+                               bounce_tipo = %s,
+                               bounce_motivo = COALESCE(%s, bounce_motivo),
+                               status = 'nao_entregue'
+                         WHERE id = %s""",
+                    (evento, motivo, alvo),
+                )
+            elif evento in _EVENTO_COLUNA:
+                coluna = _EVENTO_COLUNA[evento]
+                cur.execute(
+                    f"UPDATE emails_enviados SET {coluna} = COALESCE({coluna}, NOW()) WHERE id = %s",
+                    (alvo,),
+                )
+            else:
+                return False
+            return True
+    except Exception as e:
+        log.warning(f"registrar_evento_email({evento}) falhou: {e}")
+        return False
 
 def get_emails_enviados_by_campanha(campaign_id: int) -> List[Dict[str, Any]]:
     with get_db_cursor() as cur:
@@ -2400,6 +2485,30 @@ def contar_envios_campanha(campanha_id: int) -> int:
         cur.execute("SELECT COUNT(*) AS n FROM campanha_envios WHERE campanha_id = %s", (campanha_id,))
         row = cur.fetchone()
         return int(row["n"]) if row else 0
+
+
+def contar_emails_enviados_hoje() -> int:
+    """E-mails que ja sairam hoje, na conta inteira (todas as campanhas e
+    organizacoes) -- e' assim que o provedor conta o limite diario.
+
+    Data em UTC porque e' quando o contador do Brevo vira. Envio manual e
+    envio do cron entram no mesmo total: sem isso, um disparo manual de
+    manha estouraria o teto quando o cron rodasse."""
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) AS n FROM emails_enviados
+                   WHERE status = 'enviado' AND enviado_em IS NOT NULL
+                     AND (enviado_em AT TIME ZONE 'UTC')::date
+                         = (NOW() AT TIME ZONE 'UTC')::date"""
+            )
+            row = cur.fetchone()
+            return int(row["n"]) if row else 0
+    except Exception as e:
+        # Falha na contagem nao pode liberar envio ilimitado: devolve o teto
+        # como se ja tivesse estourado.
+        log.warning(f"contar_emails_enviados_hoje falhou: {e}")
+        return 10**9
 
 
 def listar_campanhas_pendentes() -> List[Dict[str, Any]]:

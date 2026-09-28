@@ -17,6 +17,7 @@ from .service import (
     create_password_reset_token, get_password_reset_token, mark_password_reset_token_used, update_user_password,
     # Monitor de emails (follow-up com semaforo)
     get_emails_for_monitor, get_monitor_stats, get_emails_vermelhos_para_followup, marcar_email_aberto,
+    registrar_evento_email,
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
     org_escopo_base, listar_carteira_db, contar_carteira_db, get_carteira_by_cnpj,
@@ -35,7 +36,7 @@ from .service import (
     buscar_empresa_por_telefone,
     # Campanhas em lote
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
-    listar_campanhas_pendentes,
+    listar_campanhas_pendentes, contar_emails_enviados_hoje,
     # CRM: atividades/tarefas
     listar_usuarios_da_org, criar_atividade_crm, listar_atividades_crm,
     contar_atividades_pendentes, concluir_atividade_crm, deletar_atividade_crm,

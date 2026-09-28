@@ -4,6 +4,7 @@ import smtplib
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import make_msgid
 from typing import Dict, Optional, List, Any
 
 try:
@@ -208,6 +209,12 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
         msg["Subject"] = assunto
         msg["From"] = f"{cfg.get('email_from_name')} <{cfg.get('email_from')}>"
         msg["To"] = para
+        # Message-ID proprio: e' a chave que casa os eventos do webhook do
+        # provedor (entrega/abertura/clique/bounce) com este envio. Sem ele o
+        # relay gera um que nunca chega ao nosso banco.
+        dominio = (cfg.get("email_from") or "").split("@")[-1] or None
+        msg_id = make_msgid(domain=dominio)
+        msg["Message-ID"] = msg_id
         if corpo_texto:
             msg.attach(MIMEText(corpo_texto, "plain", "utf-8"))
         msg.attach(MIMEText(corpo_html, "html", "utf-8"))
@@ -216,7 +223,7 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
                 server.login(cfg.get("username"), cfg.get("password"))
             server.sendmail(cfg.get("email_from"), [para], msg.as_string())
         log.info(f"Email enviado para {para}: {assunto}")
-        return {"sucesso": True, "para": para, "assunto": assunto}
+        return {"sucesso": True, "para": para, "assunto": assunto, "message_id": msg_id}
     except Exception as e:
         log.error(f"Erro ao enviar email para {para}: {e}")
         return {"sucesso": False, "para": para, "erro": str(e)}
@@ -389,7 +396,8 @@ def enviar_template_para_cnpjs(
             })
             if email_rec and "id" in email_rec:
                 try:
-                    update_email_enviado(email_rec["id"], "enviado")
+                    update_email_enviado(email_rec["id"], "enviado",
+                                         message_id=result.get("message_id"))
                 except Exception:
                     pass
         else:

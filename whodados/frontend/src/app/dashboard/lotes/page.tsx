@@ -157,7 +157,8 @@ export default function LotesPage() {
         template_id: templateIdCampanha ? Number(templateIdCampanha) : undefined,
         canal: canalCampanha,
         mensagem: canalCampanha === "whatsapp" ? mensagemCampanha : undefined,
-        tamanho_lote: parseInt(tamanhoLoteEnvio) || 100,
+        // 300 = teto diario do Brevo free; o backend corta no que couber.
+        tamanho_lote: parseInt(tamanhoLoteEnvio) || 300,
       });
       alert("Campanha criada com sucesso a partir do lote!");
       setModalCampanhaLote(null);

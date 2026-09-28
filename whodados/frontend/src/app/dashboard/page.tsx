@@ -8,7 +8,7 @@ import { FunilInsights } from "@/components/FunilInsights";
 import { TopEmpresasRanking } from "@/components/TopEmpresasRanking";
 import { ConsultaNaturalBox } from "@/components/ConsultaNaturalBox";
 import { useAuth } from "@/lib/auth-context";
-import { listarEmpresas, contarEmpresas, getOpcoesFiltro, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
+import { listarEmpresas, contarEmpresas, getOpcoesFiltro, criarLote, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
 
 const PAGE_SIZE = 50;
 
@@ -17,6 +17,30 @@ const PAGE_SIZE = 50;
 // So conveniencia de UI: nao sincroniza entre abas/dispositivos, entao
 // nunca deve ser a unica fonte de um dado importante.
 const FILTROS_STORAGE_KEY = "whodados:empresas:filtros";
+
+// Abaixo disto o LIKE '%x%' casa com quase toda a base e nao usa
+// idx_dados_empresas_razao_social (curinga a esquerda).
+const BUSCA_MIN_CHARS = 3;
+
+/**
+ * Gate de consulta: sem selecao restringida a tela nao vai ao banco.
+ * Sem filtro o mount disparava 7 queries sobre 1,68M linhas
+ * (count + pagina + 4 agregados + ranking).
+ *
+ * `incluir_inativas` excluido: default ligado, nao selecao do usuario, e
+ * nao reduz o custo da query.
+ */
+function temFiltroAtivo(f: EmpresaFiltros): boolean {
+  return Boolean(
+    f.cidade?.length ||
+    f.cnae?.length ||
+    f.porte?.length ||
+    (f.busca && f.busca.trim().length >= BUSCA_MIN_CHARS) ||
+    f.divida_min != null || f.divida_max != null ||
+    f.capital_min != null || f.capital_max != null ||
+    f.fundacao_de || f.fundacao_ate
+  );
+}
 
 interface FiltrosSalvos {
   cidade: string[]; porte: string[]; cnae: string[]; busca: string;
@@ -56,6 +80,9 @@ export default function DashboardPage() {
   const [fundacaoAte, setFundacaoAte] = useState(salvos.fundacaoAte ?? "");
   const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? true);
   const [page, setPage] = useState(0);
+  const [criandoLote, setCriandoLote] = useState(false);
+  const [avisoLote, setAvisoLote] = useState("");
+  const [loteCriado, setLoteCriado] = useState(false);
 
   // Opcoes dos multiselects -- cachea por 30min (cidades/portes/cnaes mudam
   // raro). Assim voltar pra tela nao dispara essa query.
@@ -121,9 +148,14 @@ export default function DashboardPage() {
   // Contagem do funil -- cacheada pela combinacao de filtros. Trocar
   // filtro dispara uma nova query; voltar pra combinacao antiga usa o
   // valor em memoria (sem re-hit no banco).
+  // Deriva de `applied` (debounced 400ms): digitar na busca nao alterna o
+  // gate a cada tecla.
+  const temFiltro = temFiltroAtivo(applied);
+
   const countQuery = useQuery({
     queryKey: ["empresas-count", applied],
     queryFn: () => contarEmpresas(applied),
+    enabled: temFiltro,
   });
   const total = countQuery.data?.total ?? null;
 
@@ -135,9 +167,12 @@ export default function DashboardPage() {
     queryKey: ["empresas", applied, page],
     queryFn: () => listarEmpresas(applied, PAGE_SIZE, page * PAGE_SIZE),
     placeholderData: (prev) => prev,
+    enabled: temFiltro,
   });
   const empresas: EmpresaItem[] = empresasQuery.data ?? [];
-  const loading = empresasQuery.isPending;
+  // isLoading, nao isPending: com enabled=false o status fica 'pending'
+  // indefinidamente e a tabela exibiria "Carregando..." sem query em voo.
+  const loading = empresasQuery.isLoading;
   const error = empresasQuery.isError ? "Erro ao carregar empresas." : "";
 
   const cidadeOptions = useMemo(() => (opcoes?.cidades ?? []).map(c => ({ value: c, label: c })), [opcoes]);
@@ -156,19 +191,65 @@ export default function DashboardPage() {
     try { localStorage.removeItem(FILTROS_STORAGE_KEY); } catch { /* ignora */ }
   };
 
+  // Manda `applied` inteiro. O form de /dashboard/lotes so' aceita 6 campos;
+  // o backend (criar_lote, get_lote, _selecionar_lote) usa o filtro completo,
+  // entao o lote criado aqui bate com o total exibido na tela.
+  async function criarLoteDoFiltro() {
+    const sugestao = `Lote ${new Date().toLocaleDateString("pt-BR")}`
+      + (total != null ? ` - ${total.toLocaleString("pt-BR")} empresas` : "");
+    const nome = window.prompt("Nome do lote:", sugestao);
+    if (!nome?.trim()) return;
+    setCriandoLote(true);
+    setAvisoLote("");
+    setLoteCriado(false);
+    try {
+      const lote = await criarLote({ nome: nome.trim(), filtros: applied });
+      setAvisoLote(`Lote "${lote.nome}" criado com ${lote.total_encontrado.toLocaleString("pt-BR")} empresas.`);
+      setLoteCriado(true);
+    } catch (e: unknown) {
+      setAvisoLote(e instanceof Error ? e.message : "Erro ao criar lote.");
+    } finally {
+      setCriandoLote(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Empresas</h1>
           <p className="text-slate-500 mt-1">
-            {total != null
-              ? <><strong className="text-indigo-700">{total.toLocaleString("pt-BR")}</strong> empresas neste filtro</>
-              : "Contando..."}
+            {!temFiltro
+              ? "Escolha um filtro para consultar a base"
+              : total != null
+                ? <><strong className="text-indigo-700">{total.toLocaleString("pt-BR")}</strong> empresas neste filtro</>
+                : "Contando..."}
           </p>
         </div>
-        <button onClick={limparFiltros} className="text-sm text-slate-500 hover:text-slate-800 underline">Limpar filtros</button>
+        <div className="flex items-center gap-3">
+          {temFiltro && !isVisitante && (
+            <button
+              onClick={criarLoteDoFiltro}
+              disabled={criandoLote || total == null || total === 0}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
+            >
+              {criandoLote ? "Criando..." : "Criar lote deste filtro"}
+            </button>
+          )}
+          <button onClick={limparFiltros} className="text-sm text-slate-500 hover:text-slate-800 underline">Limpar filtros</button>
+        </div>
       </header>
+
+      {avisoLote && (
+        <div className={`rounded-lg p-3 text-sm ${loteCriado ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}>
+          {avisoLote}
+          {loteCriado && (
+            <Link href="/dashboard/lotes" className="ml-2 font-semibold underline">
+              Abrir Lotes e disparar campanha
+            </Link>
+          )}
+        </div>
+      )}
 
       <ConsultaNaturalBox />
 
@@ -214,15 +295,30 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Gate por montagem, nao por visibilidade: componente nao montado nao
+          dispara useQuery/useEffect. E' o que corta os 5 agregados de
+          FunilInsights e TopEmpresasRanking, nao so' a lista paginada. */}
+      {!temFiltro && (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-12 text-center">
+          <p className="text-base font-medium text-slate-700">Escolha um filtro para começar</p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+            A base tem mais de 1,6 milhão de empresas. Selecione uma cidade, um
+            setor ou um porte acima — ou digite ao menos {BUSCA_MIN_CHARS} letras
+            na busca — e o painel carrega só a sua seleção.
+          </p>
+        </div>
+      )}
+
       {/* Insights agregados sobre a base filtrada inteira */}
-      <FunilInsights filtros={analyticsFiltros} />
+      {temFiltro && <FunilInsights filtros={analyticsFiltros} />}
 
       {/* Ranking das maiores empresas (divida ou capital) na selecao atual */}
-      <TopEmpresasRanking filtros={analyticsFiltros} />
+      {temFiltro && <TopEmpresasRanking filtros={analyticsFiltros} />}
 
       {error && <div className="rounded-lg bg-red-50 p-4 text-red-700">{error}</div>}
 
       {/* Tabela (página) */}
+      {temFiltro && (
       <div className="rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -273,6 +369,7 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
