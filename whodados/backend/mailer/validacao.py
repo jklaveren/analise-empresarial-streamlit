@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Optional
 
 try:
@@ -44,8 +45,27 @@ _MARCADOR_SOCIETARIO = re.compile(
     r"\b(ltda|limitada|eireli|epp|scp|spe|s/?a|me)\b", re.I)
 _SO_CONSOANTES = re.compile(r"^[^aeiouáéíóúâêôãõà]+$", re.I)
 
+# Palavra de ramo, sozinha, nao identifica ninguem: "Oi, Comercio!" e' pior
+# que nao personalizar. Vale so' como termo UNICO da saudacao -- "Comercio
+# Radunz" passa, "Comercio" nao.
+_GENERICOS = {
+    "comercio", "servicos", "servico", "industria", "industrias", "construtora",
+    "transportes", "transporte", "distribuidora", "representacoes", "participacoes",
+    "empreendimentos", "administradora", "assessoria", "consultoria", "consultores",
+    "associacao", "instituto", "fundacao", "fundo", "cooperativa", "condominio",
+    "sociedade", "organizacao", "grupo", "centro", "clinica", "escritorio",
+    "agencia", "atacado", "varejo", "loja", "casa", "oficina", "deposito",
+    "prefeitura", "municipio", "camara", "sindicato", "empresa", "firma",
+}
+
 # bloqueio = nao envia. aviso = envia, mas aparece no relatorio.
 BLOQUEIO, AVISO = "bloqueio", "aviso"
+
+
+def _normalizar_ascii(texto: str) -> str:
+    """minusculo e sem acento, para comparar com _GENERICOS."""
+    base = unicodedata.normalize("NFKD", (texto or "").strip().lower())
+    return "".join(c for c in base if not unicodedata.combining(c))
 
 
 def _checar_item(item: Dict[str, Any], vistos: set) -> List[Dict[str, str]]:
@@ -68,12 +88,18 @@ def _checar_item(item: Dict[str, Any], vistos: set) -> List[Dict[str, str]]:
             achados.append({"regra": "saudacao_com_marcador_societario",
                             "severidade": BLOQUEIO,
                             "detalhe": f"saudacao {saud!r} traz LTDA/ME/SA/SCP"})
-        if len(saud) < 3:
-            achados.append({"regra": "saudacao_curta", "severidade": AVISO,
-                            "detalhe": f"saudacao {saud!r} tem menos de 3 letras"})
-        if _SO_CONSOANTES.match(saud.replace(" ", "")):
-            achados.append({"regra": "saudacao_sem_vogal", "severidade": AVISO,
-                            "detalhe": f"saudacao {saud!r} parece sigla"})
+        # "Oi, Fm!" / "Oi, Sv!": fragmento de sigla que sobrou de nome de
+        # empresa. Bloqueio, nao aviso -- nao existe caso em que isso esteja
+        # certo, e era justamente o que o LLM ia pegar.
+        if len(saud.replace(" ", "")) <= 2:
+            achados.append({"regra": "saudacao_curta", "severidade": BLOQUEIO,
+                            "detalhe": f"saudacao {saud!r} tem 2 letras ou menos"})
+        elif _SO_CONSOANTES.match(saud.replace(" ", "")):
+            achados.append({"regra": "saudacao_sem_vogal", "severidade": BLOQUEIO,
+                            "detalhe": f"saudacao {saud!r} nao tem vogal -- e' sigla"})
+        if _normalizar_ascii(saud) in _GENERICOS:
+            achados.append({"regra": "saudacao_generica", "severidade": BLOQUEIO,
+                            "detalhe": f"{saud!r} e' palavra de ramo, nao identifica a empresa"})
 
     if not _EMAIL_RE.match(email):
         achados.append({"regra": "email_invalido", "severidade": BLOQUEIO,
@@ -139,7 +165,7 @@ def _validar_nomes_llm(nomes: List[str]) -> Dict[str, str]:
     return reprovados
 
 
-def validar_lote(itens: Iterable[Dict[str, Any]], usar_llm: bool = True) -> Dict[str, Any]:
+def validar_lote(itens: Iterable[Dict[str, Any]], usar_llm: bool = False) -> Dict[str, Any]:
     """Confere todos os e-mails montados e devolve o relatorio.
 
     itens: cada um com cnpj, email, saudacao, assunto, corpo_texto/corpo_html.
