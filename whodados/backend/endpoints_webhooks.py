@@ -46,9 +46,15 @@ async def webhook_brevo(request: Request, token: str = Query("")):
     desconhecido ou sem correspondencia no banco: qualquer outro codigo faz
     o Brevo reenviar o mesmo evento indefinidamente.
     """
+    # Mensagens distintas de proposito: sem isso nao da' pra saber, de fora,
+    # se o Render pegou a variavel ou se o token e' que esta errado. Nao
+    # vaza o segredo -- so' diz se existe um configurado.
     esperado = getattr(settings, "BREVO_WEBHOOK_SECRET", "") or ""
-    if not esperado or token != esperado:
-        raise HTTPException(status_code=403, detail="Token de webhook invalido ou nao configurado")
+    if not esperado:
+        raise HTTPException(status_code=403,
+                            detail="BREVO_WEBHOOK_SECRET nao configurado no servidor")
+    if token != esperado:
+        raise HTTPException(status_code=403, detail="Token de webhook invalido")
 
     try:
         corpo = await request.json()
