@@ -713,6 +713,8 @@ function RegrasNegocioTab() {
 function MeuEmailTab() {
   const [cfg, setCfg] = useState<MeuEmail | null>(null);
   const [form, setForm] = useState({ email_from: "", email_from_name: "", assinatura_html: "" });
+  const [smtp, setSmtp] = useState({ host: "", port: 587, username: "", use_tls: true });
+  const [smtpPass, setSmtpPass] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
 
@@ -725,17 +727,44 @@ function MeuEmailTab() {
           email_from_name: c.email_from_name || "",
           assinatura_html: c.assinatura_html || "",
         });
+        setSmtp({
+          host: c.smtp_host || "",
+          port: c.smtp_port || 587,
+          username: c.smtp_username || "",
+          use_tls: c.smtp_use_tls ?? true,
+        });
       })
       .catch(() => setFb({ t: "e", m: "Não consegui carregar sua configuração de e-mail." }));
   }, []);
 
   async function salvar(e: React.FormEvent) {
     e.preventDefault();
+    // Servidor proprio so vale completo: host sem usuario/senha tentaria
+    // autenticar no servidor novo com a credencial da empresa.
+    const proprio = Boolean(smtp.host.trim());
+    if (proprio && !smtp.username.trim()) {
+      setFb({ t: "e", m: "Informe o usuário do servidor." });
+      return;
+    }
+    if (proprio && !cfg?.tem_servidor_proprio && !smtpPass) {
+      setFb({ t: "e", m: "Informe a senha do servidor." });
+      return;
+    }
     setSalvando(true);
     setFb(null);
     try {
-      setCfg(await salvarMeuEmail(form));
-      setFb({ t: "s", m: "Salvo. Seus próximos envios saem com este remetente." });
+      setCfg(await salvarMeuEmail({
+        ...form,
+        ...(proprio ? {
+          smtp_host: smtp.host.trim(),
+          smtp_port: Number(smtp.port) || 587,
+          smtp_username: smtp.username.trim(),
+          smtp_use_tls: smtp.use_tls,
+          ...(smtpPass ? { smtp_password: smtpPass } : {}),
+        } : {}),
+      }));
+      setSmtpPass("");
+      setFb({ t: "s", m: "Salvo. Seus próximos envios saem por esta configuração." });
     } catch (err) {
       setFb({ t: "e", m: err instanceof Error ? err.message : "Erro ao salvar" });
     } finally {
@@ -799,10 +828,76 @@ function MeuEmailTab() {
           />
         </div>
 
-        {!padrao.configurado && (
+        <div className="border-t border-slate-200 pt-4 space-y-3">
+          <div>
+            <h3 className="font-semibold text-slate-800 text-sm">Meu servidor de envio</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Opcional. Em branco, usa o servidor da empresa
+              {padrao.smtp_host ? ` (${padrao.smtp_host})` : ""}. Preencha para enviar pelo
+              seu próprio — ex.: Gmail em <code>smtp.gmail.com</code> porta 587, com senha de app.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-slate-600 mb-1">Servidor (host)</label>
+              <input
+                type="text" value={smtp.host}
+                onChange={e => setSmtp({ ...smtp, host: e.target.value })}
+                placeholder={padrao.smtp_host || "smtp.gmail.com"}
+                autoComplete="off"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Porta</label>
+              <input
+                type="number" value={smtp.port}
+                onChange={e => setSmtp({ ...smtp, port: Number(e.target.value) })}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              />
+            </div>
+            <label className="flex items-end gap-2 pb-2 text-sm text-slate-600">
+              <input
+                type="checkbox" checked={smtp.use_tls}
+                onChange={e => setSmtp({ ...smtp, use_tls: e.target.checked })}
+              />
+              Usar TLS
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Usuário</label>
+              <input
+                type="text" value={smtp.username}
+                onChange={e => setSmtp({ ...smtp, username: e.target.value })}
+                placeholder="voce@empresa.com.br"
+                autoComplete="off"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Senha {cfg.tem_servidor_proprio && (
+                  <span className="font-normal text-slate-400">— em branco mantém a atual</span>
+                )}
+              </label>
+              <input
+                type="password" value={smtpPass}
+                onChange={e => setSmtpPass(e.target.value)}
+                placeholder={cfg.tem_servidor_proprio ? "••••••••" : "senha de app (16 caracteres)"}
+                autoComplete="new-password"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {!padrao.configurado && !smtp.host && (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-            Esta empresa ainda não tem servidor de e-mail configurado, então nada é enviado de
-            verdade — os disparos ficam como simulados. Configure o Brevo dela em Empresas.
+            Nem a empresa nem você têm servidor de e-mail configurado, então nada é enviado de
+            verdade — os disparos ficam como simulados.
           </div>
         )}
 

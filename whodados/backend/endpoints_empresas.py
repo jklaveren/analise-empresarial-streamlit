@@ -160,3 +160,56 @@ async def metricas(
     if org_escopo_base(org_id) == "carteira":
         return {"escopo_base": "carteira", "total_empresas": contar_carteira_db(org_id)}
     return get_metricas_db()
+
+
+@router.post("/empresas/{cnpj}/enviar-email")
+async def enviar_email_para_empresa(
+    cnpj: str, data: Dict,
+    current_user: Dict = Depends(get_current_user),
+    org_id: int = Depends(get_active_org),
+) -> Dict[str, Any]:
+    """Envia UM e-mail para UMA empresa, fora de campanha.
+
+    Passa pela mesma montagem das campanhas (assinatura, rodape de
+    descadastro, rastreamento) e respeita opt-out, entao o envio avulso nao
+    e' um caminho paralelo sem as regras do negocio.
+    """
+    from .db import create_email_enviado, update_email_enviado, get_template, email_esta_descadastrado
+    from .mailer import montar_email_para_cnpj, enviar_email
+    from .mailer.rastreamento import injetar as injetar_rastreamento
+    from .mailer.service import _smtp_efetivo
+
+    template_id = data.get("template_id")
+    if not template_id:
+        raise HTTPException(status_code=400, detail="Escolha um template")
+
+    empresa = get_empresa_by_cnpj_db(cnpj, organizacao_id=org_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+
+    destino = (data.get("email") or empresa.get("email") or "").strip()
+    if not destino or "@" not in destino:
+        raise HTTPException(status_code=400, detail="Esta empresa nao tem e-mail cadastrado")
+    if email_esta_descadastrado(destino):
+        raise HTTPException(status_code=400, detail="Este endereco pediu descadastro (LGPD)")
+
+    template = get_template(int(template_id), organizacao_id=org_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template nao encontrado")
+
+    remetente = current_user.get("sub")
+    montado = montar_email_para_cnpj(template, cnpj, destino, empresa, org_id, remetente)
+
+    registro = create_email_enviado(None, cnpj, destino, montado["assunto"])
+    email_id = registro.get("id") if registro else None
+    corpo = injetar_rastreamento(montado["corpo_html"], email_id)
+
+    r = enviar_email(destino, montado["assunto"], corpo, montado["corpo_texto"],
+                     smtp=_smtp_efetivo(org_id, remetente))
+    if email_id:
+        update_email_enviado(email_id, "enviado" if r.get("sucesso") else "erro",
+                             erro=r.get("erro"), message_id=r.get("message_id"))
+    if not r.get("sucesso"):
+        raise HTTPException(status_code=502, detail=r.get("erro") or "Falha no envio")
+    return {"ok": True, "para": destino, "assunto": montado["assunto"],
+            "simulado": bool(r.get("simulado"))}

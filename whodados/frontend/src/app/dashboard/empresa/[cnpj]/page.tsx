@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ApiError, EmpresaDetalhe, atualizarCrm, getEmpresaDetalhe, enviarWhatsApp,
+  enviarEmailParaEmpresa, listarTemplates, previewTemplate, type Template,
   getMe, MeInfo, ItemEnriquecimento, enriquecerEmpresa, listarEnriquecimento, removerEnriquecimento,
 } from "@/lib/api";
 
@@ -101,6 +102,53 @@ export default function EmpresaDetalhePage() {
     }
   };
 
+  const [emailAberto, setEmailAberto] = useState(false);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templateSel, setTemplateSel] = useState("");
+  const [previa, setPrevia] = useState<{ assunto: string; corpo_html: string } | null>(null);
+  const [emailEnviando, setEmailEnviando] = useState(false);
+  const [emailFeedback, setEmailFeedback] = useState<{ tipo: "s" | "e"; msg: string } | null>(null);
+
+  const abrirEmail = async () => {
+    setEmailAberto(true);
+    setEmailFeedback(null);
+    setPrevia(null);
+    if (!templates.length) {
+      try { setTemplates(await listarTemplates()); }
+      catch { setEmailFeedback({ tipo: "e", msg: "Nao consegui carregar os templates." }); }
+    }
+  };
+
+  // Previa com os dados REAIS desta empresa -- mesma montagem do envio.
+  const verPrevia = async (id: string) => {
+    setTemplateSel(id);
+    setPrevia(null);
+    if (!id || !empresa) return;
+    try {
+      const p = await previewTemplate(Number(id), empresa.cnpj_completo);
+      setPrevia({ assunto: p.assunto, corpo_html: p.corpo_html });
+    } catch {
+      setEmailFeedback({ tipo: "e", msg: "Nao consegui gerar a previa." });
+    }
+  };
+
+  const handleEnviarEmail = async () => {
+    if (!empresa || !templateSel) return;
+    setEmailEnviando(true);
+    setEmailFeedback(null);
+    try {
+      const r = await enviarEmailParaEmpresa(empresa.cnpj_completo, Number(templateSel));
+      setEmailFeedback({ tipo: "s", msg: r.simulado
+        ? `Simulado (sem servidor configurado): ${r.para}`
+        : `E-mail enviado para ${r.para}.` });
+      setEmailAberto(false);
+    } catch (err) {
+      setEmailFeedback({ tipo: "e", msg: err instanceof ApiError ? err.message : "Erro ao enviar." });
+    } finally {
+      setEmailEnviando(false);
+    }
+  };
+
   const handleEnviarWhatsApp = async () => {
     const numero = waTelefone.replace(/\D/g, "");
     if (!numero) { setWaFeedback({ tipo: "e", msg: "Informe o numero do WhatsApp (DDD + numero, ex: 51999999999)." }); return; }
@@ -138,6 +186,12 @@ export default function EmpresaDetalhePage() {
             <p className="text-slate-500 font-mono text-sm">{empresa.cnpj_completo}</p>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={abrirEmail}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              ✉️ Enviar e-mail
+            </button>
             <button
               onClick={() => { setWaAberto(true); setWaFeedback(null); }}
               className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -273,6 +327,65 @@ export default function EmpresaDetalhePage() {
       )}
 
       {/* Modal WhatsApp */}
+      {emailAberto && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">✉️ Enviar e-mail</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Para <strong>{empresa.razao_social}</strong>
+                  {empresa.email ? <> · {empresa.email}</> : <span className="text-red-600"> · sem e-mail cadastrado</span>}
+                </p>
+              </div>
+              <button onClick={() => setEmailAberto(false)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">✕</button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Template</label>
+              <select
+                value={templateSel}
+                onChange={e => verPrevia(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">Escolha um template...</option>
+                {templates.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
+              </select>
+            </div>
+
+            {previa && (
+              <div className="rounded-lg border border-slate-200 overflow-hidden">
+                <div className="bg-slate-50 px-3 py-2 border-b border-slate-200">
+                  <p className="text-xs text-slate-500">Assunto</p>
+                  <p className="text-sm font-medium text-slate-800">{previa.assunto}</p>
+                </div>
+                <div className="p-3 max-h-64 overflow-y-auto text-sm"
+                     dangerouslySetInnerHTML={{ __html: previa.corpo_html }} />
+              </div>
+            )}
+
+            {emailFeedback && (
+              <div className={`rounded-lg px-3 py-2 text-sm ${emailFeedback.tipo === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-700"}`}>
+                {emailFeedback.msg}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEmailAberto(false)} className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 text-sm font-medium">
+                Cancelar
+              </button>
+              <button
+                onClick={handleEnviarEmail}
+                disabled={emailEnviando || !templateSel || !empresa.email}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium disabled:opacity-40"
+              >
+                {emailEnviando ? "Enviando..." : "Enviar agora"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {waAberto && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">

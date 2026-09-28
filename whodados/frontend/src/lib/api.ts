@@ -218,8 +218,20 @@ export interface CRMRecord {
 export interface EmpresaDetalhe extends EmpresaItem {
   data_fundacao: string | null;
   contato_fone: string | null;
+  email: string | null;
   socios: Socio[];
   crm: CRMRecord | null;
+}
+
+/** Envia um e-mail avulso para uma empresa (fora de campanha). Passa pela
+ *  mesma montagem das campanhas: assinatura, descadastro e rastreamento. */
+export async function enviarEmailParaEmpresa(
+  cnpj: string, templateId: number, email?: string,
+): Promise<{ ok: boolean; para: string; assunto: string; simulado?: boolean }> {
+  return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}/enviar-email`, {
+    method: "POST",
+    body: JSON.stringify({ template_id: templateId, ...(email ? { email } : {}) }),
+  });
 }
 
 export async function getEmpresaDetalhe(cnpj: string): Promise<EmpresaDetalhe> {
