@@ -142,6 +142,12 @@ def _filtros_sql(
     if not incluir_inativas:
         cond.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s')
         params.append(_REGEX_INATIVAS)
+    # Mesma exclusao comercial da listagem (CNAE_DIVISOES_EXCLUIDAS em
+    # service.py): sem isto o grafico conta empresa que a tabela nao mostra.
+    from .service import CNAE_DIVISOES_EXCLUIDAS
+    if CNAE_DIVISOES_EXCLUIDAS:
+        cond.append('LEFT(COALESCE(e."CNAE_PRINCIPAL", \'\'), 2) <> ALL(%s)')
+        params.append(list(CNAE_DIVISOES_EXCLUIDAS))
 
     return ((" AND " + " AND ".join(cond)) if cond else ""), params
 

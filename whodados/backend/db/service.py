@@ -134,6 +134,13 @@ def create_or_update_crm(cnpj: str, organizacao_id: int, status: Optional[str] =
 # ---------------------------------------------------------------------------
 _BLACKLIST_CLASSIFICACAO = r"RECUPERACAO|FALIDA|JUDICIAL|MASSA FALIDA|EM LIQUIDACAO|BAIXADA|INAPTA"
 
+# Divisao CNAE 69 fora da base de prospeccao, por decisao comercial: 691
+# (advocacia, cartorios, auxiliares da justica) e' concorrente; 692
+# (contabilidade, auditoria) ja' foi trabalhado por outro canal.
+# Aplicado na query, nao no ETL: vale na hora e e' reversivel sem recarregar
+# 1,68M linhas.
+CNAE_DIVISOES_EXCLUIDAS = ("69",)
+
 
 def classificar_empresa(empresa: Dict[str, Any]) -> Dict[str, Any]:
     """Aplica as regras de classificacao em UMA empresa (provinda de dados_empresas).
@@ -1455,6 +1462,9 @@ def _where_empresas(
             clauses.append('e."DATA_FUNDACAO" <= %s'); params.append(_re.sub(r"\D", "", str(fundacao_ate)))
     if not incluir_inativas:
         clauses.append('COALESCE(e."RAZAO_SOCIAL", \'\') !~* %s'); params.append(_BLACKLIST_REGEX)
+    if CNAE_DIVISOES_EXCLUIDAS:
+        clauses.append('LEFT(COALESCE(e."CNAE_PRINCIPAL", \'\'), 2) <> ALL(%s)')
+        params.append(list(CNAE_DIVISOES_EXCLUIDAS))
     # Filtro de contato: com_email / so_telefone (sem e-mail, com fone) / sem_contato.
     if contato:
         tem_email = 'TRIM(COALESCE(e."EMAIL", \'\')) <> \'\''
