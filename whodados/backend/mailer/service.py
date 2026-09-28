@@ -272,13 +272,16 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
     cfg = smtp or _smtp_da_org(None)
 
     # Gmail API tem prioridade: fala HTTPS, e o Render bloqueia SMTP 587/465.
-    if gmail_api.configurado() and cfg.get("email_from"):
-        r = gmail_api.enviar(para, assunto, corpo_html, corpo_texto,
-                             remetente=cfg["email_from"],
-                             remetente_nome=cfg.get("email_from_name"))
-        if r.get("sucesso"):
-            return r
-        log.warning(f"Gmail API falhou ({r.get('erro')}); tentando SMTP.")
+    # Configurada, ela e a resposta final: cair para SMTP so trocaria o erro
+    # real por "Network is unreachable" do socket bloqueado.
+    if gmail_api.configurado():
+        remetente = cfg.get("email_from") or settings.EMAIL_FROM
+        if not remetente:
+            return {"sucesso": False, "para": para,
+                    "erro": "Gmail API ativa, mas nenhum remetente definido"}
+        return gmail_api.enviar(para, assunto, corpo_html, corpo_texto,
+                                remetente=remetente,
+                                remetente_nome=cfg.get("email_from_name"))
 
     if not cfg.get("host"):
         log.warning(f"SMTP nao configurado. Email simulado para {para}")
