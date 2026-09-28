@@ -1,5 +1,6 @@
 """Mailer Service - WhoDados."""
 from __future__ import annotations
+import re as _re_nome
 import smtplib
 import time
 from email.mime.text import MIMEText
@@ -53,6 +54,84 @@ CATEGORIA_DESCRICOES = {
     "servicos": "gestao de servicos e mercado",
     "todos": "solucoes de negocio",
 }
+
+# ---------------------------------------------------------------------------
+# Nome apresentavel (saudacao dos e-mails)
+#
+# A razao social da Receita vem em CAIXA ALTA e carrega ruido de registro que
+# nao serve num "Oi, ...": marcador societario (LTDA/SCP/ME), situacao ("EM
+# RECUPERACAO JUDICIAL"), numero de filial. Empresario individual (firma
+# individual) ainda traz o CNPJ na frente do nome da pessoa
+# ("56.014.274 ANA CAROLINA ..."): 19.990 casos, 2,7% da base.
+#
+# 28% da base nao tem socio cadastrado e caia direto na razao social crua.
+# ---------------------------------------------------------------------------
+_SAUDACAO_MAX_PALAVRAS = 3
+_MINUSC = {"da", "de", "do", "das", "dos", "e", "di", "du", "van", "von", "del", "la"}
+_ROMANOS = _re_nome.compile(
+    r"^(?=[MDCLXVI]+$)M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$", _re_nome.I)
+# Corta no PRIMEIRO marcador societario: o que vem depois e' ruido de
+# registro, nunca o nome pelo qual a empresa e' conhecida.
+_CORTE_RAZAO = _re_nome.compile(
+    r"\s*[-,]?\s*\b(LTDA|LIMITADA|ME|EPP|EIRELI|S\.?\s?A\.?|SS|SCP|SPE|MEI|"
+    r"EM\s+RECUPERACAO\s+JUDICIAL|EM\s+LIQUIDACAO|MASSA\s+FALIDA)\b", _re_nome.I)
+_CNPJ_PREFIXO = _re_nome.compile(r"^\s*\d{2}[\.\s]?\d{3}[\.\s]?\d{3}[\s/-]*\d{0,4}[\s-]*\d{0,2}\s+")
+
+
+def _titulo(nome: str) -> str:
+    """CAIXA ALTA -> Capitalizado, preservando preposicao e algarismo romano."""
+    saida = []
+    for i, palavra in enumerate((nome or "").split()):
+        minuscula = palavra.lower()
+        if len(palavra) > 1 and _ROMANOS.match(palavra):
+            saida.append(palavra.upper())
+        elif i and minuscula in _MINUSC:
+            saida.append(minuscula)
+        else:
+            saida.append(minuscula.capitalize())
+    return " ".join(saida).strip()
+
+
+def _nome_apresentavel(nome: Optional[str], max_palavras: int = 0) -> str:
+    """Nome de empresa sem marcador societario nem sufixo de situacao.
+
+    max_palavras > 0 encurta para caber numa saudacao: "FUNDO MUNICIPAL DE
+    DIREITOS DO IDOSO" inteiro num "Oi, ...!" fica pior que o nome curto.
+    Preposicao solta no fim e' removida ("Fundo Municipal de" -> "Fundo
+    Municipal").
+    """
+    texto = (nome or "").strip()
+    corte = _CORTE_RAZAO.search(texto)
+    if corte:
+        texto = texto[:corte.start()]
+    limpo = _titulo(texto.strip(" -,."))
+    if max_palavras > 0:
+        palavras = limpo.split()[:max_palavras]
+        while palavras and palavras[-1].lower() in _MINUSC:
+            palavras.pop()
+        limpo = " ".join(palavras)
+    return limpo
+
+
+def _saudacao(nome_socio: Optional[str], razao_social: Optional[str],
+              nome_fantasia: Optional[str]) -> str:
+    """Como chamar o destinatario.
+
+    Pessoa (socio, ou o nome dentro da razao social de firma individual) vira
+    primeiro nome. Empresa usa o nome limpo INTEIRO -- primeira palavra de
+    nome de empresa fica sem sentido ("Oi, Bing!" para BING IMOVEIS ...).
+    """
+    if (nome_socio or "").strip():
+        primeiro = _titulo(nome_socio).split()
+        if primeiro:
+            return primeiro[0]
+    individual = _CNPJ_PREFIXO.match(razao_social or "")
+    if individual:
+        pessoa = _titulo((razao_social or "")[individual.end():]).split()
+        if pessoa:
+            return pessoa[0]
+    return (_nome_apresentavel(nome_fantasia, _SAUDACAO_MAX_PALAVRAS)
+            or _nome_apresentavel(razao_social, _SAUDACAO_MAX_PALAVRAS))
 
 
 def _descricao_cnae_fallback(cnae: Optional[str], descricao_informada: Optional[str] = None) -> str:
@@ -307,16 +386,15 @@ def montar_email_para_cnpj(
     template_id_base = template.get("id") or template.get("template_id")
     tpl = (_obter_template_para_cnpj(template_id_base, cnae) if template_id_base else template) or template
 
-    empresa = dados.get("razao_social") or dados.get("nome_fantasia") or cnpj
     nome_socio = (dados.get("nome_socio") or "").strip()
-    # Saudacao inteligente: primeiro nome do socio responsavel (mais
-    # pessoal -- "Oi, Joao!") quando existir, senao cai pro nome da
-    # empresa. Nome da RF vem em CAIXA ALTA; .title() deixa apresentavel.
-    saudacao = nome_socio.split()[0].title() if nome_socio else empresa
+    empresa = (_nome_apresentavel(dados.get("nome_fantasia"))
+               or _nome_apresentavel(dados.get("razao_social")) or cnpj)
+    saudacao = _saudacao(nome_socio, dados.get("razao_social"),
+                         dados.get("nome_fantasia")) or empresa
     vars_dict = {
         "empresa": empresa,
         "saudacao": saudacao,
-        "nome_socio": nome_socio.title() if nome_socio else "",
+        "nome_socio": _titulo(nome_socio) if nome_socio else "",
         "cnpj": cnpj,
         "cidade": dados.get("municipio") or "",
         "cnae": cnae or "",

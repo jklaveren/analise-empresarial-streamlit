@@ -1946,6 +1946,12 @@ def buscar_socios_principais(cnpjs_basicos: List[str]) -> Dict[str, str]:
                        ) AS rn
                 FROM dados_socios
                 WHERE "CNPJ_BASICO" = ANY(%s) AND COALESCE("NOME_SOCIO", '') <> ''
+                  -- So' pessoa fisica. IDENTIFICADOR_SOCIO='1' e' socio
+                  -- pessoa juridica: NOME_SOCIO e' o nome de outra empresa, e
+                  -- a saudacao ("primeira palavra do nome") virava "Oi, Fm!"
+                  -- para FM GROUP PARTICIPACOES LTDA. Sem pessoa fisica, o
+                  -- mailer cai no nome da empresa, que e' o certo.
+                  AND "IDENTIFICADOR_SOCIO" = '2'
             )
             SELECT "CNPJ_BASICO", "NOME_SOCIO" FROM ranked WHERE rn = 1
             """,
