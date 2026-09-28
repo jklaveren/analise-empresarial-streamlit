@@ -24,8 +24,6 @@ except ImportError:
 
 log = get_logger(__name__)
 
-# Haiku: a tarefa e' classificacao curta sobre milhares de nomes, onde
-# custo e latencia importam mais que raciocinio.
 _MODELO = "claude-haiku-4-5-20251001"
 _NOMES_POR_CHAMADA = 80
 
@@ -35,9 +33,7 @@ _MARCADOR_SOCIETARIO = re.compile(
     r"\b(ltda|limitada|eireli|epp|scp|spe|s/?a|me)\b", re.I)
 _SO_CONSOANTES = re.compile(r"^[^aeiouáéíóúâêôãõà]+$", re.I)
 
-# Palavra de ramo, sozinha, nao identifica ninguem: "Oi, Comercio!" e' pior
-# que nao personalizar. Vale so' como termo UNICO da saudacao -- "Comercio
-# Radunz" passa, "Comercio" nao.
+# Barram apenas como termo unico: "Comercio Radunz" passa.
 _GENERICOS = {
     "comercio", "servicos", "servico", "industria", "industrias", "construtora",
     "transportes", "transporte", "distribuidora", "representacoes", "participacoes",
@@ -78,9 +74,6 @@ def _checar_item(item: Dict[str, Any], vistos: set) -> List[Dict[str, str]]:
             achados.append({"regra": "saudacao_com_marcador_societario",
                             "severidade": BLOQUEIO,
                             "detalhe": f"saudacao {saud!r} traz LTDA/ME/SA/SCP"})
-        # "Oi, Fm!" / "Oi, Sv!": fragmento de sigla que sobrou de nome de
-        # empresa. Bloqueio, nao aviso -- nao existe caso em que isso esteja
-        # certo, e era justamente o que o LLM ia pegar.
         if len(saud.replace(" ", "")) <= 2:
             achados.append({"regra": "saudacao_curta", "severidade": BLOQUEIO,
                             "detalhe": f"saudacao {saud!r} tem 2 letras ou menos"})
@@ -149,8 +142,6 @@ def _validar_nomes_llm(nomes: List[str]) -> Dict[str, str]:
                 if not linha.get("ok", True):
                     reprovados[linha.get("nome", "")] = linha.get("motivo") or "reprovado pelo LLM"
         except Exception as e:
-            # Falha de LLM nao bloqueia nem libera: o relatorio marca que
-            # esta camada nao cobriu este bloco.
             log.warning(f"validacao LLM falhou no bloco {i}: {e}")
     return reprovados
 

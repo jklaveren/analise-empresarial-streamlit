@@ -369,7 +369,6 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
     if campanha.get("status") not in _STATUS_EXECUTAVEIS:
         raise HTTPException(status_code=400, detail="Campanha ja concluida")
-    # Disparo manual entra no mesmo teto diario do cron.
     return _executar_um_lote(campanha, current_user, org_id,
                              max_envios=_orcamento_email_hoje())
 
@@ -419,9 +418,7 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
     if not janela["aberta"]:
         return {"processadas": 0, "janela": janela, "resultados": []}
 
-    # Fila: o orcamento do dia e' da CONTA inteira, nao por campanha. As
-    # campanhas consomem em ordem ate acabar; as que nao couberem hoje ficam
-    # 'em_andamento' e entram na proxima execucao do cron.
+    # Orcamento do dia e' da conta inteira, nao por campanha.
     orcamento = _orcamento_email_hoje()
     orcamento_inicial = orcamento
 

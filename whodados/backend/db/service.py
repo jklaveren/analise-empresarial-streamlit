@@ -2527,8 +2527,7 @@ def contar_emails_enviados_hoje() -> int:
             row = cur.fetchone()
             return int(row["n"]) if row else 0
     except Exception as e:
-        # Falha na contagem nao pode liberar envio ilimitado: devolve o teto
-        # como se ja tivesse estourado.
+        # Falha na contagem nao pode liberar envio ilimitado.
         log.warning(f"contar_emails_enviados_hoje falhou: {e}")
         return 10**9
 
@@ -2550,8 +2549,6 @@ def cnpjs_contatados_org(organizacao_id: int, desde_dias: Optional[int] = None) 
             cur.execute(sql, params)
             return {r["cnpj"] for r in cur.fetchall()}
     except Exception as e:
-        # Falha aqui nao pode liberar reenvio geral: devolve marcador que
-        # quem chama trata como "nao sei", preferindo nao enviar.
         log.warning(f"cnpjs_contatados_org falhou: {e}")
         raise
 

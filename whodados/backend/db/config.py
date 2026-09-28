@@ -89,8 +89,7 @@ def ensure_tables():
         )""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_campanha_envios_campanha ON campanha_envios(campanha_id)")
         cur.execute("CREATE TABLE IF NOT EXISTS emails_enviados (id SERIAL PRIMARY KEY, campaign_id INTEGER, cnpj VARCHAR(18) NOT NULL, email_destino VARCHAR(255) NOT NULL, assunto VARCHAR(200), status VARCHAR(50) DEFAULT 'pendente', erro TEXT, sequencia_passo INTEGER DEFAULT 0, enviado_em TIMESTAMP WITH TIME ZONE, aberto_em TIMESTAMP WITH TIME ZONE, criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW())")
-        # Eventos do provedor (webhook Brevo). status='enviado' so' diz que o
-        # SMTP aceitou; entrega, abertura, clique e bounce so' chegam por aqui.
+        # Eventos do provedor: status='enviado' so diz que o SMTP aceitou.
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS message_id VARCHAR(255)")
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS entregue_em TIMESTAMP WITH TIME ZONE")
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS clicado_em TIMESTAMP WITH TIME ZONE")
@@ -99,7 +98,6 @@ def ensure_tables():
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS bounce_em TIMESTAMP WITH TIME ZONE")
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS bounce_tipo VARCHAR(30)")
         cur.execute("ALTER TABLE emails_enviados ADD COLUMN IF NOT EXISTS bounce_motivo TEXT")
-        # O webhook casa o evento por message_id; sem indice cada evento varre a tabela.
         cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_enviados_message_id ON emails_enviados (message_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_enviados_destino ON emails_enviados (email_destino, criado_em DESC)")
         cur.execute("CREATE TABLE IF NOT EXISTS notificacoes (id SERIAL PRIMARY KEY, tipo VARCHAR(50) NOT NULL, titulo VARCHAR(200) NOT NULL, mensagem TEXT, cnpj VARCHAR(18), user_id VARCHAR(50), lida BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())")        

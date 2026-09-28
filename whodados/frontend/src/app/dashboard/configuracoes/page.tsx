@@ -739,8 +739,6 @@ function MeuEmailTab() {
 
   async function salvar(e: React.FormEvent) {
     e.preventDefault();
-    // Servidor proprio so vale completo: host sem usuario/senha tentaria
-    // autenticar no servidor novo com a credencial da empresa.
     const proprio = Boolean(smtp.host.trim());
     if (proprio && !smtp.username.trim()) {
       setFb({ t: "e", m: "Informe o usuário do servidor." });

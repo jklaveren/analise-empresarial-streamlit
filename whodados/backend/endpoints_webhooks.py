@@ -12,8 +12,7 @@ from .logger import get_logger
 router = APIRouter(prefix="/api/v1")
 log = get_logger(__name__)
 
-# Eventos que nos interessam. Os demais (request, unsubscribed, ...) sao
-# aceitos com 200 e ignorados -- devolver erro faria o Brevo reenviar em loop.
+# Os demais sao aceitos com 200 e ignorados: erro faria o Brevo reenviar.
 _EVENTOS_TRATADOS = {
     "delivered", "opened", "unique_opened", "click",
     "hard_bounce", "soft_bounce", "blocked", "spam", "invalid_email", "deferred",

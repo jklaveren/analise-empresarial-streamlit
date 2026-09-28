@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import make_msgid
 
+from . import gmail_api
 from .rastreamento import injetar as injetar_rastreamento
 from typing import Dict, Optional, List, Any
 
@@ -269,6 +270,16 @@ def _conectar_smtp(cfg: Dict[str, Any]) -> smtplib.SMTP:
 
 def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, smtp: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = smtp or _smtp_da_org(None)
+
+    # Gmail API tem prioridade: fala HTTPS, e o Render bloqueia SMTP 587/465.
+    if gmail_api.configurado() and cfg.get("email_from"):
+        r = gmail_api.enviar(para, assunto, corpo_html, corpo_texto,
+                             remetente=cfg["email_from"],
+                             remetente_nome=cfg.get("email_from_name"))
+        if r.get("sucesso"):
+            return r
+        log.warning(f"Gmail API falhou ({r.get('erro')}); tentando SMTP.")
+
     if not cfg.get("host"):
         log.warning(f"SMTP nao configurado. Email simulado para {para}")
         return {"sucesso": True, "simulado": True, "para": para, "assunto": assunto}
