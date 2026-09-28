@@ -1,6 +1,7 @@
 """WhoDados Backend 2.0 - FastAPI Entry Point."""
 from __future__ import annotations
 from contextlib import asynccontextmanager
+import os
 from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,6 +103,9 @@ async def health():
         "secret_key_ok": secret_key_ok(),
         "banco_ok": check_database_health(),
         "email": _diagnostico_email(),
+        # Render injeta o commit do build. Sem isto nao da pra saber, de
+        # fora, se a versao no ar e a que acabou de subir.
+        "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7] or None,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
