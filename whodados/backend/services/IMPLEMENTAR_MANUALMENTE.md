@@ -1,6 +1,7 @@
-# PENDÊNCIAS — Integrações (para implantar manualmente ou com outra IA)
+# PENDÊNCIAS — Integrações
 
 ## 1. Twilio WhatsApp — limitação externa (não é código)
+
 O envio real depende de credenciais válidas e do modo da conta Twilio:
 
 - **Sandbox (grátis, para teste):**
@@ -10,31 +11,65 @@ O envio real depende de credenciais válidas e do modo da conta Twilio:
      `join <código-do-sandbox>` por WhatsApp para o número do sandbox.
      Sem isso, o envio falha (erro 63016/63003).
 - **Produção:** precisa de número WhatsApp Business aprovado pela Meta
-  (via Twilio ou 360Dialog). Número fixo do sandbox `whatsapp:+14155238886`
+  (via Twilio ou 360Dialog). O número fixo do sandbox `whatsapp:+14155238886`
   NÃO funciona para clientes reais em volume.
 
-- Variáveis esperadas (Render → Environment):
-  - `TWILIO_ACCOUNT_SID`
-  - `TWILIO_AUTH_TOKEN`
-  - `TWILIO_WHATSAPP_NUMBER` (ex.: `whatsapp:+5511...`)
+### Onde ficam as credenciais
 
-## 2. Tabela `integracao_configs` (painel de credenciais no app)
-SQL para rodar no Supabase (SQL Editor) caso a criação automática na
-inicialização do backend não tenha acontecido:
+Por empresa, na tabela `integracao_configs` (coluna `organizacao_id`), editável
+pelo painel do app em **Configurações → Integrações**. As variáveis de ambiente
+abaixo são apenas o último recurso, quando não há linha no banco:
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_WHATSAPP_NUMBER`
+
+### Validação de número
+
+`validar_whatsapp()` em `services/whatsapp_service.py` só confere formato
+(`+55` e comprimento). **Não verifica se o número existe nem se tem WhatsApp.**
+Para isso seria preciso a Twilio Lookup v2, que é cobrada por consulta.
+
+## 2. Tabela `integracao_configs`
+
+O backend cria a tabela sozinho no boot (`db/config.py::ensure_tables_exist`).
+Só rode o SQL abaixo se a criação automática tiver falhado:
 
 ```sql
 CREATE TABLE IF NOT EXISTS integracao_configs (
     id SERIAL PRIMARY KEY,
-    chave VARCHAR(100) UNIQUE NOT NULL,
-    valor TEXT,
+    key VARCHAR(100) NOT NULL,
+    value TEXT,
     descricao VARCHAR(255),
     ativo BOOLEAN DEFAULT FALSE,
-    atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    organizacao_id INTEGER REFERENCES organizacoes(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
 
-Chaves usadas: `brevo_api_key`, `twilio_account_sid`, `twilio_auth_token`,
-`twilio_whatsapp_number`.
+As colunas são `key`/`value` — é assim que `whatsapp_service.py` consulta.
+`key` não é UNIQUE sozinha: a mesma chave existe uma vez por empresa, e uma
+linha com `organizacao_id NULL` vale como padrão global.
+
+Chaves usadas pelo código (`_ENV` em `whatsapp_service.py`):
+`twilio_sid`, `twilio_token`, `twilio_wa_number`, `brevo_api_key`.
 
 ## 3. Brevo (e-mail)
-Já configurado anteriormente (`BREVO_API_KEY` no Render). Nada pendente de código.
+
+Envio por SMTP relay, configurado por empresa em **Configurações → Integrações**
+ou via `SMTP_*` no ambiente. Nada pendente de código.
+
+### Webhook de eventos
+
+`POST /api/v1/webhooks/brevo?token=<BREVO_WEBHOOK_SECRET>` recebe entrega,
+abertura, clique e bounce, e preenche `emails_enviados`. Exige:
+
+1. `BREVO_WEBHOOK_SECRET` no Render;
+2. o webhook cadastrado no Brevo (Transacional, webhook de saída) com os
+   eventos `delivered`, `opened`, `click`, `hard_bounce`, `soft_bounce`,
+   `blocked`, `spam`;
+3. **rastreamento de cliques ativado** no Brevo — sem isso ele não reescreve
+   os links e o evento `click` nunca dispara.
+
+Sem o secret configurado o endpoint responde 403 e fica desligado.

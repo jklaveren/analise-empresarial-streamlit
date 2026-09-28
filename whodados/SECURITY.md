@@ -189,11 +189,19 @@ GROUP BY ip_address ORDER BY total DESC LIMIT 20;
 
 ## Resumo Final
 
-### Removido (webscraping):
+### Historico: webscraping removido em 2026-09
 - Webscraping DuckDuckGo (emails/telefones)
-- Endpoints /enriquecer/*
-- Pagina /dashboard/enriquecimento
 - Webscraping PGFN no pipeline (substituido por env var)
+
+### ATENCAO -- enriquecimento voltou (arquitetura diferente)
+O enriquecimento de contato existe de novo, agora via Claude + web search
+da Anthropic (`backend/agents/enriquecimento_service.py`,
+`endpoints_enriquecimento.py`, `api.ts::enriquecerEmpresa`). Nao e' o
+scraping antigo:
+- restrito a admin (`require_admin`) -- dispara custo de LLM por uso;
+- so' coleta contato PUBLICAMENTE disponivel, com `fonte_url` obrigatoria;
+- tem direito de eliminacao (LGPD, Art. 18): `DELETE .../enriquecimento`
+  apaga valor e fonte, mantendo so' o registro de auditoria da remocao.
 
 ### Adicionado (seguranca completa):
 - Rate Limiter Middleware (Redis-ready)

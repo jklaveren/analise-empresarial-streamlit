@@ -45,7 +45,7 @@ O ETL é manual/local (a automação via GitHub Actions foi removida em 2026-09 
 2. **"New" → "Blueprint"** → selecione o repositório
 3. O Render detecta `whodados/render.yaml` automaticamente
    - Se manual: Root Directory = `whodados`, Build = `pip install -r requirements.txt`, Start = `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-4. Configure env: `DATABASE_URL`, `CORS_ORIGINS=https://whodados.vercel.app`
+4. Configure env: `DATABASE_URL`, `CORS_ORIGINS=https://whodados-jet.vercel.app`
 5. Aguarde ~3-5 min → anote a URL (ex: `https://whodados-api.onrender.com`)
 
 **Teste:** `https://whodados-api.onrender.com/docs`
@@ -127,6 +127,6 @@ Notas:
 | Vercel | 100 GB/mês | ~1-5 GB |
 | Render | 750h/mês | ~720h |
 | Supabase | 500 MB | ~500 MB (dados_empresas 1,68M + socios 940k) |
-| GitHub Actions | 2.000 min/mês | ~negligível (só keep-alive + campanhas) |
+| GitHub Actions | 2.000 min/mês | ~negligível (só o cron diário de campanhas) |
 
 **Total: R$ 0/mês** para uso leve.

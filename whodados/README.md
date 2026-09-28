@@ -13,14 +13,14 @@ Navegador
     │
     ▼
 Vercel (Next.js 15) ──────► Render (FastAPI) ──────► Supabase (Postgres)
-  /dashboard                   /empresas               dados_empresas
-  /login                       /crm                   dados_socios
-                                /auth                  app_users
+  /dashboard  /lotes           /empresas  /campanhas   dados_empresas
+  /login      /campanhas       /crm       /lotes       dados_socios
+  /crm        /whatsapp        /auth      /analytics   app_users
                                                         crm
     │
     ▼
-GitHub Actions (ETL mensal)
-  1. python whodados/pipeline/pipeline.py
+ETL manual, no computador local (Actions removido em 2026-09)
+  1. python whodados/pipeline/pipeline_levas.py
   2. python whodados/scripts/sync_data_to_db.py
 ```
 
@@ -32,7 +32,9 @@ GitHub Actions (ETL mensal)
 whodados/
 ├── backend/                      # FastAPI (deploy no Render)
 │   ├── main.py                   # entry point (uvicorn backend.main:app)
-│   ├── endpoints.py              # /empresas, /empresas/{cnpj}, /crm
+│   ├── endpoints.py              # agrega os routers de cada dominio
+│   ├── endpoints_<dominio>.py    # empresas, crm, campanhas, lotes, templates,
+│   │                             # analytics, monitor, webhooks, push, ...
 │   ├── requirements.txt
 │   └── .env.example
 │
@@ -45,7 +47,8 @@ whodados/
 │   └── .env.example
 │
 ├── pipeline/                     # Pipeline ETL (fracionado em estágios)
-│   ├── pipeline.py               # subcomandos: download-rf/pgfn, process-rf/pgfn, merge, detect, all
+│   ├── pipeline_levas.py         # ETL em levas (o usado hoje, roda local)
+│   ├── pipeline_bigquery.py      # alternativa via basedosdados (BigQuery)
 │   ├── raw/                      # zips baixados (.gitignored)
 │   ├── out/                      # CSVs gerados (.gitignored)
 │   └── requirements-dev.txt
@@ -122,7 +125,7 @@ python whodados/scripts/criar_usuario.py admin --admin
 ### Rodar localmente
 
 ```bash
-python whodados/pipeline/pipeline.py
+python whodados/pipeline/pipeline_levas.py
 ```
 
 Os arquivos baixados vão para `whodados/pipeline/raw/` e os CSVs gerados para `whodados/pipeline/out/`.
