@@ -849,6 +849,26 @@ def get_emails_vermelhos_para_followup(limite: int = 50, organizacao_id: Optiona
         return cur.fetchall()
 
 
+def marcar_email_clicado(email_id: int, link: Optional[str] = None) -> bool:
+    """Registra clique vindo do nosso redirecionador.
+
+    Clique implica abertura: cliente que bloqueia imagem some com o pixel,
+    mas se clicou, leu. Sem isto o mesmo e-mail apareceria como clicado e
+    nao aberto.
+    """
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE emails_enviados
+                  SET clicado_em = COALESCE(clicado_em, NOW()),
+                      aberto_em  = COALESCE(aberto_em, NOW()),
+                      cliques    = COALESCE(cliques, 0) + 1,
+                      ultimo_link = COALESCE(%s, ultimo_link)
+                WHERE id = %s""",
+            (link, email_id),
+        )
+        return cur.rowcount > 0
+
+
 def marcar_email_aberto(email_id: int) -> bool:
     """Marca o e-mail como aberto (usado por pixel de tracking)."""
     with get_db_cursor() as cur:
@@ -2527,18 +2547,48 @@ def contar_emails_enviados_hoje() -> int:
         return 10**9
 
 
+def cnpjs_contatados_org(organizacao_id: int, desde_dias: Optional[int] = None) -> set:
+    """CNPJs que QUALQUER campanha desta empresa ja contatou.
+
+    Diferente de cnpjs_ja_contatados_campanha, que so' olha uma campanha:
+    sem isto, uma campanha nova com filtro parecido reenvia para quem ja
+    recebeu. desde_dias limita a janela (permite recontato depois de N
+    dias); None = nunca recontatar.
+    """
+    sql = """SELECT ce.cnpj FROM campanha_envios ce
+             JOIN campanhas c ON c.id = ce.campanha_id
+             WHERE c.organizacao_id = %s AND ce.status = 'enviado'"""
+    params: List[Any] = [organizacao_id]
+    if desde_dias is not None:
+        sql += " AND ce.criado_em >= NOW() - (%s || ' days')::interval"
+        params.append(int(desde_dias))
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(sql, params)
+            return {r["cnpj"] for r in cur.fetchall()}
+    except Exception as e:
+        # Falha aqui nao pode liberar reenvio geral: devolve marcador que
+        # quem chama trata como "nao sei", preferindo nao enviar.
+        log.warning(f"cnpjs_contatados_org falhou: {e}")
+        raise
+
+
 def listar_campanhas_pendentes() -> List[Dict[str, Any]]:
     """Campanhas em lote que ainda tem lote pra mandar hoje: status
     'agendada' (primeiro lote) ou 'em_andamento' (proximos lotes), com
     repetir_ate ainda no futuro (ou sem data-limite) e que ainda nao
-    rodaram hoje. Usada pelo cron diario (GitHub Actions)."""
+    rodaram hoje. 'pausada' fica de fora de proposito. Usada pelo cron
+    diario (GitHub Actions)."""
     with get_db_cursor() as cur:
         cur.execute(
             """SELECT * FROM campanhas
                WHERE status IN ('agendada', 'em_andamento')
                  AND tamanho_lote IS NOT NULL
                  AND (repetir_ate IS NULL OR repetir_ate >= CURRENT_DATE)
-                 AND (ultimo_lote_em IS NULL OR ultimo_lote_em::date < CURRENT_DATE)
+                 -- Antes era '::date < CURRENT_DATE' (uma rodada por dia).
+                 -- O envio agora e' em rodadas curtas ao longo do dia.
+                 AND (ultimo_lote_em IS NULL
+                      OR ultimo_lote_em < NOW() - INTERVAL '9 minutes')
                ORDER BY id"""
         )
         rows = cur.fetchall()

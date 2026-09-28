@@ -78,7 +78,8 @@ export default function DashboardPage() {
   const [capitalMax, setCapitalMax] = useState(salvos.capitalMax ?? "");
   const [fundacaoDe, setFundacaoDe] = useState(salvos.fundacaoDe ?? "");
   const [fundacaoAte, setFundacaoAte] = useState(salvos.fundacaoAte ?? "");
-  const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? true);
+  // Falencia/RJ fora por padrao (mesmo default do backend e dos agregados).
+  const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? false);
   const [page, setPage] = useState(0);
   const [criandoLote, setCriandoLote] = useState(false);
   const [avisoLote, setAvisoLote] = useState("");
@@ -187,7 +188,7 @@ export default function DashboardPage() {
   const limparFiltros = () => {
     setCidade([]); setPorte([]); setCnae([]); setBusca("");
     setDividaMin(""); setDividaMax(""); setCapitalMin(""); setCapitalMax("");
-    setFundacaoDe(""); setFundacaoAte(""); setIncluirInativas(true);
+    setFundacaoDe(""); setFundacaoAte(""); setIncluirInativas(false);
     try { localStorage.removeItem(FILTROS_STORAGE_KEY); } catch { /* ignora */ }
   };
 

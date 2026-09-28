@@ -6,6 +6,8 @@ import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import make_msgid
+
+from .rastreamento import injetar as injetar_rastreamento
 from typing import Dict, Optional, List, Any
 
 try:
@@ -461,8 +463,12 @@ def enviar_template_para_cnpjs(
             except Exception:
                 pass
 
+        # Pixel e redirecionamento de clique so' podem ser montados depois
+        # do create_email_enviado -- a URL carrega o id do registro.
+        corpo_html = injetar_rastreamento(montado["corpo_html"],
+                                          email_rec.get("id") if email_rec else None)
         result = enviar_email(
-            email_dest, montado["assunto"], montado["corpo_html"], montado["corpo_texto"],
+            email_dest, montado["assunto"], corpo_html, montado["corpo_texto"],
             smtp=smtp_cfg,
         )
         if result.get("sucesso"):

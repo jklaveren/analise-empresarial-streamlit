@@ -3,7 +3,7 @@ import re
 import time
 from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from .auth import get_current_user, get_active_org
 from .config import settings
 from .db import (
@@ -11,6 +11,7 @@ from .db import (
     get_template, create_notificacao, listar_empresas_db,
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
     listar_campanhas_pendentes, buscar_socios_principais, contar_emails_enviados_hoje,
+    cnpjs_contatados_org,
     org_escopo_base, email_esta_descadastrado,
 )
 from .mailer import enviar_campanha, montar_email_para_cnpj, validar_lote
@@ -87,6 +88,15 @@ def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
     filtros = campanha.get("filtros") or {}
     ja_contatados = cnpjs_ja_contatados_campanha(campanha["id"])
 
+    # Supressao global: quem ja' recebeu de QUALQUER campanha desta empresa
+    # nao entra de novo. Sem isto, campanha nova com filtro parecido
+    # reenviava para os mesmos CNPJs. filtros.recontato_dias libera o
+    # recontato depois de N dias; ausente = nunca.
+    recontato_dias = filtros.get("recontato_dias")
+    ja_contatados |= cnpjs_contatados_org(
+        org_id, desde_dias=None if recontato_dias in (None, "") else int(recontato_dias)
+    )
+
     # Passa o filtro INTEIRO. Antes so ia cidade/cnae/porte/busca/divida_min:
     # uma campanha feita a partir de um lote com capital minimo ou data de
     # fundacao disparava pra um conjunto maior do que o lote mostrava.
@@ -96,7 +106,7 @@ def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
         divida_min=filtros.get("divida_min"), divida_max=filtros.get("divida_max"),
         capital_min=filtros.get("capital_min"), capital_max=filtros.get("capital_max"),
         fundacao_de=filtros.get("fundacao_de"), fundacao_ate=filtros.get("fundacao_ate"),
-        incluir_inativas=filtros.get("incluir_inativas", True),
+        incluir_inativas=filtros.get("incluir_inativas", False),
         contato=filtros.get("contato"),
         potencial=filtros.get("potencial"), categoria=filtros.get("categoria"),
         limit=100000, offset=0, organizacao_id=org_id,
@@ -163,6 +173,42 @@ async def previa_do_lote(campanha_id: int, current_user: Dict = Depends(get_curr
         "descadastrados_lgpd": descadastrados,
         "amostra": com_email[:10],
     }
+
+
+def _janela_de_envio() -> Dict[str, Any]:
+    """Se agora e' hora de mandar, no fuso do negocio.
+
+    Disparar o lote inteiro de madrugada, ou 300 de uma vez, tem cara de
+    robo -- e' o que faz provedor limitar a conta. A regra imita operacao
+    humana: poucos e-mails por rodada, so' em horario comercial e em dia
+    util.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        agora = datetime.now(ZoneInfo(getattr(settings, "ENVIO_TIMEZONE", "America/Sao_Paulo")))
+    except Exception:
+        agora = datetime.now(timezone.utc)
+
+    dias = {int(d) for d in str(getattr(settings, "ENVIO_DIAS_SEMANA", "1,2,3,4,5")).split(",") if d.strip()}
+    if agora.isoweekday() not in dias:
+        return {"aberta": False, "motivo": f"fora dos dias de envio ({agora:%A})"}
+
+    def minutos(hhmm: str, padrao: int) -> int:
+        try:
+            h, m = str(hhmm).split(":")
+            return int(h) * 60 + int(m)
+        except Exception:
+            return padrao
+
+    inicio = minutos(getattr(settings, "ENVIO_JANELA_INICIO", "07:00"), 7 * 60)
+    fim = minutos(getattr(settings, "ENVIO_JANELA_FIM", "19:30"), 19 * 60 + 30)
+    atual = agora.hour * 60 + agora.minute
+    if not (inicio <= atual <= fim):
+        return {"aberta": False,
+                "motivo": f"fora da janela ({agora:%H:%M} nao esta entre "
+                          f"{getattr(settings, 'ENVIO_JANELA_INICIO', '07:00')} e "
+                          f"{getattr(settings, 'ENVIO_JANELA_FIM', '19:30')})"}
+    return {"aberta": True, "agora": agora.strftime("%Y-%m-%d %H:%M %Z")}
 
 
 def _orcamento_email_hoje() -> Optional[int]:
@@ -342,6 +388,36 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
                              max_envios=_orcamento_email_hoje())
 
 
+@router.post("/campanhas/{campanha_id}/pausar")
+async def pausar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user),
+                          org_id: int = Depends(get_active_org)):
+    """Tira a campanha da fila sem apagar nada. Ate aqui a unica forma de
+    parar um envio em andamento era DELETE, que leva junto o historico de
+    quem ja' foi contatado."""
+    campanha = get_campanha(campanha_id, organizacao_id=org_id)
+    if not campanha:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    if campanha.get("status") == "concluida":
+        raise HTTPException(status_code=400, detail="Campanha ja concluida")
+    update_campanha_status(campanha_id, "pausada")
+    return {"ok": True, "status": "pausada"}
+
+
+@router.post("/campanhas/{campanha_id}/retomar")
+async def retomar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user),
+                           org_id: int = Depends(get_active_org)):
+    """Devolve a campanha para a fila. Volta como 'em_andamento' quando ja'
+    mandou algum lote, senao como 'agendada'."""
+    campanha = get_campanha(campanha_id, organizacao_id=org_id)
+    if not campanha:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    if campanha.get("status") != "pausada":
+        raise HTTPException(status_code=400, detail="Campanha nao esta pausada")
+    novo = "em_andamento" if campanha.get("ultimo_lote_em") else "agendada"
+    update_campanha_status(campanha_id, novo)
+    return {"ok": True, "status": novo}
+
+
 @router.post("/campanhas/executar-pendentes")
 async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(None)):
     """Avanca um lote de cada campanha agendada/em andamento que ainda nao
@@ -356,11 +432,22 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
     if not secret_esperado or x_cron_secret != secret_esperado:
         raise HTTPException(status_code=403, detail="CRON_SECRET invalido ou nao configurado")
 
+    janela = _janela_de_envio()
+    if not janela["aberta"]:
+        return {"processadas": 0, "janela": janela, "resultados": []}
+
     # Fila: o orcamento do dia e' da CONTA inteira, nao por campanha. As
     # campanhas consomem em ordem ate acabar; as que nao couberem hoje ficam
     # 'em_andamento' e entram na proxima execucao do cron.
     orcamento = _orcamento_email_hoje()
     orcamento_inicial = orcamento
+
+    # Teto da RODADA: o cron bate a cada 10 min, e cada batida manda pouco.
+    # Sem isto a primeira rodada do dia esvaziaria o orcamento inteiro de uma
+    # vez, que e' o disparo em rajada que se quer evitar.
+    por_rodada = int(getattr(settings, "ENVIO_POR_RODADA", 10) or 0)
+    if por_rodada > 0:
+        orcamento = por_rodada if orcamento is None else min(orcamento, por_rodada)
 
     resultados = []
     for campanha in listar_campanhas_pendentes():
@@ -374,8 +461,10 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
             resultados.append({"campanha_id": campanha["id"], "nome": campanha["nome"], "erro": str(e)})
     return {
         "processadas": len(resultados),
+        "janela": janela,
         "limite_diario": int(getattr(settings, "EMAIL_LIMITE_DIARIO", 0) or 0),
-        "orcamento_inicial": orcamento_inicial,
-        "orcamento_restante": orcamento,
+        "por_rodada": por_rodada,
+        "orcamento_dia_inicial": orcamento_inicial,
+        "orcamento_rodada_restante": orcamento,
         "resultados": resultados,
     }

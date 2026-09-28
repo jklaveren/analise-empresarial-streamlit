@@ -56,6 +56,15 @@ class Settings:
     # conta inteira). O cron corta o lote no que ainda cabe hoje; 0 desliga
     # a checagem.
     EMAIL_LIMITE_DIARIO = int(os.getenv("EMAIL_LIMITE_DIARIO", "300"))
+    # Ritmo de envio. Disparar o lote inteiro de uma vez tem cara de robo e
+    # e' o que faz provedor limitar a conta: manda-se pouco, varias vezes,
+    # so' em horario comercial.
+    ENVIO_POR_RODADA = int(os.getenv("ENVIO_POR_RODADA", "10"))
+    ENVIO_JANELA_INICIO = os.getenv("ENVIO_JANELA_INICIO", "07:00")
+    ENVIO_JANELA_FIM = os.getenv("ENVIO_JANELA_FIM", "19:30")
+    ENVIO_TIMEZONE = os.getenv("ENVIO_TIMEZONE", "America/Sao_Paulo")
+    # 1=segunda ... 7=domingo (ISO). Padrao: dias uteis.
+    ENVIO_DIAS_SEMANA = os.getenv("ENVIO_DIAS_SEMANA", "1,2,3,4,5")
     # Token no querystring do webhook do Brevo (o Brevo nao assina o corpo).
     # Vazio = webhook desligado, devolve 403.
     BREVO_WEBHOOK_SECRET = os.getenv("BREVO_WEBHOOK_SECRET", "")
