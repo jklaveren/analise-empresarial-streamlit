@@ -13,7 +13,7 @@ from .db import (
     listar_campanhas_pendentes, buscar_socios_principais, contar_emails_enviados_hoje,
     org_escopo_base, email_esta_descadastrado,
 )
-from .mailer import enviar_campanha
+from .mailer import enviar_campanha, montar_email_para_cnpj, validar_lote
 from .services.whatsapp_service import enviar_whatsapp
 
 router = APIRouter(prefix="/api/v1")
@@ -300,11 +300,33 @@ def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id:
         }
         for e in empresas if e.get("cnpj_completo")
     }
+    # Conferencia antes do disparo. Roda aqui, dentro do envio, porque o
+    # texto final so' existe depois de montado -- e' o unico ponto onde da'
+    # pra conferir o que realmente vai sair. Reprovado nao e' enviado e fica
+    # registrado com o motivo, em vez de sumir.
+    montados = []
+    for cnpj, email in emails_por_cnpj.items():
+        m = montar_email_para_cnpj(template, cnpj, email,
+                                   dados_empresas.get(cnpj, {}), org_id, remetente)
+        montados.append({
+            "cnpj": cnpj,
+            "email": email,
+            "saudacao": m["variaveis"].get("saudacao", ""),
+            "assunto": m["assunto"],
+            "corpo_texto": m["corpo_texto"],
+            "corpo_html": m["corpo_html"],
+        })
+    conferencia = validar_lote(montados)
+    for cnpj in conferencia["cnpjs_bloqueados"]:
+        registrar_envio_campanha(campanha_id, cnpj, "email", status="bloqueado_conferencia")
+        emails_por_cnpj.pop(cnpj, None)
+
     cnpjs = list(emails_por_cnpj.keys())
     resultado = enviar_campanha(campanha_id, template, cnpjs, emails_por_cnpj, dados_empresas, organizacao_id=org_id, remetente=remetente) \
         if cnpjs else {"sucessos": 0, "erros": 0}
     for cnpj in cnpjs:
         registrar_envio_campanha(campanha_id, cnpj, "email", status="enviado")
+    resultado["conferencia"] = conferencia
     return resultado
 
 
