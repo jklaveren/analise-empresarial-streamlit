@@ -1,10 +1,12 @@
 """Envio pela API do Gmail (HTTPS), alternativa ao SMTP.
 
-O Render bloqueia saida SMTP nas portas 587 e 465, entao SMTP so' funciona
-com provedor que ofereca porta alternativa. A API do Gmail fala 443.
+O Render bloqueia saida SMTP nas portas 587 e 465; a API do Gmail fala 443.
 
-Autentica por service account com delegacao em todo o dominio: a conta
-assume (impersonate) o endereco remetente, sem OAuth interativo.
+Dois modos de autenticacao, nesta ordem:
+1. OAuth com refresh token (GMAIL_OAUTH_*). Nao exige ser admin do
+   Workspace -- a pessoa autoriza a propria conta uma vez.
+2. Service account com delegacao no dominio (GMAIL_SERVICE_ACCOUNT_JSON).
+   Exige superadmin, mas nao precisa de autorizacao por usuario.
 """
 from __future__ import annotations
 
@@ -18,9 +20,11 @@ from typing import Any, Dict, Optional
 
 try:
     from google.oauth2 import service_account
+    from google.oauth2.credentials import Credentials as CredenciaisOAuth
     from google.auth.transport.requests import AuthorizedSession
 except ImportError:
     service_account = None
+    CredenciaisOAuth = None
     AuthorizedSession = None
 
 try:
@@ -34,19 +38,28 @@ log = get_logger(__name__)
 _ESCOPOS = ["https://www.googleapis.com/auth/gmail.send"]
 _ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _ENV = "GMAIL_SERVICE_ACCOUNT_JSON"
+_ENV_OAUTH = ("GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_SECRET", "GMAIL_OAUTH_REFRESH_TOKEN")
+
+
+def _tem_oauth() -> bool:
+    return all(os.environ.get(k) for k in _ENV_OAUTH) and CredenciaisOAuth is not None
 
 
 def configurado() -> bool:
-    return bool(os.environ.get(_ENV)) and service_account is not None
+    return _tem_oauth() or (bool(os.environ.get(_ENV)) and service_account is not None)
 
 
 def _credencial(remetente: str):
-    """Credencial da service account assumindo o endereco remetente."""
-    bruto = os.environ.get(_ENV, "")
-    info = json.loads(bruto)
+    """OAuth do usuario quando houver; senao service account delegada."""
+    if _tem_oauth():
+        cid, secret, refresh = (os.environ[k] for k in _ENV_OAUTH)
+        return CredenciaisOAuth(
+            token=None, refresh_token=refresh, client_id=cid, client_secret=secret,
+            token_uri="https://oauth2.googleapis.com/token", scopes=_ESCOPOS,
+        )
+    info = json.loads(os.environ.get(_ENV, ""))
     cred = service_account.Credentials.from_service_account_info(info, scopes=_ESCOPOS)
-    # subject = quem a conta de servico representa. Precisa ser um usuario do
-    # dominio autorizado na delegacao, senao a API devolve 403.
+    # subject precisa ser um usuario do dominio autorizado na delegacao.
     return cred.with_subject(remetente)
 
 
