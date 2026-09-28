@@ -49,6 +49,17 @@ def configurado() -> bool:
     return _tem_oauth() or (bool(os.environ.get(_ENV)) and service_account is not None)
 
 
+def diagnostico() -> Dict[str, Any]:
+    """Por que a API do Gmail esta (ou nao) ativa. Nao expoe valor nenhum."""
+    return {
+        "ativo": configurado(),
+        "modo": "oauth" if _tem_oauth() else ("service_account" if configurado() else None),
+        "biblioteca_google_auth": CredenciaisOAuth is not None,
+        "envs_oauth_presentes": {k: bool(os.environ.get(k)) for k in _ENV_OAUTH},
+        "env_service_account": bool(os.environ.get(_ENV)),
+    }
+
+
 def _credencial(remetente: str):
     """OAuth do usuario quando houver; senao service account delegada."""
     if _tem_oauth():

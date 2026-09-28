@@ -82,6 +82,16 @@ except ImportError as e:
 app.include_router(api_router)
 
 
+def _diagnostico_email():
+    """Qual transporte de e-mail esta ativo. Sem isto, falha de envio nao
+    distingue credencial ausente de biblioteca faltando."""
+    try:
+        from .mailer import gmail_api
+        return gmail_api.diagnostico()
+    except Exception as e:
+        return {"ativo": False, "erro": str(e)[:120]}
+
+
 @app.get("/health")
 async def health():
     return {
@@ -91,6 +101,7 @@ async def health():
         "producao": settings.is_production,
         "secret_key_ok": secret_key_ok(),
         "banco_ok": check_database_health(),
+        "email": _diagnostico_email(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
