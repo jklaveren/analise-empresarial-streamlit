@@ -5,6 +5,10 @@ import PreviewTemplate from "@/components/PreviewTemplate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listarTemplates, criarTemplate, atualizarTemplate, deletarTemplate, enviarTesteTemplate, uploadTemplateImagem, Template } from "@/lib/api";
 
+// Destino e empresa usados no teste de template.
+const TESTE_EMAIL_PADRAO = "klaverenjv@gmail.com";
+const TESTE_CNPJ_PADRAO = "50552952000196";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const CATEGORIAS = ["todos", "tecnologia", "comercio", "industria", "servicos"];
 
@@ -189,9 +193,14 @@ export default function TemplatesPage() {
   }
 
   async function handleTestar(t: Template) {
-    const para = window.prompt(`Enviar um teste de "${t.nome}" para qual e-mail?`);
+    // Ja vem preenchido: o teste e repetido dezenas de vezes por dia e
+    // redigitar e-mail e CNPJ a cada vez atrasa sem ganho nenhum.
+    const para = window.prompt(`Enviar um teste de "${t.nome}" para qual e-mail?`, TESTE_EMAIL_PADRAO);
     if (!para) return;
-    const cnpj = window.prompt("(Opcional) CNPJ de uma empresa real para testar a personalização com dados reais dela. Deixe em branco para usar dados de exemplo.") || undefined;
+    const cnpj = window.prompt(
+      "CNPJ de uma empresa real, para a personalização usar os dados dela. Em branco usa dados de exemplo.",
+      TESTE_CNPJ_PADRAO,
+    ) || undefined;
     try {
       const r = await enviarTesteTemplate(t.id!, para, cnpj);
       if (r.sucesso) alert(r.simulado ? "Teste OK (SMTP não configurado — envio simulado)." : `Teste enviado para ${para}.`);
