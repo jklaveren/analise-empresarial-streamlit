@@ -88,10 +88,7 @@ def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
     filtros = campanha.get("filtros") or {}
     ja_contatados = cnpjs_ja_contatados_campanha(campanha["id"])
 
-    # Supressao global: quem ja' recebeu de QUALQUER campanha desta empresa
-    # nao entra de novo. Sem isto, campanha nova com filtro parecido
-    # reenviava para os mesmos CNPJs. filtros.recontato_dias libera o
-    # recontato depois de N dias; ausente = nunca.
+    # Supressao global. filtros.recontato_dias libera recontato apos N dias.
     recontato_dias = filtros.get("recontato_dias")
     ja_contatados |= cnpjs_contatados_org(
         org_id, desde_dias=None if recontato_dias in (None, "") else int(recontato_dias)
@@ -176,13 +173,7 @@ async def previa_do_lote(campanha_id: int, current_user: Dict = Depends(get_curr
 
 
 def _janela_de_envio() -> Dict[str, Any]:
-    """Se agora e' hora de mandar, no fuso do negocio.
-
-    Disparar o lote inteiro de madrugada, ou 300 de uma vez, tem cara de
-    robo -- e' o que faz provedor limitar a conta. A regra imita operacao
-    humana: poucos e-mails por rodada, so' em horario comercial e em dia
-    util.
-    """
+    """Se agora esta dentro da janela de envio, no fuso do negocio."""
     try:
         from zoneinfo import ZoneInfo
         agora = datetime.now(ZoneInfo(getattr(settings, "ENVIO_TIMEZONE", "America/Sao_Paulo")))
@@ -238,9 +229,7 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int,
         update_campanha_status(campanha_id, "concluida", concluida_em=datetime.now(timezone.utc))
         return {"sucessos": 0, "erros": 0, "restantes": 0, "status": "concluida"}
 
-    # Teto diario do provedor (so' e-mail; WhatsApp tem limite proprio no
-    # Twilio). Corta o lote no que ainda cabe hoje -- a campanha segue
-    # 'em_andamento' e o resto sai no proximo dia, sem virar erro de envio.
+    # Teto diario do provedor (so e-mail; WhatsApp tem limite proprio).
     if canal == "email" and max_envios is not None:
         if max_envios <= 0:
             return {"sucessos": 0, "erros": 0, "restantes": pendentes_total,
@@ -346,10 +335,7 @@ def _enviar_lote_email(campanha_id: int, empresas: list, campanha: Dict, org_id:
         }
         for e in empresas if e.get("cnpj_completo")
     }
-    # Conferencia antes do disparo. Roda aqui, dentro do envio, porque o
-    # texto final so' existe depois de montado -- e' o unico ponto onde da'
-    # pra conferir o que realmente vai sair. Reprovado nao e' enviado e fica
-    # registrado com o motivo, em vez de sumir.
+    # Confere o texto ja montado; reprovado fica registrado e nao e enviado.
     montados = []
     for cnpj, email in emails_por_cnpj.items():
         m = montar_email_para_cnpj(template, cnpj, email,
@@ -391,9 +377,7 @@ async def executar_campanha(campanha_id: int, current_user: Dict = Depends(get_c
 @router.post("/campanhas/{campanha_id}/pausar")
 async def pausar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user),
                           org_id: int = Depends(get_active_org)):
-    """Tira a campanha da fila sem apagar nada. Ate aqui a unica forma de
-    parar um envio em andamento era DELETE, que leva junto o historico de
-    quem ja' foi contatado."""
+    """Tira a campanha da fila sem apagar o historico de contatados."""
     campanha = get_campanha(campanha_id, organizacao_id=org_id)
     if not campanha:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
@@ -406,8 +390,7 @@ async def pausar_campanha(campanha_id: int, current_user: Dict = Depends(get_cur
 @router.post("/campanhas/{campanha_id}/retomar")
 async def retomar_campanha(campanha_id: int, current_user: Dict = Depends(get_current_user),
                            org_id: int = Depends(get_active_org)):
-    """Devolve a campanha para a fila. Volta como 'em_andamento' quando ja'
-    mandou algum lote, senao como 'agendada'."""
+    """Devolve a campanha para a fila."""
     campanha = get_campanha(campanha_id, organizacao_id=org_id)
     if not campanha:
         raise HTTPException(status_code=404, detail="Campanha nao encontrada")
@@ -442,9 +425,7 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
     orcamento = _orcamento_email_hoje()
     orcamento_inicial = orcamento
 
-    # Teto da RODADA: o cron bate a cada 10 min, e cada batida manda pouco.
-    # Sem isto a primeira rodada do dia esvaziaria o orcamento inteiro de uma
-    # vez, que e' o disparo em rajada que se quer evitar.
+    # Teto da rodada, para nao gastar o orcamento do dia de uma vez.
     por_rodada = int(getattr(settings, "ENVIO_POR_RODADA", 10) or 0)
     if por_rodada > 0:
         orcamento = por_rodada if orcamento is None else min(orcamento, por_rodada)

@@ -1,11 +1,4 @@
-# Dependências do backend FastAPI (WhoDados)
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-pydantic==2.9.0
-sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1  # pin: passlib 1.7.4 quebra com bcrypt>=4.1 (AttributeError bcrypt.__about__)
-python-multipart==0.0.12
-pandas==2.2.3
+# Fonte unica: backend/requirements.txt.
+# O render.yaml instala este arquivo; duplicar a lista fazia os dois
+# divergirem (faltavam anthropic, twilio e pywebpush aqui).
+-r backend/requirements.txt

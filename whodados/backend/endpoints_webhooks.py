@@ -1,10 +1,6 @@
-"""WhoDados API Endpoints - Webhooks de provedores de e-mail (Brevo).
+"""Webhook de eventos do Brevo: entrega, abertura, clique e bounce.
 
-O envio sai por SMTP relay do Brevo, entao 'status=enviado' significa apenas
-que o relay aceitou a mensagem. Entrega, abertura, clique e bounce so' existem
-do lado do Brevo -- este webhook e' o que traz esses eventos pro nosso banco.
-
-Sem BREVO_WEBHOOK_SECRET configurado o endpoint fica desligado (403).
+Desligado (403) sem BREVO_WEBHOOK_SECRET.
 """
 from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Any, Dict, List

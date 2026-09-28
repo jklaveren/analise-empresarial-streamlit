@@ -1,15 +1,7 @@
-"""Rastreamento proprio de abertura e clique.
+"""Abertura e clique via pixel e redirect proprios, sem depender do provedor.
 
-Existe para nao depender do provedor: entrega e bounce so' o provedor sabe,
-mas abertura e clique acontecem no NOSSO HTML -- um pixel e um link que
-passa por nos antes do destino. Com isto, sair do Brevo (que tem webhook)
-para SMTP do Gmail (que nao tem) custa so' entrega/bounce, nao a medicao
-toda.
-
-Assinatura: o id sozinho na URL seria falsificavel (ids sao sequenciais).
-Cada link leva um HMAC curto derivado do SECRET_KEY. No clique, a URL de
-destino entra no HMAC -- sem isso o redirecionador viraria open redirect,
-util para phishing em cima do nosso dominio.
+URLs assinadas com HMAC do SECRET_KEY. A url de destino entra na assinatura
+do clique: sem isso, open redirect.
 """
 from __future__ import annotations
 

@@ -90,3 +90,4 @@ whodados-bigquery-*.json
 *service-account*.json
 service_account*.json
 credentials.json
+TODO.md

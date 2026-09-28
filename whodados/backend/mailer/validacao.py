@@ -1,17 +1,7 @@
-"""Conferencia de um lote de e-mails ANTES do disparo.
+"""Conferencia do lote antes do disparo.
 
-Duas camadas, nesta ordem:
-
-1. Regras deterministicas em 100% dos itens. Pegam praticamente todo erro
-   real (saudacao com numero, variavel {{...}} nao substituida, e-mail
-   invalido, duplicado) em milissegundos e sem custo.
-2. LLM, so' nas saudacoes DISTINTAS que passaram na camada 1, em lote.
-   Serve pro que regra nao decide: "Fm" e "Sao Leo Invest" sao strings
-   validas, mas uma nao e' jeito de chamar ninguem. Uma chamada por ~80
-   nomes, nao uma por e-mail.
-
-Sem ANTHROPIC_API_KEY a camada 2 e' pulada e o relatorio diz isso -- nunca
-libera o envio fingindo que validou.
+Regras deterministicas em todos os itens; camada LLM opcional (desligada por
+padrao) sobre as saudacoes distintas. O relatorio informa a cobertura.
 """
 from __future__ import annotations
 

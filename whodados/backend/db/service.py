@@ -850,12 +850,7 @@ def get_emails_vermelhos_para_followup(limite: int = 50, organizacao_id: Optiona
 
 
 def marcar_email_clicado(email_id: int, link: Optional[str] = None) -> bool:
-    """Registra clique vindo do nosso redirecionador.
-
-    Clique implica abertura: cliente que bloqueia imagem some com o pixel,
-    mas se clicou, leu. Sem isto o mesmo e-mail apareceria como clicado e
-    nao aberto.
-    """
+    """Registra clique. Marca abertura junto: quem clicou leu."""
     with get_db_cursor() as cur:
         cur.execute(
             """UPDATE emails_enviados
@@ -1976,11 +1971,7 @@ def buscar_socios_principais(cnpjs_basicos: List[str]) -> Dict[str, str]:
                        ) AS rn
                 FROM dados_socios
                 WHERE "CNPJ_BASICO" = ANY(%s) AND COALESCE("NOME_SOCIO", '') <> ''
-                  -- So' pessoa fisica. IDENTIFICADOR_SOCIO='1' e' socio
-                  -- pessoa juridica: NOME_SOCIO e' o nome de outra empresa, e
-                  -- a saudacao ("primeira palavra do nome") virava "Oi, Fm!"
-                  -- para FM GROUP PARTICIPACOES LTDA. Sem pessoa fisica, o
-                  -- mailer cai no nome da empresa, que e' o certo.
+                  -- So pessoa fisica: socio PJ traria o nome de outra empresa.
                   AND "IDENTIFICADOR_SOCIO" = '2'
             )
             SELECT "CNPJ_BASICO", "NOME_SOCIO" FROM ranked WHERE rn = 1
@@ -2524,12 +2515,7 @@ def contar_envios_campanha(campanha_id: int) -> int:
 
 
 def contar_emails_enviados_hoje() -> int:
-    """E-mails que ja sairam hoje, na conta inteira (todas as campanhas e
-    organizacoes) -- e' assim que o provedor conta o limite diario.
-
-    Data em UTC porque e' quando o contador do Brevo vira. Envio manual e
-    envio do cron entram no mesmo total: sem isso, um disparo manual de
-    manha estouraria o teto quando o cron rodasse."""
+    """E-mails enviados hoje na conta inteira (UTC, como o provedor conta)."""
     try:
         with get_db_cursor() as cur:
             cur.execute(
@@ -2548,12 +2534,9 @@ def contar_emails_enviados_hoje() -> int:
 
 
 def cnpjs_contatados_org(organizacao_id: int, desde_dias: Optional[int] = None) -> set:
-    """CNPJs que QUALQUER campanha desta empresa ja contatou.
+    """CNPJs contatados por qualquer campanha da empresa.
 
-    Diferente de cnpjs_ja_contatados_campanha, que so' olha uma campanha:
-    sem isto, uma campanha nova com filtro parecido reenvia para quem ja
-    recebeu. desde_dias limita a janela (permite recontato depois de N
-    dias); None = nunca recontatar.
+    desde_dias limita a janela (permite recontato apos N dias); None = nunca.
     """
     sql = """SELECT ce.cnpj FROM campanha_envios ce
              JOIN campanhas c ON c.id = ce.campanha_id

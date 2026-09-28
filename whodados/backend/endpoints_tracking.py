@@ -1,11 +1,7 @@
-"""WhoDados API Endpoints - Rastreamento proprio (abertura e clique).
+"""Rastreamento de abertura e clique.
 
-Rotas publicas por natureza: quem abre o e-mail nao tem sessao. A protecao
-e' o HMAC na propria URL (ver mailer/rastreamento.py).
-
-Nunca devolvem erro para o destinatario: assinatura invalida entrega o
-pixel normal, ou redireciona assim mesmo se a URL estiver assinada. Um
-e-mail com imagem quebrada ou link morto seria pior que perder a metrica.
+Rotas publicas (o destinatario nao tem sessao); a protecao e' o HMAC na URL.
+Nunca retornam erro ao destinatario: falha custa a metrica, nao o e-mail.
 """
 import base64
 

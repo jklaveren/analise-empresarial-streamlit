@@ -57,17 +57,9 @@ CATEGORIA_DESCRICOES = {
     "todos": "solucoes de negocio",
 }
 
-# ---------------------------------------------------------------------------
-# Nome apresentavel (saudacao dos e-mails)
-#
-# A razao social da Receita vem em CAIXA ALTA e carrega ruido de registro que
-# nao serve num "Oi, ...": marcador societario (LTDA/SCP/ME), situacao ("EM
-# RECUPERACAO JUDICIAL"), numero de filial. Empresario individual (firma
-# individual) ainda traz o CNPJ na frente do nome da pessoa
-# ("56.014.274 ANA CAROLINA ..."): 19.990 casos, 2,7% da base.
-#
-# 28% da base nao tem socio cadastrado e caia direto na razao social crua.
-# ---------------------------------------------------------------------------
+# Nome apresentavel para a saudacao. A razao social da RF vem em CAIXA ALTA
+# com marcador societario e situacao cadastral; firma individual traz o CNPJ
+# na frente do nome da pessoa.
 _SAUDACAO_MAX_PALAVRAS = 3
 _MINUSC = {"da", "de", "do", "das", "dos", "e", "di", "du", "van", "von", "del", "la"}
 _ROMANOS = _re_nome.compile(
@@ -117,12 +109,7 @@ def _nome_apresentavel(nome: Optional[str], max_palavras: int = 0) -> str:
 
 def _saudacao(nome_socio: Optional[str], razao_social: Optional[str],
               nome_fantasia: Optional[str]) -> str:
-    """Como chamar o destinatario.
-
-    Pessoa (socio, ou o nome dentro da razao social de firma individual) vira
-    primeiro nome. Empresa usa o nome limpo INTEIRO -- primeira palavra de
-    nome de empresa fica sem sentido ("Oi, Bing!" para BING IMOVEIS ...).
-    """
+    """Pessoa vira primeiro nome; empresa usa o nome curto inteiro."""
     if (nome_socio or "").strip():
         primeiro = _titulo(nome_socio).split()
         if primeiro:
@@ -290,9 +277,7 @@ def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional
         msg["Subject"] = assunto
         msg["From"] = f"{cfg.get('email_from_name')} <{cfg.get('email_from')}>"
         msg["To"] = para
-        # Message-ID proprio: e' a chave que casa os eventos do webhook do
-        # provedor (entrega/abertura/clique/bounce) com este envio. Sem ele o
-        # relay gera um que nunca chega ao nosso banco.
+        # Message-ID proprio: casa os eventos do webhook com este envio.
         dominio = (cfg.get("email_from") or "").split("@")[-1] or None
         msg_id = make_msgid(domain=dominio)
         msg["Message-ID"] = msg_id
@@ -463,8 +448,7 @@ def enviar_template_para_cnpjs(
             except Exception:
                 pass
 
-        # Pixel e redirecionamento de clique so' podem ser montados depois
-        # do create_email_enviado -- a URL carrega o id do registro.
+        # Precisa do id do registro, entao so depois de create_email_enviado.
         corpo_html = injetar_rastreamento(montado["corpo_html"],
                                           email_rec.get("id") if email_rec else None)
         result = enviar_email(
