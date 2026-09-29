@@ -196,6 +196,8 @@ export default function DashboardPage() {
   // o backend (criar_lote, get_lote, _selecionar_lote) usa o filtro completo,
   // entao o lote criado aqui bate com o total exibido na tela.
   async function criarLoteDoFiltro() {
+    // O total e so sugestao de nome: o backend recalcula ao criar o lote,
+    // entao nao ha motivo pra bloquear o botao enquanto a contagem roda.
     const sugestao = `Lote ${new Date().toLocaleDateString("pt-BR")}`
       + (total != null ? ` - ${total.toLocaleString("pt-BR")} empresas` : "");
     const nome = window.prompt("Nome do lote:", sugestao);
@@ -231,7 +233,7 @@ export default function DashboardPage() {
           {temFiltro && !isVisitante && (
             <button
               onClick={criarLoteDoFiltro}
-              disabled={criandoLote || total == null || total === 0}
+              disabled={criandoLote}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
             >
               {criandoLote ? "Criando..." : "Criar lote deste filtro"}

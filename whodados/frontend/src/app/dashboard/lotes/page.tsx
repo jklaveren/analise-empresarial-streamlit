@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useMemo, useState } from "react";
 import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, contarEmpresas, type OpcoesFiltro } from "@/lib/api";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -182,7 +184,7 @@ export default function LotesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">📦 Lotes de Leads e Perfil</h1>
-          <p className="text-sm text-slate-500">Crie lotes por CNAE, Capital Social, Fundação e Cidade para campanhas em massa.</p>
+          <p className="text-sm text-slate-500">Listas de empresas salvas a partir de um filtro, prontas para virar campanha.</p>
         </div>
       </div>
 
@@ -194,109 +196,19 @@ export default function LotesPage() {
       )}
 
       {/* Formulário de Criação de Lote */}
-      <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">✨ Criar Lote por Perfil Empresarial</h2>
-        <form onSubmit={handleCriarLote} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Nome do Lote *</label>
-              <input
-                type="text"
-                value={nomeLote}
-                onChange={e => setNomeLote(e.target.value)}
-                placeholder="Ex: Indústria - Capital > 100k - POA"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">CNAE / Setor (um ou vários)</label>
-              <MultiSelect options={cnaeOptions} selected={cnaeFiltro} onChange={setCnaeFiltro} placeholder={opcoes ? "CNAE..." : "Carregando CNAEs..."} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Capital Social Mínimo (R$)</label>
-              <input
-                type="number"
-                value={capitalMin}
-                onChange={e => setCapitalMin(e.target.value)}
-                placeholder="Ex: 50000"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Fundada a partir de (Data)</label>
-              <input
-                type="date"
-                value={fundacaoDe}
-                onChange={e => setFundacaoDe(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Cidade (Opcional)</label>
-              <MultiSelect options={cidadeOptions} selected={cidadeFiltro} onChange={setCidadeFiltro} placeholder={opcoes ? "Cidade..." : "Carregando cidades..."} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Dívida Mínima (Opcional)</label>
-              <input
-                type="number"
-                value={dividaMin}
-                onChange={e => setDividaMin(e.target.value)}
-                placeholder="Ex: 0"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Porte da Empresa</label>
-              <div className="flex gap-2">
-                {PORTES_OPCOES.map(({ value: p, label }) => {
-                  const ativo = porteFiltro.includes(p);
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => togglePorte(p)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-                        ativo ? "bg-indigo-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-2 gap-4">
-            <div className="text-sm">
-              {prevendo ? (
-                <span className="text-slate-400">Contando empresas...</span>
-              ) : previa != null ? (
-                <span className={previa === 0 ? "text-amber-600 font-medium" : "text-slate-600"}>
-                  {previa === 0
-                    ? "Nenhuma empresa com esses filtros — ajuste antes de salvar."
-                    : <><strong className="text-indigo-600">{previa.toLocaleString("pt-BR")}</strong> empresas com esses filtros</>}
-                </span>
-              ) : (
-                <span className="text-slate-400">Escolha um filtro para ver o total.</span>
-              )}
-            </div>
-            <button
-              type="submit"
-              disabled={criando}
-              className="rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-2.5 text-sm font-medium text-white shadow-md hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
-            >
-              {criando ? "Calculando e Salvando..." : "🚀 Criar e Salvar Lote por Perfil"}
-            </button>
-          </div>
-        </form>
+      <div className="rounded-2xl border border-dashed border-indigo-300 bg-indigo-50/50 p-6 text-center">
+        <p className="font-medium text-slate-800">Os lotes são criados na tela de Empresas</p>
+        <p className="mx-auto mt-1 max-w-xl text-sm text-slate-600">
+          Lá você filtra por busca, cidade, setor, porte, passivo, capital e data de
+          fundação — e o lote nasce exatamente com o que a tela mostra. O formulário
+          que existia aqui aceitava menos campos e gerava lotes diferentes do filtro.
+        </p>
+        <Link
+          href="/dashboard"
+          className="mt-4 inline-block rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+        >
+          Ir para Empresas e criar um lote
+        </Link>
       </div>
 
       {/* Lista de Lotes */}
@@ -309,7 +221,7 @@ export default function LotesPage() {
         {loading ? (
           <div className="p-8 text-center text-slate-500">Carregando lotes...</div>
         ) : lotes.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">Nenhum lote criado ainda. Use o formulário acima para criar o primeiro lote por perfil.</div>
+          <div className="p-12 text-center text-slate-400">Nenhum lote ainda. Crie o primeiro na tela de Empresas, a partir de um filtro.</div>
         ) : (
           <div className="divide-y divide-slate-100">
             {lotes.map(lote => (
