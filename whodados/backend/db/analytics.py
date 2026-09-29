@@ -617,6 +617,8 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
     """Valores distintos para popular os multiselects da tela (cidades,
     portes) e a lista de CNAEs com descricao."""
     vazio = {"cidades": [], "portes": [], "cnaes": []}
+    # Import local: service importa deste modulo, entao no topo daria ciclo.
+    from .service import CNAE_DIVISOES_EXCLUIDAS
     try:
         with get_db_cursor() as cur:
             if _vazio(cur):
@@ -633,9 +635,11 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
                          FROM municipios m
                         WHERE m.nome_municipio <> ''
                           AND EXISTS (SELECT 1 FROM dados_empresas e
-                                       WHERE e."COD_MUNICIPIO" = m.cod_municipio)
+                                       WHERE e."COD_MUNICIPIO" = m.cod_municipio
+                                         AND LEFT(COALESCE(e."CNAE_PRINCIPAL", ''), 2) <> ALL(%s))
                         GROUP BY m.nome_municipio
-                        ORDER BY m.nome_municipio"""
+                        ORDER BY m.nome_municipio""",
+                    (list(CNAE_DIVISOES_EXCLUIDAS),),
                 )
                 cidades = [r["nome_municipio"] for r in cur.fetchall()]
 
@@ -650,9 +654,11 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
                            COUNT(*) AS qtd
                     FROM dados_empresas e
                     LEFT JOIN cnaes c ON c.codigo_cnae = e."CNAE_PRINCIPAL"
+                    WHERE LEFT(COALESCE(e."CNAE_PRINCIPAL", ''), 2) <> ALL(%s)
                     GROUP BY e."CNAE_PRINCIPAL"
                     ORDER BY qtd DESC
-                    """
+                    """,
+                    (list(CNAE_DIVISOES_EXCLUIDAS),),
                 )
                 cnaes = [
                     {"codigo": r["cnae"], "descricao": r["descricao"], "qtd": int(r["qtd"])}
