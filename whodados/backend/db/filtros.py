@@ -19,6 +19,11 @@ PORTE_NOME_SQL = (
     "ELSE 'NAO INFORMADO' END"
 )
 
+# Dominio fixo da Receita, na ordem que faz sentido na tela. Descobrir isto
+# com SELECT DISTINCT custava 7s de varredura em 752 mil linhas pra devolver
+# 3 valores que nunca mudam.
+PORTES_DISPONIVEIS = ["ME", "EPP", "DEMAIS", "NAO INFORMADO"]
+
 # Nome (e apelidos que telas/filtros antigos mandam) -> codigo.
 PORTE_NOME_TO_CODE = {
     "ME": "01", "MICRO": "01", "MICRO EMPRESA": "01", "MICROEMPRESA": "01",

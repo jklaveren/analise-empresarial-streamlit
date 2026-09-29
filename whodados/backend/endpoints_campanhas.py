@@ -11,7 +11,8 @@ from .db import (
     get_template, create_notificacao, listar_empresas_db,
     cnpjs_ja_contatados_campanha, registrar_envio_campanha, contar_envios_campanha,
     listar_campanhas_pendentes, buscar_socios_principais, contar_emails_enviados_hoje,
-    cnpjs_contatados_org,
+    cnpjs_contatados_org, proximo_bloco_pendente, cnpjs_do_bloco,
+    marcar_empresas_do_lote, atualizar_status_bloco, vincular_campanha_ao_lote,
     org_escopo_base, email_esta_descadastrado,
 )
 from .mailer import enviar_campanha, montar_email_para_cnpj, validar_lote
@@ -85,6 +86,32 @@ def _selecionar_lote(campanha: Dict, org_id: int) -> Dict:
     E' a MESMA selecao usada no disparo -- a previa chama esta funcao pra
     mostrar exatamente o que vai sair, nao uma estimativa parecida.
     """
+    # Campanha de lote: publico e a lista fixa do proximo bloco pendente, e
+    # o modelo vem do bloco. Sem lote_id, segue pelo filtro (comportamento
+    # das campanhas antigas).
+    lote_id = campanha.get("lote_id")
+    if lote_id:
+        canal_lote = campanha.get("canal") or "email"
+        bloco = proximo_bloco_pendente(lote_id, canal_lote)
+        if not bloco:
+            return {"fonte": f"lote {lote_id}", "no_filtro": 0, "ja_contatados": 0,
+                    "pendentes": 0, "lote": [], "restantes_depois": 0, "bloco": None}
+        linhas = cnpjs_do_bloco(lote_id, canal_lote, bloco["bloco"])
+        # A supressao vale aqui tambem: estar num bloco nao autoriza reenvio
+        # pra quem ja foi contatado por outra campanha da empresa.
+        recontato = (campanha.get("filtros") or {}).get("recontato_dias")
+        suprimidos = cnpjs_ja_contatados_campanha(campanha["id"]) | cnpjs_contatados_org(
+            org_id, desde_dias=None if recontato in (None, "") else int(recontato))
+        # lote_empresas ja guarda e-mail, telefone e razao social.
+        todas = [{"cnpj_completo": l["cnpj"], "email": l["email"],
+                  "contato_fone": l["telefone"], "razao_social": l["razao_social"]}
+                 for l in linhas]
+        empresas = [e for e in todas if e["cnpj_completo"] not in suprimidos]
+        return {"fonte": f"lote {lote_id} · bloco {bloco['bloco']}",
+                "no_filtro": len(todas), "ja_contatados": len(todas) - len(empresas),
+                "pendentes": len(empresas), "lote": empresas,
+                "restantes_depois": 0, "bloco": bloco}
+
     filtros = campanha.get("filtros") or {}
     ja_contatados = cnpjs_ja_contatados_campanha(campanha["id"])
 
@@ -237,11 +264,25 @@ def _executar_um_lote(campanha: Dict, current_user: Dict, org_id: int,
                     "adiado_por_limite": True}
         lote = lote[:max_envios]
 
+    bloco = sel.get("bloco")
+    campanha_efetiva = dict(campanha)
+    if bloco and bloco.get("template_id"):
+        campanha_efetiva["template_id"] = bloco["template_id"]
+
     if canal == "whatsapp":
         resultado = _enviar_lote_whatsapp(campanha_id, lote, campanha.get("mensagem") or "")
     else:
-        resultado = _enviar_lote_email(campanha_id, lote, campanha, org_id,
+        resultado = _enviar_lote_email(campanha_id, lote, campanha_efetiva, org_id,
                                        remetente=current_user.get("sub"))
+
+    lote_id = campanha.get("lote_id")
+    if lote_id and bloco:
+        marcar_empresas_do_lote(lote_id, [e["cnpj_completo"] for e in lote])
+        restam = proximo_bloco_pendente(lote_id, bloco["canal"])
+        atualizar_status_bloco(lote_id, bloco["canal"], bloco["bloco"], "enviado")
+        if not restam:
+            update_campanha_status(campanha_id, "concluida",
+                                   concluida_em=datetime.now(timezone.utc))
 
     restantes = pendentes_total - len(lote)
     novo_status = "em_andamento" if restantes > 0 else "concluida"
@@ -446,3 +487,32 @@ async def executar_campanhas_pendentes(x_cron_secret: Optional[str] = Header(Non
         "orcamento_rodada_restante": orcamento,
         "resultados": resultados,
     }
+
+
+@router.put("/campanhas/{campanha_id}/lote")
+async def redirecionar_campanha(campanha_id: int, data: Dict,
+                                current_user: Dict = Depends(get_current_user),
+                                org_id: int = Depends(get_active_org)):
+    """Aponta uma campanha existente para outro lote.
+
+    Nao mexe em quem ja foi contatado: o historico e por campanha, entao
+    trocar o lote muda o publico dali pra frente, nao o que ja saiu.
+    """
+    campanha = get_campanha(campanha_id, organizacao_id=org_id)
+    if not campanha:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+
+    lote_id = data.get("lote_id")
+    if lote_id in (None, ""):
+        vincular_campanha_ao_lote(campanha_id, None)
+        return {"ok": True, "lote_id": None, "fonte": "filtro salvo na campanha"}
+
+    from .db import get_lote_db
+    lote = get_lote_db(int(lote_id), organizacao_id=org_id)
+    if not lote:
+        raise HTTPException(status_code=404, detail="Lote nao encontrado")
+
+    vincular_campanha_ao_lote(campanha_id, int(lote_id))
+    if campanha.get("status") == "concluida":
+        update_campanha_status(campanha_id, "agendada")
+    return {"ok": True, "lote_id": int(lote_id), "lote": lote["nome"]}

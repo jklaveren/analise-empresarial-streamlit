@@ -2860,3 +2860,112 @@ def cnpjs_do_bloco(lote_id: int, canal: str, bloco: int,
     with get_db_cursor() as cur:
         cur.execute(sql + " ORDER BY cnpj", (lote_id, canal, bloco))
         return cur.fetchall()
+
+
+def proximo_bloco_pendente(lote_id: int, canal: str = "email") -> Optional[Dict[str, Any]]:
+    """Primeiro bloco do lote que ainda tem empresa pendente."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT b.canal, b.bloco, b.template_id,
+                      (SELECT COUNT(*) FROM lote_empresas le
+                        WHERE le.lote_id = b.lote_id AND le.canal = b.canal
+                          AND le.bloco = b.bloco AND le.status = 'pendente')::int AS pendentes
+                 FROM lote_blocos b
+                WHERE b.lote_id = %s AND b.canal = %s
+                ORDER BY b.bloco""", (lote_id, canal))
+        for r in cur.fetchall():
+            if r["pendentes"]:
+                return r
+        return None
+
+
+def marcar_empresas_do_lote(lote_id: int, cnpjs: List[str], status: str = "enviado") -> int:
+    if not cnpjs:
+        return 0
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE lote_empresas SET status = %s, enviado_em = NOW()
+                WHERE lote_id = %s AND cnpj = ANY(%s)""", (status, lote_id, list(cnpjs)))
+        return cur.rowcount
+
+
+def atualizar_status_bloco(lote_id: int, canal: str, bloco: int, status: str) -> None:
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE lote_blocos SET status = %s WHERE lote_id = %s AND canal = %s AND bloco = %s",
+            (status, lote_id, canal, bloco))
+
+
+def vincular_campanha_ao_lote(campanha_id: int, lote_id: Optional[int]) -> None:
+    """lote_id None devolve a campanha ao filtro salvo."""
+    with get_db_cursor() as cur:
+        cur.execute("UPDATE campanhas SET lote_id = %s WHERE id = %s", (lote_id, campanha_id))
+
+
+# ==================== PAINEL DE ENVIOS ====================
+
+def painel_envios(organizacao_id: int, dias: int = 30) -> Dict[str, Any]:
+    """Fila, volume e engajamento numa consulta so'.
+
+    Existe porque a informacao estava repartida entre Lotes (o que falta),
+    Campanhas (o que rodou) e Monitor (quem abriu) -- e nenhuma das tres
+    respondia "o que sai hoje e o que aconteceu com o que ja saiu".
+    """
+    vazio = {"fila": [], "resumo": {}, "engajamento": {}, "por_dia": []}
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                """SELECT l.id lote_id, l.nome lote, b.canal, b.bloco, b.status,
+                          b.template_id, t.nome template,
+                          (SELECT COUNT(*) FROM lote_empresas le
+                            WHERE le.lote_id = b.lote_id AND le.canal = b.canal
+                              AND le.bloco = b.bloco)::int total,
+                          (SELECT COUNT(*) FROM lote_empresas le
+                            WHERE le.lote_id = b.lote_id AND le.canal = b.canal
+                              AND le.bloco = b.bloco AND le.status = 'pendente')::int pendentes,
+                          c.id campanha_id, c.nome campanha, c.status campanha_status
+                     FROM lote_blocos b
+                     JOIN lotes_leads l ON l.id = b.lote_id
+                     LEFT JOIN email_templates t ON t.id = b.template_id
+                     LEFT JOIN campanhas c ON c.lote_id = l.id
+                    WHERE l.organizacao_id = %s
+                    ORDER BY l.created_at DESC, b.canal, b.bloco""",
+                (organizacao_id,))
+            fila = cur.fetchall()
+
+            cur.execute(
+                """SELECT COUNT(*)::int enviados,
+                          COUNT(*) FILTER (WHERE entregue_em IS NOT NULL)::int entregues,
+                          COUNT(*) FILTER (WHERE aberto_em IS NOT NULL)::int abertos,
+                          COUNT(*) FILTER (WHERE clicado_em IS NOT NULL)::int clicados,
+                          COUNT(*) FILTER (WHERE bounce_em IS NOT NULL)::int bounces,
+                          COUNT(*) FILTER (WHERE status = 'bloqueado_conferencia')::int bloqueados
+                     FROM emails_enviados
+                    WHERE organizacao_id = %s
+                      AND criado_em >= NOW() - (%s || ' days')::interval""",
+                (organizacao_id, dias))
+            eng = cur.fetchone() or {}
+
+            cur.execute(
+                """SELECT enviado_em::date dia, COUNT(*)::int n
+                     FROM emails_enviados
+                    WHERE organizacao_id = %s AND enviado_em IS NOT NULL
+                      AND enviado_em >= NOW() - (%s || ' days')::interval
+                    GROUP BY dia ORDER BY dia""",
+                (organizacao_id, dias))
+            por_dia = [{"dia": r["dia"].isoformat(), "n": r["n"]} for r in cur.fetchall()]
+
+        pendentes = sum(f["pendentes"] for f in fila)
+        return {
+            "fila": fila,
+            "resumo": {
+                "blocos_pendentes": sum(1 for f in fila if f["pendentes"]),
+                "empresas_na_fila": pendentes,
+                "dias_para_esvaziar": (pendentes + 299) // 300 if pendentes else 0,
+            },
+            "engajamento": dict(eng),
+            "por_dia": por_dia,
+        }
+    except Exception as e:
+        log.warning(f"painel_envios falhou: {e}")
+        return vazio

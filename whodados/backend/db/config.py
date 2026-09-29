@@ -75,6 +75,9 @@ def ensure_tables():
         cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS tamanho_lote INTEGER")
         cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS repetir_ate DATE")
         cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS ultimo_lote_em TIMESTAMP WITH TIME ZONE")
+        # Campanha nascida de um lote: o publico vem de lote_empresas (lista
+        # fixa) em vez do filtro reavaliado, e o modelo vem do bloco.
+        cur.execute("ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS lote_id INTEGER")
         # Ledger generico de quem ja foi contatado por qual campanha -- usado
         # pra calcular o "proximo lote" (quem do filtro ainda nao foi
         # contatado), independente do canal.

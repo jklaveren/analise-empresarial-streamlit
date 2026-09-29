@@ -77,6 +77,7 @@ def _tem_divida(cols: set) -> bool:
 # PORTE_NOME nao existe mais na tabela -- e derivado do PORTE_EMPRESA (codigo).
 # Fonte unica (codigos RF) em db/filtros.py, compartilhada com service.py.
 from .filtros import PORTE_NOME_SQL as _PORTE_NOME_SQL  # noqa: E402
+from .filtros import PORTES_DISPONIVEIS  # noqa: E402
 from .filtros import cidades_normalizadas, clausula_cnae, codigos_porte  # noqa: E402
 
 
@@ -610,7 +611,8 @@ def analytics_socio_detalhe(nome_socio: str) -> List[Dict[str, Any]]:
 
 # ==================== Opcoes de filtro ====================
 
-@cached("analytics_opcoes_filtro")
+# Muda so quando o ETL roda (mensal): 6h em vez dos 5 min do padrao.
+@cached("analytics_opcoes_filtro", ttl=6 * 3600)
 def analytics_opcoes_filtro() -> Dict[str, Any]:
     """Valores distintos para popular os multiselects da tela (cidades,
     portes) e a lista de CNAEs com descricao."""
@@ -622,20 +624,22 @@ def analytics_opcoes_filtro() -> Dict[str, Any]:
 
             cidades: List[str] = []
             if _tabela_existe(cur, "municipios"):
+                # So municipio COM empresa na base. A tabela municipios e a
+                # lista da Receita inteira (5.572); a carga e de um estado
+                # so, entao listar tudo oferecia cidade que nunca retorna
+                # resultado.
                 cur.execute(
-                    "SELECT DISTINCT nome_municipio FROM municipios "
-                    "WHERE nome_municipio <> '' ORDER BY nome_municipio"
+                    """SELECT m.nome_municipio
+                         FROM municipios m
+                        WHERE m.nome_municipio <> ''
+                          AND EXISTS (SELECT 1 FROM dados_empresas e
+                                       WHERE e."COD_MUNICIPIO" = m.cod_municipio)
+                        GROUP BY m.nome_municipio
+                        ORDER BY m.nome_municipio"""
                 )
                 cidades = [r["nome_municipio"] for r in cur.fetchall()]
 
-            # Porte agora e derivado do codigo PORTE_EMPRESA -- so 5 nomes
-            # possiveis, e a ordem visual eh melhor fixa (ME, EPP, MEDIO E
-            # GRANDE, ...) do que ordem alfabetica.
-            cur.execute(
-                f'SELECT DISTINCT ({_PORTE_NOME_SQL}) AS p FROM dados_empresas e '
-                f'WHERE e."PORTE_EMPRESA" IS NOT NULL'
-            )
-            portes = sorted({r["p"] for r in cur.fetchall() if r["p"]})
+            portes = list(PORTES_DISPONIVEIS)
 
             cnaes: List[str] = []
             if _tabela_existe(cur, "cnaes"):

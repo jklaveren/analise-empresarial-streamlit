@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
   { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
   { href: "/dashboard/gastos", label: "Gastos", icon: "🧾" },
+  { href: "/dashboard/envios", label: "Envios", icon: "🚀" },
   { href: "/dashboard/campanhas", label: "Campanhas", icon: "📧" },
   { href: "/dashboard/lotes", label: "Lotes", icon: "📦" },
   { href: "/dashboard/whatsapp", label: "WhatsApp", icon: "💬" },

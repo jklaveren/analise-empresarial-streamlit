@@ -721,6 +721,7 @@ export interface Campanha {
   repetir_ate?: string | null;
   ultimo_lote_em?: string | null;
   ja_contatados?: number;
+  lote_id?: number | null;
 }
 
 export async function listarTemplates(): Promise<Template[]> {
@@ -771,6 +772,61 @@ export async function uploadTemplateImagem(id: number, file: File): Promise<Temp
   return res.json();
 }
 
+/** Aponta uma campanha existente para outro lote. null volta ao filtro salvo. */
+// ==================== PAINEL DE ENVIOS ====================
+
+export interface ItemFila {
+  lote_id: number;
+  lote: string;
+  canal: CanalLote;
+  bloco: number;
+  status: string;
+  template_id: number | null;
+  template: string | null;
+  total: number;
+  pendentes: number;
+  campanha_id: number | null;
+  campanha: string | null;
+  campanha_status: string | null;
+}
+
+export interface PainelEnvios {
+  fila: ItemFila[];
+  resumo: { blocos_pendentes: number; empresas_na_fila: number; dias_para_esvaziar: number };
+  engajamento: {
+    enviados?: number; entregues?: number; abertos?: number;
+    clicados?: number; bounces?: number; bloqueados?: number;
+  };
+  por_dia: { dia: string; n: number }[];
+  hoje: {
+    enviados: number; limite: number; restante: number | null;
+    por_rodada: number; janela: string;
+  };
+}
+
+export async function getPainelEnvios(dias = 30): Promise<PainelEnvios> {
+  return request(`/api/v1/envios/painel?dias=${dias}`);
+}
+
+/** Refaz a composição do lote a partir do filtro salvo. */
+export async function recalcularLote(
+  loteId: number, tamanhoBloco = 300,
+): Promise<{ ok: boolean; composicao: Record<string, number>; total: number }> {
+  return request(`/api/v1/lotes/${loteId}/recalcular`, {
+    method: "POST",
+    body: JSON.stringify({ tamanho_bloco: tamanhoBloco }),
+  });
+}
+
+export async function redirecionarCampanha(
+  campanhaId: number, loteId: number | null,
+): Promise<{ ok: boolean; lote_id: number | null; lote?: string }> {
+  return request(`/api/v1/campanhas/${campanhaId}/lote`, {
+    method: "PUT",
+    body: JSON.stringify({ lote_id: loteId }),
+  });
+}
+
 export async function listarCampanhas(): Promise<Campanha[]> {
   return request("/api/v1/campanhas");
 }
@@ -792,6 +848,23 @@ export async function deletarCampanha(id: number): Promise<{ ok: boolean }> {
 
 // ==================== LOTES DE LEADS ====================
 
+export type CanalLote = "email" | "whatsapp" | "sem_contato";
+
+export interface BlocoLote {
+  canal: CanalLote;
+  bloco: number;
+  template_id: number | null;
+  status: string;
+  campanha_id: number | null;
+  empresas: number;
+}
+
+/** Composição fixada na criação do lote — quem está nele e por qual canal. */
+export interface ComposicaoLote {
+  canais: Partial<Record<CanalLote, { total: number; enviados: number }>>;
+  blocos: BlocoLote[];
+}
+
 export interface LoteLeads {
   id: number;
   organizacao_id: number;
@@ -801,6 +874,42 @@ export interface LoteLeads {
   criado_por: string | null;
   created_at: string;
   amostra_empresas?: any[];
+  composicao?: ComposicaoLote | Record<CanalLote, number>;
+}
+
+/** Define o modelo de e-mail de um bloco. Blocos do mesmo lote podem levar
+ *  mensagens diferentes. */
+export async function definirTemplateBloco(
+  loteId: number, canal: CanalLote, bloco: number, templateId: number | null,
+): Promise<{ ok: boolean }> {
+  return request(`/api/v1/lotes/${loteId}/blocos/${canal}/${bloco}/template`, {
+    method: "PUT",
+    body: JSON.stringify({ template_id: templateId }),
+  });
+}
+
+/** Descreve os filtros do lote em português, para a tela não mostrar JSON. */
+export function descreverFiltros(f: Record<string, any> | null | undefined): string[] {
+  if (!f) return [];
+  const partes: string[] = [];
+  const lista = (v: any) => (Array.isArray(v) ? v : [v]).filter(Boolean);
+  const moeda = (v: any) => Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+
+  if (f.busca) partes.push(`busca "${f.busca}"`);
+  if (lista(f.cidade).length) partes.push(lista(f.cidade).join(", "));
+  if (lista(f.cnae).length) partes.push(`${lista(f.cnae).length} setor(es) CNAE`);
+  if (lista(f.porte).length) partes.push(`porte ${lista(f.porte).join(", ")}`);
+  if (f.capital_min != null || f.capital_max != null) {
+    partes.push(`capital ${f.capital_min != null ? `de ${moeda(f.capital_min)}` : ""}${f.capital_max != null ? ` até ${moeda(f.capital_max)}` : ""}`.trim());
+  }
+  if (f.divida_min != null || f.divida_max != null) {
+    partes.push(`passivo ${f.divida_min != null ? `de ${moeda(f.divida_min)}` : ""}${f.divida_max != null ? ` até ${moeda(f.divida_max)}` : ""}`.trim());
+  }
+  if (f.fundacao_de || f.fundacao_ate) {
+    partes.push(`fundação ${f.fundacao_de || "…"} a ${f.fundacao_ate || "…"}`);
+  }
+  if (f.incluir_inativas === false || f.incluir_inativas == null) partes.push("sem falência/RJ");
+  return partes;
 }
 
 export async function listarLotes(): Promise<LoteLeads[]> {

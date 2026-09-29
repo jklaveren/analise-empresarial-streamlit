@@ -53,6 +53,8 @@ from .service import (
     # Lotes de leads
     create_lote_db, get_lote_db, listar_lotes_db, delete_lote_db,
     materializar_lote, get_composicao_lote, definir_template_bloco, cnpjs_do_bloco,
+    proximo_bloco_pendente, marcar_empresas_do_lote, atualizar_status_bloco,
+    vincular_campanha_ao_lote, painel_envios,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,

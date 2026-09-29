@@ -43,8 +43,12 @@ def _chave(nome: str, args: tuple, kwargs: dict) -> str:
     return nome + ":" + hashlib.sha256(bruto.encode()).hexdigest()[:32]
 
 
-def cached(nome: str | None = None) -> Callable:
-    """@cached("resumo") sobre funcoes puras de leitura."""
+def cached(nome: str | None = None, ttl: float | None = None) -> Callable:
+    """@cached("resumo") sobre funcoes puras de leitura.
+
+    ttl em segundos sobrepoe o TTL global -- serve pro que so muda quando o
+    ETL roda (opcoes de filtro), que nao precisa expirar a cada 5 min.
+    """
     def decoradora(fn: Callable) -> Callable:
         chave_nome = nome or fn.__name__
 
@@ -54,7 +58,7 @@ def cached(nome: str | None = None) -> Callable:
             agora = time.monotonic()
             with _lock:
                 hit = _cache.get(chave)
-                if hit and agora - hit[0] < _ttl():
+                if hit and agora - hit[0] < (ttl if ttl is not None else _ttl()):
                     _cache.move_to_end(chave)
                     return hit[1]
             valor = fn(*args, **kwargs)

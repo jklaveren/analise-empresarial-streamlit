@@ -3,7 +3,7 @@
 import Link from "next/link";
 
 import { useEffect, useMemo, useState } from "react";
-import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, contarEmpresas, type OpcoesFiltro } from "@/lib/api";
+import { listarLotes, criarLote, getLote, deletarLote, criarCampanhaDoLote, listarTemplates, getOpcoesFiltro, contarEmpresas, definirTemplateBloco, descreverFiltros, recalcularLote, type OpcoesFiltro, type CanalLote } from "@/lib/api";
 import { MultiSelect } from "@/components/MultiSelect";
 
 // Nomes que o backend entende (codigos RF 01/03/05); rotulo so pra tela.
@@ -34,6 +34,7 @@ export default function LotesPage() {
 
   // Lote selecionado para detalhe / modal de campanha
   const [loteDetalhe, setLoteDetalhe] = useState<any | null>(null);
+  const [recalculando, setRecalculando] = useState<number | null>(null);
   const [modalCampanhaLote, setModalCampanhaLote] = useState<any | null>(null);
   const [templates, setTemplates] = useState<any[]>([]);
   const [canalCampanha, setCanalCampanha] = useState("email");
@@ -125,6 +126,39 @@ export default function LotesPage() {
       setErro(e?.message || "Erro ao criar lote.");
     } finally {
       setCriando(false);
+    }
+  }
+
+  async function salvarTemplateBloco(canal: CanalLote, bloco: number, valor: string) {
+    if (!loteDetalhe) return;
+    const id = valor ? Number(valor) : null;
+    try {
+      await definirTemplateBloco(loteDetalhe.id, canal, bloco, id);
+      setLoteDetalhe({
+        ...loteDetalhe,
+        composicao: {
+          ...loteDetalhe.composicao,
+          blocos: loteDetalhe.composicao.blocos.map((b: any) =>
+            b.canal === canal && b.bloco === bloco ? { ...b, template_id: id } : b),
+        },
+      });
+    } catch {
+      setErro("Não consegui salvar o modelo deste bloco.");
+    }
+  }
+
+  async function handleRecalcular(id: number) {
+    setRecalculando(id);
+    setErro(null);
+    try {
+      const r = await recalcularLote(id);
+      setSucesso(`Composição refeita: ${r.total.toLocaleString("pt-BR")} empresas.`);
+      if (loteDetalhe?.id === id) await verDetalhes(id);
+      carregar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Erro ao recalcular.");
+    } finally {
+      setRecalculando(null);
     }
   }
 
@@ -270,15 +304,29 @@ export default function LotesPage() {
                   </button>
                   <button
                     onClick={() => setModalCampanhaLote(lote)}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-xs font-medium text-white hover:bg-indigo-700"
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
                   >
-                    📧 Criar Campanha
+                    Criar campanha
+                  </button>
+                  <button
+                    onClick={() => verDetalhes(lote.id)}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Ver composição
+                  </button>
+                  <button
+                    onClick={() => handleRecalcular(lote.id)}
+                    disabled={recalculando === lote.id}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                    title="Refaz a lista a partir do filtro salvo"
+                  >
+                    {recalculando === lote.id ? "Recalculando..." : "Recalcular"}
                   </button>
                   <button
                     onClick={() => handleExcluir(lote.id)}
-                    className="px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 text-xs font-medium text-red-600 hover:bg-red-100"
+                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
                   >
-                    🗑️ Excluir
+                    Excluir
                   </button>
                 </div>
               </div>
@@ -299,10 +347,76 @@ export default function LotesPage() {
               <button onClick={() => setLoteDetalhe(null)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">✕</button>
             </div>
             <div className="p-5 flex-1 overflow-y-auto space-y-3">
-              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600">
-                <p className="font-semibold mb-1">Filtros salvos neste lote:</p>
-                <pre className="whitespace-pre-wrap font-mono text-[11px]">{JSON.stringify(loteDetalhe.filtros || {}, null, 2)}</pre>
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+                <p className="text-xs font-semibold text-slate-600 mb-1.5">Este lote é composto por</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {descreverFiltros(loteDetalhe.filtros).map((t: string, i: number) => (
+                    <span key={i} className="rounded-full bg-white border border-slate-300 px-2.5 py-1 text-xs text-slate-700">{t}</span>
+                  ))}
+                  {descreverFiltros(loteDetalhe.filtros).length === 0 && (
+                    <span className="text-xs text-slate-400">Sem filtro — base inteira.</span>
+                  )}
+                </div>
               </div>
+
+              {loteDetalhe.composicao?.canais ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["email", "whatsapp", "sem_contato"] as CanalLote[]).map(c => {
+                      const d = loteDetalhe.composicao.canais[c];
+                      const rotulo = c === "email" ? "E-mail" : c === "whatsapp" ? "WhatsApp" : "Sem contato";
+                      return (
+                        <div key={c} className="rounded-xl border border-slate-200 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-500">{rotulo}</p>
+                          <p className="text-xl font-semibold tabular-nums text-slate-800">
+                            {(d?.total ?? 0).toLocaleString("pt-BR")}
+                          </p>
+                          {!!d?.enviados && (
+                            <p className="text-[11px] text-emerald-700">{d.enviados} já enviados</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                      Fila de envio
+                    </h4>
+                    <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+                      {loteDetalhe.composicao.blocos.map((b: any) => (
+                        <div key={`${b.canal}-${b.bloco}`} className="flex flex-wrap items-center gap-2 p-2.5 text-sm">
+                          <span className="font-medium text-slate-700 w-32">
+                            {b.canal === "email" ? "E-mail" : b.canal === "whatsapp" ? "WhatsApp" : "Sem contato"} · bloco {b.bloco}
+                          </span>
+                          <span className="text-xs text-slate-500 w-24">{b.empresas} empresas</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            b.status === "enviado" ? "bg-emerald-50 text-emerald-700"
+                            : b.status === "enviando" ? "bg-amber-50 text-amber-700"
+                            : "bg-slate-100 text-slate-600"}`}>
+                            {b.status}
+                          </span>
+                          {b.canal === "email" && (
+                            <select
+                              value={b.template_id ?? ""}
+                              onChange={e => salvarTemplateBloco(b.canal, b.bloco, e.target.value)}
+                              className="ml-auto rounded-lg border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              <option value="">Escolher modelo...</option>
+                              {templates.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                  Lote criado antes da composição por canal. Ele ainda funciona pelo filtro
+                  salvo, mas não mostra blocos nem separação de e-mail e WhatsApp.
+                </div>
+              )}
               <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Amostra de Empresas (Até 50 registros)</h4>
               {loteDetalhe.amostra_empresas?.length === 0 ? (
                 <p className="text-sm text-slate-500 text-center py-6">Nenhuma empresa encontrada com estes filtros.</p>
