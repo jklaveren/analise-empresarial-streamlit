@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { SeletorTema } from "@/components/SeletorTema";
 import { useRequireAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 import OrgSwitcher from "@/components/OrgSwitcher";
@@ -181,6 +182,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
         <div className="p-4 border-t border-slate-200/50 bg-white/50">
+          <div className={`mb-2 ${recolhido ? "md:hidden" : ""}`}>
+            <SeletorTema compacto />
+          </div>
           <div className={`flex items-center justify-between ${recolhido ? "md:justify-center" : ""}`}>
             <div className={`flex flex-col ${recolhido ? "md:hidden" : ""}`}>
               <span className="text-xs text-slate-500">Logado como:</span>

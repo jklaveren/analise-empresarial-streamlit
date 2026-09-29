@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { QueryProvider } from "@/lib/query-provider";
+import { TemaProvider, SCRIPT_ANTI_FLASH } from "@/lib/tema";
 
 export const metadata: Metadata = {
   title: "WhoDados",
@@ -27,11 +28,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        {/* Antes da hidratacao: sem isto o tema escuro pisca branco. */}
+        <script dangerouslySetInnerHTML={{ __html: SCRIPT_ANTI_FLASH }} />
+      </head>
       <body>
-        <QueryProvider>
-          <AuthProvider>{children}</AuthProvider>
-        </QueryProvider>
+        <TemaProvider>
+          <QueryProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </QueryProvider>
+        </TemaProvider>
       </body>
     </html>
   );
