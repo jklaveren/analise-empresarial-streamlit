@@ -558,39 +558,27 @@ def notificar_tarefa_por_email(
 def enviar_email_teste(para: str, template: Dict, organizacao_id: Optional[int] = None,
                        dados_empresa: Optional[Dict[str, Any]] = None,
                        remetente: Optional[str] = None) -> Dict[str, Any]:
-    """Envia UM e-mail de teste com o template renderizado, com o remetente e a
-    assinatura de quem esta' testando -- para conferir como o e-mail vai chegar
-    antes de disparar a campanha. Se dados_empresa for passado (ex.: uma empresa
-    real por CNPJ), a personalizacao usa os dados REAIS dela; senao usa valores
-    de exemplo."""
-    smtp_cfg = _smtp_efetivo(organizacao_id, remetente)
-    assinatura = _assinatura_efetiva(organizacao_id, remetente)
+    """Envia UM e-mail de teste do template renderizado.
+
+    Usa montar_email_para_cnpj -- o mesmo caminho do envio real. Montar as
+    variaveis a parte aqui fazia o teste divergir do que sai de verdade
+    ({{saudacao}} e {{nome_socio}} nao existiam nesta lista e chegavam sem
+    substituir).
+    """
     if dados_empresa:
-        cnae = dados_empresa.get("cnae_principal") or ""
-        categoria = classificar_cnae(cnae) if cnae else "servicos"
-        vars_amostra = {
-            "empresa": dados_empresa.get("razao_social") or dados_empresa.get("nome_fantasia") or "",
-            "cnpj": dados_empresa.get("cnpj_completo") or "",
-            "cidade": dados_empresa.get("municipio") or "",
-            "cnae": cnae,
-            "cnae_descricao": _descricao_cnae_fallback(cnae, dados_empresa.get("cnae_descricao")),
-            "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),
-            "categoria": CATEGORIA_DESCRICOES.get(categoria, CATEGORIA_DESCRICOES["todos"]),
-            "nome_fantasia": dados_empresa.get("nome_fantasia") or "",
-            "porte": dados_empresa.get("porte_nome") or "",
-            "imagem": template.get("imagem_url") or "",
-        }
+        cnpj = dados_empresa.get("cnpj_completo") or ""
+        dados = dict(dados_empresa)
     else:
-        vars_amostra = {
-            "empresa": "Empresa Exemplo LTDA", "cnpj": "00000000000000",
-            "cidade": "Porto Alegre", "cnae": "", "cnae_descricao": "",
-            "tema": CATEGORIA_TEMAS["todos"], "categoria": CATEGORIA_DESCRICOES["todos"],
-            "nome_fantasia": "Exemplo", "porte": "", "imagem": template.get("imagem_url") or "",
+        cnpj = "00000000000000"
+        dados = {
+            "razao_social": "Empresa Exemplo LTDA", "nome_fantasia": "Exemplo",
+            "municipio": "Porto Alegre", "cnae_principal": "", "cnae_descricao": "",
+            "porte_nome": "", "nome_socio": "Maria Souza",
         }
-    rendered = _render_template(template, vars_amostra)
-    assunto = "[TESTE] " + (rendered.get("assunto", "") or "Sem assunto")
+
+    montado = montar_email_para_cnpj(template, cnpj, para, dados, organizacao_id, remetente)
     return enviar_email(
-        para, assunto,
-        rendered.get("corpo_html", "") + assinatura, rendered.get("corpo_texto"),
-        smtp=smtp_cfg,
+        para, "[TESTE] " + (montado["assunto"] or "Sem assunto"),
+        montado["corpo_html"], montado["corpo_texto"],
+        smtp=_smtp_efetivo(organizacao_id, remetente),
     )
