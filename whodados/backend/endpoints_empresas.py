@@ -4,6 +4,7 @@ A base de leads e' COMPARTILHADA entre as empresas (nao e' escopada por org) -- 
 funil de filtros roda no servidor (server-side), entao o app trabalha a base
 inteira sem baixar tudo para o navegador."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 from .auth import get_current_user, get_active_org, get_papel_ativo
 try:
@@ -15,6 +16,7 @@ from .db import (
     org_escopo_base, contar_carteira_db,
     get_crm_by_cnpj,
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
+    salvar_filtro_empresas, obter_filtro_empresas, apagar_filtro_empresas,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -213,3 +215,47 @@ async def enviar_email_para_empresa(
         raise HTTPException(status_code=502, detail=r.get("erro") or "Falha no envio")
     return {"ok": True, "para": destino, "assunto": montado["assunto"],
             "simulado": bool(r.get("simulado"))}
+
+
+# ---------------------------------------------------------------------------
+# Filtro fixado do painel (ponto de retorno)
+# ---------------------------------------------------------------------------
+
+class FiltroSalvoBody(BaseModel):
+    """Filtros do painel como o frontend os monta. Dict solto de proposito:
+    o painel ganha criterio novo com frequencia e nao vale versionar um
+    schema aqui a cada um -- quem le de volta ignora chave que nao conhece."""
+    filtros: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/empresas/filtro-salvo")
+async def ler_filtro_salvo(current_user: Dict = Depends(get_current_user),
+                           org_id: int = Depends(get_active_org)):
+    """Pesquisa fixada da pessoa nesta empresa. 'filtros' vem null quando
+    nunca salvou -- a tela cai no cache local do navegador nesse caso."""
+    reg = obter_filtro_empresas(current_user["sub"], org_id)
+    if not reg:
+        return {"filtros": None, "atualizado_em": None}
+    return {
+        "filtros": reg.get("filtros") or {},
+        "atualizado_em": reg["atualizado_em"].isoformat() if reg.get("atualizado_em") else None,
+    }
+
+
+@router.put("/empresas/filtro-salvo")
+async def gravar_filtro_salvo(body: FiltroSalvoBody,
+                              current_user: Dict = Depends(get_current_user),
+                              org_id: int = Depends(get_active_org)):
+    """Fixa a pesquisa atual, sobrescrevendo a anterior (um slot so')."""
+    reg = salvar_filtro_empresas(current_user["sub"], org_id, body.filtros)
+    return {
+        "filtros": reg.get("filtros") or {},
+        "atualizado_em": reg["atualizado_em"].isoformat() if reg.get("atualizado_em") else None,
+    }
+
+
+@router.delete("/empresas/filtro-salvo")
+async def remover_filtro_salvo(current_user: Dict = Depends(get_current_user),
+                               org_id: int = Depends(get_active_org)):
+    """Solta o ponto de retorno."""
+    return {"removido": apagar_filtro_empresas(current_user["sub"], org_id)}

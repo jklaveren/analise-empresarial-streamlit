@@ -16,6 +16,7 @@ from .db import (
     org_escopo_base, email_esta_descadastrado,
 )
 from .mailer import enviar_campanha, montar_email_para_cnpj, validar_lote
+from .mailer.service import _titulo
 from .services.whatsapp_service import enviar_whatsapp
 
 router = APIRouter(prefix="/api/v1")
@@ -319,7 +320,7 @@ def _enviar_lote_whatsapp(campanha_id: int, empresas: list, mensagem: str) -> Di
         texto = (
             mensagem
             .replace("{{empresa}}", e.get("razao_social") or e.get("nome_fantasia") or "")
-            .replace("{{cidade}}", e.get("municipio") or "")
+            .replace("{{cidade}}", _titulo(e.get("municipio") or ""))
         )
         try:
             r = enviar_whatsapp(telefone, texto)

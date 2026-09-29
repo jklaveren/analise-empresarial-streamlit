@@ -63,6 +63,11 @@ CATEGORIA_DESCRICOES = {
 # na frente do nome da pessoa.
 _SAUDACAO_MAX_PALAVRAS = 3
 _MINUSC = {"da", "de", "do", "das", "dos", "e", "di", "du", "van", "von", "del", "la"}
+# No corpo dos templates o travessao costuma ser digitado como "--" (habito
+# do codigo daqui). No e-mail renderizado isso sai como dois tracos soltos
+# no meio da frase. So' "--" entre espacos vira travessao: "---" em linha
+# propria e' separador de assinatura e fica como esta.
+_TRACO_SOLTO = _re_nome.compile(r"(?<= )--(?= )")
 _ROMANOS = _re_nome.compile(
     r"^(?=[MDCLXVI]+$)M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$", _re_nome.I)
 # Corta no PRIMEIRO marcador societario: o que vem depois e' ruido de
@@ -158,7 +163,7 @@ def _render_template(template: Dict, vars_dict: Dict[str, str]) -> Dict[str, str
             continue
         for key, val in vars_dict.items():
             texto = texto.replace("{{" + key + "}}", str(val))
-        resultado[campo] = texto
+        resultado[campo] = _TRACO_SOLTO.sub("—", texto)
     return resultado
 
 
@@ -397,7 +402,7 @@ def montar_email_para_cnpj(
         "saudacao": saudacao,
         "nome_socio": _titulo(nome_socio) if nome_socio else "",
         "cnpj": cnpj,
-        "cidade": dados.get("municipio") or "",
+        "cidade": _titulo(dados.get("municipio") or ""),
         "cnae": cnae or "",
         "cnae_descricao": _descricao_cnae_fallback(cnae, dados.get("cnae_descricao")),
         "tema": CATEGORIA_TEMAS.get(categoria, CATEGORIA_TEMAS["todos"]),

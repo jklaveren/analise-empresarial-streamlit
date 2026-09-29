@@ -2969,3 +2969,48 @@ def painel_envios(organizacao_id: int, dias: int = 30) -> Dict[str, Any]:
     except Exception as e:
         log.warning(f"painel_envios falhou: {e}")
         return vazio
+
+
+# ---------------------------------------------------------------------------
+# Filtro fixado do painel de Empresas
+# ---------------------------------------------------------------------------
+
+def salvar_filtro_empresas(username: str, organizacao_id: int, filtros: Dict[str, Any]) -> Dict[str, Any]:
+    """Fixa a pesquisa atual da pessoa nesta empresa.
+
+    Um slot so' por (usuario, organizacao): salvar de novo sobrescreve o
+    anterior -- e' ponto de retorno, nao historico. Devolve o registro
+    gravado (com atualizado_em) porque a tela mostra quando foi o ultimo
+    save."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """INSERT INTO filtro_salvo (username, organizacao_id, filtros, atualizado_em)
+               VALUES (%s, %s, %s::jsonb, NOW())
+               ON CONFLICT (username, organizacao_id) DO UPDATE SET
+                   filtros = EXCLUDED.filtros,
+                   atualizado_em = NOW()
+               RETURNING username, organizacao_id, filtros, atualizado_em""",
+            (username, organizacao_id, json.dumps(filtros or {})),
+        )
+        return cur.fetchone()
+
+
+def obter_filtro_empresas(username: str, organizacao_id: int) -> Optional[Dict[str, Any]]:
+    """Filtro fixado da pessoa nesta empresa, ou None se nunca salvou."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT filtros, atualizado_em FROM filtro_salvo
+               WHERE username = %s AND organizacao_id = %s""",
+            (username, organizacao_id),
+        )
+        return cur.fetchone()
+
+
+def apagar_filtro_empresas(username: str, organizacao_id: int) -> bool:
+    """Solta o filtro fixado (a tela volta a abrir sem ponto de retorno)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "DELETE FROM filtro_salvo WHERE username = %s AND organizacao_id = %s",
+            (username, organizacao_id),
+        )
+        return cur.rowcount > 0

@@ -198,6 +198,35 @@ export async function listarEmpresas(filtros: EmpresaFiltros = {}, limit = 100, 
 }
 
 /** Total de empresas que batem no filtro atual (contador do funil). */
+// Filtro fixado no banco (ponto de retorno). Um slot por usuario/empresa:
+// gravar sobrescreve o anterior. Diferente do cache local do navegador, que
+// guarda a ultima busca e e' sobrescrito a cada mexida num filtro.
+// O que vai gravado e' o estado dos CAMPOS do painel (texto cru que a
+// pessoa digitou), nao o EmpresaFiltros ja' convertido -- so' assim o
+// formulario volta exatamente como estava. Quem define o formato e' a tela;
+// aqui trafega solto de proposito.
+export type FiltrosPainel = Record<string, unknown>;
+
+export interface FiltroSalvoResposta {
+  filtros: FiltrosPainel | null;
+  atualizado_em: string | null;
+}
+
+export async function getFiltroSalvo(): Promise<FiltroSalvoResposta> {
+  return request("/api/v1/empresas/filtro-salvo");
+}
+
+export async function salvarFiltroSalvo(filtros: FiltrosPainel): Promise<FiltroSalvoResposta> {
+  return request("/api/v1/empresas/filtro-salvo", {
+    method: "PUT",
+    body: JSON.stringify({ filtros }),
+  });
+}
+
+export async function apagarFiltroSalvo(): Promise<{ removido: boolean }> {
+  return request("/api/v1/empresas/filtro-salvo", { method: "DELETE" });
+}
+
 export async function contarEmpresas(filtros: EmpresaFiltros = {}): Promise<{ total: number }> {
   return request(`/api/v1/empresas/count?${empresaFiltrosToQuery(filtros)}`);
 }

@@ -282,6 +282,20 @@ def _run_ensure_multiempresa(os):
             PRIMARY KEY (user_id, organizacao_id)
         )""")
 
+        # Filtro do painel de Empresas fixado pela pessoa: UM por usuario em
+        # cada empresa -- salvar de novo sobrescreve o anterior (upsert no
+        # PRIMARY KEY), nao acumula historico. Serve de ponto de retorno: a
+        # tela restaura de la' em qualquer maquina, diferente do cache de
+        # "ultima busca" do navegador, que o proprio ato de mexer num filtro
+        # ja sobrescreve. atualizado_em e' mostrado no topo do painel.
+        cur.execute("""CREATE TABLE IF NOT EXISTS filtro_salvo (
+            username VARCHAR(50) NOT NULL,
+            organizacao_id INTEGER NOT NULL REFERENCES organizacoes(id) ON DELETE CASCADE,
+            filtros JSONB NOT NULL DEFAULT '{}'::jsonb,
+            atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (username, organizacao_id)
+        )""")
+
         # --- Seed das empresas (idempotente por slug) ---
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('NRA', 'nra') ON CONFLICT (slug) DO NOTHING")
         cur.execute("INSERT INTO organizacoes (nome, slug) VALUES ('SYVP', 'syvp') ON CONFLICT (slug) DO NOTHING")

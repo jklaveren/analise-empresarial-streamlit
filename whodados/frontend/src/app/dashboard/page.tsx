@@ -8,7 +8,7 @@ import { FunilInsights } from "@/components/FunilInsights";
 import { TopEmpresasRanking } from "@/components/TopEmpresasRanking";
 import { ConsultaNaturalBox } from "@/components/ConsultaNaturalBox";
 import { useAuth } from "@/lib/auth-context";
-import { listarEmpresas, contarEmpresas, getOpcoesFiltro, criarLote, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
+import { listarEmpresas, contarEmpresas, getOpcoesFiltro, criarLote, getFiltroSalvo, salvarFiltroSalvo, EmpresaItem, EmpresaFiltros, AnalyticsFiltros, OpcoesFiltro } from "@/lib/api";
 
 const PAGE_SIZE = 50;
 
@@ -42,11 +42,14 @@ function temFiltroAtivo(f: EmpresaFiltros): boolean {
   );
 }
 
-interface FiltrosSalvos {
+// `type` e nao `interface`: interface nao ganha index signature implicita,
+// entao nao seria aceita onde o client espera FiltrosPainel (Record<string,
+// unknown>) ao gravar a pesquisa fixada.
+type FiltrosSalvos = {
   cidade: string[]; porte: string[]; cnae: string[]; busca: string;
   dividaMin: string; dividaMax: string; capitalMin: string; capitalMax: string;
   fundacaoDe: string; fundacaoAte: string; incluirInativas: boolean;
-}
+};
 
 function lerFiltrosSalvos(): Partial<FiltrosSalvos> {
   try {
@@ -55,6 +58,15 @@ function lerFiltrosSalvos(): Partial<FiltrosSalvos> {
   } catch {
     return {}; // storage bloqueado (aba privada) ou JSON invalido -- comeca zerado
   }
+}
+
+function formatSalvoEm(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hoje = new Date();
+  const mesmoDia = d.toDateString() === hoje.toDateString();
+  const hora = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return mesmoDia ? `hoje às ${hora}` : `${d.toLocaleDateString("pt-BR")} às ${hora}`;
 }
 
 function formatBRL(v: number) {
@@ -80,6 +92,11 @@ export default function DashboardPage() {
   const [fundacaoAte, setFundacaoAte] = useState(salvos.fundacaoAte ?? "");
   // Falencia/RJ fora por padrao (mesmo default do backend e dos agregados).
   const [incluirInativas, setIncluirInativas] = useState(salvos.incluirInativas ?? false);
+  // Pesquisa fixada no banco: um slot por usuario/empresa, salvar sobrescreve.
+  // Vive no banco (e nao so' no localStorage) pra ser ponto de retorno de
+  // verdade -- volta em qualquer maquina e nao e' perdida ao mexer nos campos.
+  const [salvoEm, setSalvoEm] = useState<string | null>(null);
+  const [salvandoFiltro, setSalvandoFiltro] = useState(false);
   const [page, setPage] = useState(0);
   const [criandoLote, setCriandoLote] = useState(false);
   const [avisoLote, setAvisoLote] = useState("");
@@ -185,6 +202,49 @@ export default function DashboardPage() {
 
   const totalPages = total != null ? Math.max(1, Math.ceil(total / PAGE_SIZE)) : null;
 
+  const aplicarFiltros = (f: Partial<FiltrosSalvos>) => {
+    setCidade(f.cidade ?? []); setPorte(f.porte ?? []); setCnae(f.cnae ?? []);
+    setBusca(f.busca ?? "");
+    setDividaMin(f.dividaMin ?? ""); setDividaMax(f.dividaMax ?? "");
+    setCapitalMin(f.capitalMin ?? ""); setCapitalMax(f.capitalMax ?? "");
+    setFundacaoDe(f.fundacaoDe ?? ""); setFundacaoAte(f.fundacaoAte ?? "");
+    setIncluirInativas(f.incluirInativas ?? false);
+    setPage(0);
+  };
+
+  // Ao abrir a tela, a pesquisa fixada no banco manda mais que o cache do
+  // navegador: e' o que a pessoa escolheu guardar. Sem nada salvo, fica o
+  // que o localStorage ja' tinha posto nos campos no mount.
+  useEffect(() => {
+    let vivo = true;
+    getFiltroSalvo()
+      .then(r => {
+        if (!vivo || !r.filtros) return;
+        aplicarFiltros(r.filtros as Partial<FiltrosSalvos>);
+        setSalvoEm(r.atualizado_em);
+      })
+      .catch(() => { /* sem ponto de retorno nao e' erro de tela */ });
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOrg?.id]);
+
+  async function fixarPesquisa() {
+    setSalvandoFiltro(true);
+    try {
+      const dados: FiltrosSalvos = {
+        cidade, porte, cnae, busca, dividaMin, dividaMax,
+        capitalMin, capitalMax, fundacaoDe, fundacaoAte, incluirInativas,
+      };
+      const r = await salvarFiltroSalvo(dados);
+      setSalvoEm(r.atualizado_em);
+    } catch {
+      setAvisoLote("Não consegui salvar a pesquisa. Tente de novo.");
+      setLoteCriado(false);
+    } finally {
+      setSalvandoFiltro(false);
+    }
+  }
+
   const limparFiltros = () => {
     setCidade([]); setPorte([]); setCnae([]); setBusca("");
     setDividaMin(""); setDividaMax(""); setCapitalMin(""); setCapitalMax("");
@@ -239,9 +299,25 @@ export default function DashboardPage() {
               {criandoLote ? "Criando..." : "Criar lote deste filtro"}
             </button>
           )}
+          {!isVisitante && (
+            <button
+              onClick={fixarPesquisa}
+              disabled={salvandoFiltro}
+              title="Guarda esta pesquisa como ponto de retorno. Salvar de novo substitui a anterior."
+              className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
+            >
+              {salvandoFiltro ? "Salvando..." : "Salvar pesquisa"}
+            </button>
+          )}
           <button onClick={limparFiltros} className="text-sm text-slate-500 hover:text-slate-800 underline">Limpar filtros</button>
         </div>
       </header>
+
+      {salvoEm && (
+        <p className="-mt-2 text-xs text-slate-500">
+          Pesquisa salva {formatSalvoEm(salvoEm)} — é ela que abre quando você volta.
+        </p>
+      )}
 
       {avisoLote && (
         <div className={`rounded-lg p-3 text-sm ${loteCriado ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}>
