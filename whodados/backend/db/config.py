@@ -143,6 +143,37 @@ def ensure_tables():
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )""")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_lotes_leads_org ON lotes_leads(organizacao_id)")
+        # Composicao do lote, fixada na criacao. Sem isto "quem esta neste
+        # lote" so existia como filtro reavaliado a cada envio -- o conteudo
+        # mudava a cada recarga da base.
+        cur.execute("""CREATE TABLE IF NOT EXISTS lote_empresas (
+            id BIGSERIAL PRIMARY KEY,
+            lote_id INTEGER NOT NULL REFERENCES lotes_leads(id) ON DELETE CASCADE,
+            cnpj VARCHAR(18) NOT NULL,
+            email VARCHAR(255),
+            telefone VARCHAR(30),
+            razao_social VARCHAR(300),
+            -- email | whatsapp (sem e-mail, com fone) | sem_contato
+            canal VARCHAR(20) NOT NULL DEFAULT 'email',
+            bloco INTEGER NOT NULL DEFAULT 1,
+            status VARCHAR(30) NOT NULL DEFAULT 'pendente',
+            enviado_em TIMESTAMP WITH TIME ZONE,
+            UNIQUE (lote_id, cnpj)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lote_empresas_lote ON lote_empresas(lote_id, canal, bloco)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lote_empresas_status ON lote_empresas(lote_id, status)")
+        # Template por bloco: permite mensagem diferente em cada fatia do
+        # mesmo lote e comparar resposta.
+        cur.execute("""CREATE TABLE IF NOT EXISTS lote_blocos (
+            id BIGSERIAL PRIMARY KEY,
+            lote_id INTEGER NOT NULL REFERENCES lotes_leads(id) ON DELETE CASCADE,
+            canal VARCHAR(20) NOT NULL DEFAULT 'email',
+            bloco INTEGER NOT NULL,
+            template_id INTEGER,
+            status VARCHAR(30) NOT NULL DEFAULT 'pendente',
+            campanha_id INTEGER,
+            UNIQUE (lote_id, canal, bloco)
+        )""")
         conn.commit(); cur.close()
     _ensure_enriquecimento_table()
     _ensure_multiempresa()

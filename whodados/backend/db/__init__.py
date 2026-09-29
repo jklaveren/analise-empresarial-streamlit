@@ -52,6 +52,7 @@ from .service import (
     buscar_socios_principais, buscar_empresas_rapido,
     # Lotes de leads
     create_lote_db, get_lote_db, listar_lotes_db, delete_lote_db,
+    materializar_lote, get_composicao_lote, definir_template_bloco, cnpjs_do_bloco,
 )
 from .analytics import (
     analytics_resumo, analytics_por_cidade, analytics_por_setor, analytics_por_porte,

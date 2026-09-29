@@ -4,7 +4,8 @@ from typing import Dict, List, Optional
 from .auth import get_current_user, get_active_org
 from .db import (
     create_lote_db, get_lote_db, listar_lotes_db, delete_lote_db,
-    contar_empresas_db, listar_empresas_db, create_campanha
+    contar_empresas_db, listar_empresas_db, create_campanha,
+    materializar_lote, get_composicao_lote, definir_template_bloco,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -46,6 +47,20 @@ async def criar_lote(data: Dict, current_user: Dict = Depends(get_current_user),
         total_encontrado=total,
         criado_por=current_user.get("sub")
     )
+
+    # Fixa a composicao agora: sem isto "quem esta no lote" seria o filtro
+    # reavaliado a cada envio, e mudaria a cada recarga da base.
+    empresas = listar_empresas_db(
+        cidade=filtros.get("cidade"), cnae=filtros.get("cnae"), porte=filtros.get("porte"),
+        busca=filtros.get("busca"),
+        divida_min=filtros.get("divida_min"), divida_max=filtros.get("divida_max"),
+        capital_min=filtros.get("capital_min"), capital_max=filtros.get("capital_max"),
+        fundacao_de=filtros.get("fundacao_de"), fundacao_ate=filtros.get("fundacao_ate"),
+        incluir_inativas=filtros.get("incluir_inativas", False),
+        limit=100000, offset=0, organizacao_id=org_id,
+    )
+    tamanho = int(data.get("tamanho_bloco") or 300)
+    lote["composicao"] = materializar_lote(lote["id"], empresas, tamanho_bloco=tamanho)
     return lote
 
 
@@ -74,6 +89,7 @@ async def get_lote(lote_id: int, current_user: Dict = Depends(get_current_user),
         organizacao_id=org_id,
     )
     lote["amostra_empresas"] = empresas
+    lote["composicao"] = get_composicao_lote(lote_id)
     return lote
 
 
@@ -108,3 +124,18 @@ async def criar_campanha_do_lote(lote_id: int, data: Dict, current_user: Dict = 
         tamanho_lote=tamanho_lote
     )
     return campanha
+
+
+@router.put("/lotes/{lote_id}/blocos/{canal}/{bloco}/template")
+async def definir_template_do_bloco(
+    lote_id: int, canal: str, bloco: int, data: Dict,
+    current_user: Dict = Depends(get_current_user), org_id: int = Depends(get_active_org),
+):
+    """Escolhe o template de um bloco. Blocos diferentes podem levar
+    mensagens diferentes na mesma base."""
+    if not get_lote_db(lote_id, organizacao_id=org_id):
+        raise HTTPException(status_code=404, detail="Lote nao encontrado")
+    tid = data.get("template_id")
+    if not definir_template_bloco(lote_id, canal, bloco, int(tid) if tid else None):
+        raise HTTPException(status_code=404, detail="Bloco nao encontrado")
+    return {"ok": True, "canal": canal, "bloco": bloco, "template_id": tid}

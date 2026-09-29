@@ -2770,3 +2770,93 @@ def delete_lote_db(lote_id: int, organizacao_id: int) -> bool:
     with get_db_cursor() as cur:
         cur.execute("DELETE FROM lotes_leads WHERE id = %s AND organizacao_id = %s", (lote_id, organizacao_id))
         return cur.rowcount > 0
+
+
+# ==================== COMPOSICAO DO LOTE ====================
+
+def materializar_lote(lote_id: int, empresas: List[Dict[str, Any]],
+                      tamanho_bloco: int = 300) -> Dict[str, int]:
+    """Fixa quem esta no lote e separa por canal.
+
+    Sem e-mail mas com telefone vai para 'whatsapp'; sem nenhum contato fica
+    registrado como 'sem_contato' em vez de sumir. O canal e-mail e fatiado
+    em blocos do tamanho do envio diario, cada um com template proprio.
+    """
+    por_canal: Dict[str, List[Dict[str, Any]]] = {"email": [], "whatsapp": [], "sem_contato": []}
+    vistos = set()
+    for e in empresas:
+        cnpj = (e.get("cnpj_completo") or "").strip()
+        if not cnpj or cnpj in vistos:
+            continue
+        vistos.add(cnpj)
+        email = (e.get("email") or "").strip()
+        fone = re.sub(r"\D", "", e.get("contato_fone") or e.get("telefone") or "")
+        canal = "email" if "@" in email else ("whatsapp" if len(fone) >= 10 else "sem_contato")
+        por_canal[canal].append({
+            "cnpj": cnpj, "email": email or None, "telefone": fone or None,
+            "razao_social": (e.get("razao_social") or "")[:300],
+        })
+
+    linhas, blocos = [], []
+    for canal, itens in por_canal.items():
+        passo = tamanho_bloco if canal == "email" else max(len(itens), 1)
+        for i, item in enumerate(itens):
+            n = (i // passo) + 1
+            linhas.append((lote_id, item["cnpj"], item["email"], item["telefone"],
+                           item["razao_social"], canal, n))
+        for n in range(1, (len(itens) - 1) // passo + 2 if itens else 1):
+            blocos.append((lote_id, canal, n))
+
+    with get_db_cursor() as cur:
+        cur.execute("DELETE FROM lote_empresas WHERE lote_id = %s", (lote_id,))
+        cur.execute("DELETE FROM lote_blocos WHERE lote_id = %s", (lote_id,))
+        if linhas:
+            cur.executemany(
+                """INSERT INTO lote_empresas
+                     (lote_id, cnpj, email, telefone, razao_social, canal, bloco)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""", linhas)
+        if blocos:
+            cur.executemany(
+                "INSERT INTO lote_blocos (lote_id, canal, bloco) VALUES (%s,%s,%s) "
+                "ON CONFLICT DO NOTHING", blocos)
+
+    return {c: len(v) for c, v in por_canal.items()}
+
+
+def get_composicao_lote(lote_id: int) -> Dict[str, Any]:
+    """Resumo por canal e blocos, para a tela de lotes."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """SELECT canal, COUNT(*)::int n,
+                      COUNT(*) FILTER (WHERE status = 'enviado')::int enviados
+                 FROM lote_empresas WHERE lote_id = %s GROUP BY canal""", (lote_id,))
+        canais = {r["canal"]: {"total": r["n"], "enviados": r["enviados"]} for r in cur.fetchall()}
+        cur.execute(
+            """SELECT b.canal, b.bloco, b.template_id, b.status, b.campanha_id,
+                      (SELECT COUNT(*) FROM lote_empresas le
+                        WHERE le.lote_id = b.lote_id AND le.canal = b.canal
+                          AND le.bloco = b.bloco)::int AS empresas
+                 FROM lote_blocos b WHERE b.lote_id = %s
+                ORDER BY b.canal, b.bloco""", (lote_id,))
+        return {"canais": canais, "blocos": cur.fetchall()}
+
+
+def definir_template_bloco(lote_id: int, canal: str, bloco: int,
+                           template_id: Optional[int]) -> bool:
+    with get_db_cursor() as cur:
+        cur.execute(
+            """UPDATE lote_blocos SET template_id = %s
+                WHERE lote_id = %s AND canal = %s AND bloco = %s""",
+            (template_id, lote_id, canal, bloco))
+        return cur.rowcount > 0
+
+
+def cnpjs_do_bloco(lote_id: int, canal: str, bloco: int,
+                   apenas_pendentes: bool = True) -> List[Dict[str, Any]]:
+    sql = """SELECT cnpj, email, telefone, razao_social FROM lote_empresas
+              WHERE lote_id = %s AND canal = %s AND bloco = %s"""
+    if apenas_pendentes:
+        sql += " AND status = 'pendente'"
+    with get_db_cursor() as cur:
+        cur.execute(sql + " ORDER BY cnpj", (lote_id, canal, bloco))
+        return cur.fetchall()
