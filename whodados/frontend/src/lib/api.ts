@@ -1456,3 +1456,52 @@ export async function listarEnriquecimento(cnpj: string): Promise<ItemEnriquecim
 export async function removerEnriquecimento(cnpj: string): Promise<{ cnpj: string; itens_removidos: number }> {
   return request(`/api/v1/empresas/${encodeURIComponent(cnpj)}/enriquecimento`, { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// Carteira propria (empresa com escopo_base = "carteira")
+// ---------------------------------------------------------------------------
+
+export interface CategoriaCarteira { categoria: string; total: number }
+
+export interface ResumoCarteira {
+  escopo_base: "receita" | "carteira";
+  total: number;
+  categorias: CategoriaCarteira[];
+}
+
+export interface ResultadoImportacao {
+  salvos: number;
+  ignorados: { linha: number; motivo: string }[];
+  total_ignorados: number;
+  total_na_carteira: number;
+  categorias: CategoriaCarteira[];
+}
+
+export async function getResumoCarteira(): Promise<ResumoCarteira> {
+  return request("/api/v1/carteira/resumo");
+}
+
+/** Sobe a planilha. Recarregar o mesmo arquivo ATUALIZA em vez de duplicar
+ *  (a chave e' empresa + CNPJ), e coluna vazia na recarga nao apaga o que ja'
+ *  estava preenchido -- quem completou um e-mail a mao nao perde o trabalho. */
+export async function importarCarteira(file: File): Promise<ResultadoImportacao> {
+  const form = new FormData();
+  form.append("arquivo", file);
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgActive = getActiveOrgId();
+  if (orgActive) headers["X-Org-Id"] = String(orgActive);
+  const res = await fetch(`${API_URL}/api/v1/carteira/importar`, {
+    method: "POST", headers, body: form,
+  });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({ detail: "Erro" }));
+    throw new ApiError(res.status, b.detail || "Erro ao importar a carteira");
+  }
+  return res.json();
+}
+
+export async function removerDaCarteira(cnpj: string): Promise<{ ok: boolean }> {
+  return request(`/api/v1/carteira/${encodeURIComponent(cnpj)}`, { method: "DELETE" });
+}

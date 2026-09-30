@@ -10,10 +10,13 @@ import OrgSwitcher from "@/components/OrgSwitcher";
 import { contarNotificacoesNaoLidas } from "@/lib/api";
 
 // socios: so' existe sobre a base da Receita (o quadro societario vem de la').
+// carteira: o inverso -- so' faz sentido pra quem prospecta sobre lista
+// propria; numa empresa de base Receita a tela nao teria o que mostrar.
 // O resto das telas serve as duas fontes -- empresa com carteira propria ve
 // as mesmas telas, com os dados dela.
 const NAV_LINKS = [
   { href: "/dashboard", label: "Empresas", icon: "📊" },
+  { href: "/dashboard/carteira", label: "Carteira", icon: "🗃️", carteiraPropria: true },
   { href: "/dashboard/socios", label: "Sócios", icon: "🧑‍🤝‍🧑", baseReceita: true },
   { href: "/dashboard/crm", label: "Clientes", icon: "🗂️" },
   { href: "/dashboard/atividades", label: "Atividades", icon: "✅" },
@@ -37,7 +40,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const temBaseReceita = activeOrg?.escopo_base !== "carteira";
   const navLinks = isVisitante
     ? NAV_LINKS.filter(l => l.href === "/dashboard")
-    : NAV_LINKS.filter(l => temBaseReceita || !l.baseReceita);
+    : NAV_LINKS.filter(l => (temBaseReceita ? !l.carteiraPropria : !l.baseReceita));
 
   // !username inclui o instante entre "terminou de carregar" e o
   // redirect pro /login efetivamente acontecer (useRequireAuth so'
