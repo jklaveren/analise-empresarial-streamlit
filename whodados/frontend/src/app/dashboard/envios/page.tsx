@@ -7,7 +7,12 @@ import { getPainelEnvios, type ItemFila } from "@/lib/api";
 const num = (v: number | undefined) => (v ?? 0).toLocaleString("pt-BR");
 
 function pct(parte: number | undefined, total: number | undefined) {
-  if (!total || !parte) return "—";
+  // Sem total nao da' pra calcular: "—" (sem dado). Mas parte = 0 COM total
+  // e' 0% de verdade, e num painel de entrega zero e' o alarme mais
+  // importante que existe -- antes o `!parte` mandava ele pro mesmo "—" de
+  // "ainda nao sei", escondendo justamente o caso critico.
+  if (!total) return "—";
+  if (parte == null) return "—";
   return `${Math.round((parte / total) * 100)}%`;
 }
 
@@ -84,7 +89,39 @@ function Funil({ etapas }: { etapas: { rotulo: string; valor: number; cor: strin
 
 /** Volume diario. Barras finas com o eixo implicito -- o interesse e a
  *  regularidade do ritmo, nao o valor exato de cada dia. */
-function VolumeDiario({ dados }: { dados: { dia: string; n: number }[] }) {
+/** Completa os dias sem envio com zero.
+ *
+ *  O backend monta `por_dia` com GROUP BY dia, entao dia sem envio nao vem
+ *  como zero: nao vem. Desenhando so' o que chega, duas semanas com 2 envios
+ *  esparsos viravam o mesmo desenho de 2 dias seguidos -- e o grafico existe
+ *  justamente pra mostrar regularidade de ritmo.
+ *
+ *  Preenche entre o primeiro e o ultimo dia recebidos. Nao estica ate' a
+ *  borda da janela de 30 dias porque a API nao diz onde ela comeca; o que
+ *  isto conserta e' o espacamento relativo, que era o erro. */
+function preencherDias(dados: { dia: string; n: number }[]) {
+  if (dados.length < 2) return dados;
+  // Ordena antes de varrer: o backend hoje devolve ORDER BY dia, mas se um
+  // dia vier fora de ordem o cursor ja' nasceria depois do fim, o laco nao
+  // roda e o retorno vazio faz o grafico sumir da tela sem dizer nada.
+  const ordenado = [...dados].sort((a, b) => a.dia.localeCompare(b.dia));
+  const porDia = new Map(ordenado.map(d => [d.dia, d.n]));
+  const cheio: { dia: string; n: number }[] = [];
+  const fim = new Date(`${ordenado[ordenado.length - 1].dia}T00:00:00Z`);
+  const cursor = new Date(`${ordenado[0].dia}T00:00:00Z`);
+  // Guarda contra data invalida: sem isto um `dia` malformado viraria laco
+  // infinito na tela.
+  if (Number.isNaN(cursor.getTime()) || Number.isNaN(fim.getTime())) return dados;
+  while (cursor <= fim && cheio.length < 400) {
+    const chave = cursor.toISOString().slice(0, 10);
+    cheio.push({ dia: chave, n: porDia.get(chave) ?? 0 });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return cheio;
+}
+
+function VolumeDiario({ dados: recebidos }: { dados: { dia: string; n: number }[] }) {
+  const dados = preencherDias(recebidos);
   if (!dados.length) return null;
   const max = Math.max(...dados.map(d => d.n), 1);
   const total = dados.reduce((s, d) => s + d.n, 0);

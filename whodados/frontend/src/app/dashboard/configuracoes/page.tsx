@@ -33,11 +33,26 @@ function EmailTab() {
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
   const [tt, setTt] = useState(false);
   const [et, setEt] = useState(false);
-  useEffect(() => { (async () => { setLoad(true); try { const [c, ps] = await Promise.all([get<Cfg>("/api/v1/admin/smtp/config"), get<Pres>("/api/v1/admin/smtp/presets")]); setCfg(c); setPre(ps.presets || {}); setH(c.smtp_host); setP(c.smtp_port); setU(c.smtp_username); setTls(c.smtp_use_tls); } catch { } setLoad(false); })(); }, []);
+  // Falha de leitura NAO pode se passar por "nao configurado": eram
+  // estados identicos na tela, e quem visse isso ia cadastrar por cima
+  // do que ja' existia sem saber.
+  const [erroCarga, setErroCarga] = useState("");
+  useEffect(() => { (async () => { setLoad(true); try { const [c, ps] = await Promise.all([get<Cfg>("/api/v1/admin/smtp/config"), get<Pres>("/api/v1/admin/smtp/presets")]); setCfg(c); setPre(ps.presets || {}); setH(c.smtp_host); setP(c.smtp_port); setU(c.smtp_username); setTls(c.smtp_use_tls); setErroCarga(""); }
+    catch (e) { setErroCarga(e instanceof Error ? e.message : "Nao consegui ler a configuracao."); }
+    setLoad(false); })(); }, []);
   const selP = (k: string) => { setSel(k); const x = pre[k]; if (x?.host) { setH(x.host); setP(x.port); setTls(x.tls); } };
   const tCon = async () => { if (!h || !u || !pw) { setFb({ t: "e", m: "Preencha host, usuario e senha" }); return; } setFb(null); setTt(true); try { const r = await post<{ sucesso: boolean; message: string }>("/api/v1/admin/smtp/test-connection", { host: h, port: p, username: u, password: pw, use_tls: tls }); setFb({ t: r.sucesso ? "s" : "e", m: r.message }); } catch { setFb({ t: "e", m: "Erro" }); } setTt(false); };
   const tSend = async () => { if (!te || !te.includes("@")) { setFb({ t: "e", m: "Email invalido" }); return; } setFb(null); setEt(true); try { const r = await post<{ sucesso: boolean; message: string }>("/api/v1/admin/smtp/test-send", { para: te }); setFb({ t: r.sucesso ? "s" : "e", m: r.message }); } catch { setFb({ t: "e", m: "Erro" }); } setEt(false); };
   if (load) return <div className="p-8 text-slate-500">Carregando...</div>;
+  if (erroCarga) return (
+    <div className="rounded-xl border-2 border-red-200 bg-red-50 p-5">
+      <h2 className="font-semibold text-red-800">Nao consegui carregar a configuracao de e-mail</h2>
+      <p className="mt-1 text-sm text-red-700">{erroCarga}</p>
+      <p className="mt-2 text-sm text-red-700">
+        <strong>Nao cadastre por cima daqui.</strong> Pode existir configuracao salva que esta tela nao conseguiu ler. Recarregue a pagina e tente de novo.
+      </p>
+    </div>
+  );
   return (<div className="space-y-6"><div className={`rounded-xl p-5 border-2 ${cfg?.configurado ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}><div className="flex items-center gap-3"><div>{cfg?.configurado ? "OK" : "!"}</div><div><h2 className={`font-semibold ${cfg?.configurado ? "text-green-800" : "text-amber-800"}`}>{cfg?.configurado ? "SMTP Configurado" : "SMTP Nao Configurado"}</h2>{cfg?.configurado ? <div className="text-sm text-green-700 mt-1"><div>Servidor: <strong>{cfg.smtp_host}:{cfg.smtp_port}</strong></div><div>Usuario: <strong>{cfg.smtp_username}</strong></div></div> : <p className="text-sm text-amber-700 mt-1">Edite o arquivo .env</p>}</div></div></div><div className="rounded-xl bg-white border p-5"><h3 className="font-semibold mb-3">Provedores</h3><div className="grid grid-cols-2 md:grid-cols-4 gap-2">{Object.entries(pre).map(([k, x]) => <button key={k} onClick={() => selP(k)} className={`p-2 rounded border-2 text-sm ${sel === k ? "border-indigo-500 bg-indigo-50" : "border-slate-200"}`}>{x.name}</button>)}</div></div><div className="rounded-xl bg-white border p-5"><h3 className="font-semibold mb-3">Testar Conexao</h3><div className="grid grid-cols-2 gap-3"><input placeholder="Host" value={h} onChange={e => setH(e.target.value)} className="border rounded px-3 py-2" /><input type="number" placeholder="Porta" value={p} onChange={e => setP(Number(e.target.value))} className="border rounded px-3 py-2" /><input placeholder="Usuario" value={u} onChange={e => setU(e.target.value)} className="border rounded px-3 py-2" /><input type="password" placeholder="Senha" value={pw} onChange={e => setPw(e.target.value)} className="border rounded px-3 py-2" /></div><div className="mt-3"><label className="flex items-center gap-2"><input type="checkbox" checked={tls} onChange={e => setTls(e.target.checked)} /><span>Usar TLS</span></label></div><button onClick={tCon} disabled={tt} className="mt-3 bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50">{tt ? "Testando..." : "Testar Conexao"}</button></div><div className="rounded-xl bg-white border p-5"><h3 className="font-semibold mb-3">Enviar Email de Teste</h3><div className="flex gap-2"><input type="email" placeholder="seu@email.com" value={te} onChange={e => setTe(e.target.value)} className="flex-1 border rounded px-3 py-2" /><button onClick={tSend} disabled={et || !cfg?.configurado} className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50 whitespace-nowrap">{et ? "Enviando..." : "Enviar Teste"}</button></div></div>{fb && <div className={`p-4 rounded ${fb.t === "s" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{fb.m}</div>}</div>);
 }
 
@@ -175,6 +190,7 @@ function RegrasTab() {
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
+  const [erroSla, setErroSla] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -183,7 +199,12 @@ function RegrasTab() {
         setCfg(c);
         setVerde(c.sla_verde_dias);
         setAmarelo(c.sla_amarelo_dias);
-      } catch { }
+      } catch (e) {
+        // Sem isto, os useState(2)/useState(5) ficavam na tela como se
+        // fossem a regra salva -- e um Salvar depois gravava o default por
+        // cima da configuracao real.
+        setErroSla(e instanceof Error ? e.message : "Nao consegui ler as regras salvas.");
+      }
       setLoading(false);
     })();
   }, []);
@@ -203,6 +224,15 @@ function RegrasTab() {
   };
 
   if (loading) return <div className="p-8 text-slate-500">Carregando...</div>;
+  if (erroSla) return (
+    <div className="rounded-xl border-2 border-red-200 bg-red-50 p-5">
+      <h3 className="font-semibold text-red-800">Nao consegui carregar as regras salvas</h3>
+      <p className="mt-1 text-sm text-red-700">{erroSla}</p>
+      <p className="mt-2 text-sm text-red-700">
+        Os campos nao sao mostrados de proposito: sem ler o que esta salvo, o formulario exibiria os valores padrao (2 e 5) como se fossem os seus, e <strong>Salvar</strong> gravaria esses padroes por cima da sua regra. Recarregue a pagina.
+      </p>
+    </div>
+  );
 
   return (
     <div className="space-y-6">

@@ -17,13 +17,20 @@ export default function NotificacoesPage() {
   const [items, setItems] = useState<Notificacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"todas" | "nao_lidas">("nao_lidas");
+  // Numa tela cujo trabalho e' avisar, falhar exibindo "nenhuma
+  // notificacao pendente" e' o pior jeito de falhar: API fora do ar e
+  // caixa limpa ficavam identicas.
+  const [erro, setErro] = useState("");
 
   async function load() {
     setLoading(true);
     try {
       const data = await listarNotificacoes(filter === "nao_lidas" ? false : undefined);
       setItems(data || []);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+      setErro("");
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Nao consegui carregar as notificacoes.");
+    } finally { setLoading(false); }
   }
 
   useEffect(() => { load(); }, [filter]);
@@ -43,13 +50,19 @@ export default function NotificacoesPage() {
       </div>
 
       {loading && <div className="text-center py-12 text-slate-500">Carregando...</div>}
+      {!loading && erro && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <strong>Nao consegui carregar as notificacoes.</strong> {erro}
+          <button onClick={load} className="ml-2 underline font-medium">Tentar de novo</button>
+        </div>
+      )}
       {!loading && (
         <div className="space-y-3 mb-6">
           <PushToggle />
           {podeAvisar && <BroadcastComposer isGlobalAdmin={isAdmin} empresaNome={activeOrg?.nome ?? "sua empresa"} />}
         </div>
       )}
-      {!loading && items.length === 0 && <div className="text-center py-16 text-slate-400"><div className="text-5xl mb-4">🔔</div><p className="text-lg font-medium">Nenhuma notificação {filter === "nao_lidas" ? "pendente" : "encontrada"}</p></div>}
+      {!loading && !erro && items.length === 0 && <div className="text-center py-16 text-slate-400"><div className="text-5xl mb-4">🔔</div><p className="text-lg font-medium">Nenhuma notificação {filter === "nao_lidas" ? "pendente" : "encontrada"}</p></div>}
 
       {items.length > 0 && (
         <div className="space-y-2">
