@@ -1,5 +1,5 @@
 """
-Endpoints de integração com serviços externos (Twilio WhatsApp, Brevo Email).
+Endpoints de integração com serviços externos (Twilio WhatsApp).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/v1/integracoes", tags=["Integrações"])
 @router.get("")
 def listar_integracoes(current_user: dict = Depends(get_current_user), org_id: int = Depends(get_active_org)):
     """
-    Integrações DESTA empresa (cada uma tem o próprio Twilio/Brevo). Os
+    Integrações DESTA empresa (cada uma tem o próprio Twilio). Os
     valores são ofuscados na resposta (mostra somente o início) para não
     expor credenciais completas.
 
@@ -78,7 +78,7 @@ def salvar_integracao(payload: IntegracaoIn, current_user: dict = Depends(get_cu
     chave de e-mail -- por isso a credencial é gravada com organizacao_id em
     vez de sobrescrever uma configuração global compartilhada.
     """
-    chaves_permitidas = {"brevo_api_key", "twilio_sid", "twilio_token", "twilio_wa_number"}
+    chaves_permitidas = {"twilio_sid", "twilio_token", "twilio_wa_number"}
     key = (payload.key or "").strip()
     if key not in chaves_permitidas:
         raise HTTPException(status_code=400, detail="Chave de integração não permitida.")

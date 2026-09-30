@@ -52,7 +52,10 @@ class Settings:
     # os lotes diarios de campanha -- sem isso definido, o endpoint de cron
     # fica desligado (nunca aceita chamada sem o header certo).
     CRON_SECRET = os.getenv("CRON_SECRET", "")
-    # Teto de e-mails por dia do provedor (Brevo free = 300/dia, contados na
+    # Teto de e-mails por dia. O numero nasceu do limite do Brevo free, que
+    # saiu; com a Gmail API o teto real e' outro (500/dia conta comum, 2000
+    # no Workspace), entao isto hoje e' politica nossa, nao do provedor
+    # -- revisar antes de assumir que 300 e' um limite tecnico. (contados na
     # conta inteira). O cron corta o lote no que ainda cabe hoje; 0 desliga
     # a checagem.
     EMAIL_LIMITE_DIARIO = int(os.getenv("EMAIL_LIMITE_DIARIO", "300"))
@@ -65,9 +68,7 @@ class Settings:
     ENVIO_TIMEZONE = os.getenv("ENVIO_TIMEZONE", "America/Sao_Paulo")
     # 1=segunda ... 7=domingo (ISO). Padrao: dias uteis.
     ENVIO_DIAS_SEMANA = os.getenv("ENVIO_DIAS_SEMANA", "1,2,3,4,5")
-    # Token no querystring do webhook do Brevo (o Brevo nao assina o corpo).
     # Vazio = webhook desligado, devolve 403.
-    BREVO_WEBHOOK_SECRET = os.getenv("BREVO_WEBHOOK_SECRET", "")
     # Web Push (PWA): par de chaves VAPID. A publica vai pro frontend via
     # GET /push/vapid-public-key; a privada NUNCA sai do servidor (Render env).
     # Gerar com: python -c "from backend.push import gerar_vapid; print(gerar_vapid())"

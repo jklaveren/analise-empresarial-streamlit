@@ -1328,7 +1328,7 @@ export interface IntegracaoConfig {
   ativo: boolean;
 }
 
-/** Lista as integrações salvas no banco (Brevo/Twilio). */
+/** Lista as integrações salvas no banco (Twilio). */
 export async function listarIntegracoes(): Promise<IntegracaoConfig[]> {
   return request("/api/v1/integracoes");
 }

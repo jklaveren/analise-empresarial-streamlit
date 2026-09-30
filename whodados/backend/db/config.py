@@ -362,7 +362,7 @@ def _run_ensure_multiempresa(os):
                 ),
             )
 
-        # --- Tabela de integracoes externas (Brevo, Twilio) ---
+        # --- Tabela de integracoes externas (Twilio) ---
         cur.execute(
             """CREATE TABLE IF NOT EXISTS integracao_configs (
                 id SERIAL PRIMARY KEY,

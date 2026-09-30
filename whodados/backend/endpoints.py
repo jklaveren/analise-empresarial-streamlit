@@ -22,7 +22,6 @@ from .endpoints_integracoes import router as integracoes_router
 from .endpoints_descadastro import router as descadastro_router
 from .endpoints_lotes import router as lotes_router
 from .endpoints_push import router as push_router
-from .endpoints_webhooks import router as webhooks_router
 from .endpoints_tracking import router as tracking_router
 from .endpoints_envios import router as envios_router
 
@@ -45,6 +44,5 @@ router.include_router(integracoes_router)
 router.include_router(descadastro_router)
 router.include_router(lotes_router)
 router.include_router(push_router)
-router.include_router(webhooks_router)
 router.include_router(tracking_router)
 router.include_router(envios_router)

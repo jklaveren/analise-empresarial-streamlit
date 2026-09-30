@@ -522,8 +522,15 @@ def registrar_evento_email(evento: str, email: str, message_id: Optional[str] = 
     envio mais recente para aquele destinatario, que e' o que o evento
     quase sempre se refere.
 
-    Idempotente: o Brevo reenvia o mesmo evento em caso de falha, e as
-    colunas de data so' sao gravadas quando ainda estao nulas."""
+    Idempotente (provedor costuma reenviar evento em caso de falha): as
+    colunas de data so' sao gravadas quando ainda estao nulas.
+
+    SEM CHAMADOR HOJE. O unico era o webhook do Brevo, removido junto com o
+    provedor. Fica porque e' exatamente o ponto de pouso de quando a deteccao
+    de bounce voltar (pela Gmail API), e a forma do registro ja' esta' pensada
+    -- mas enquanto isso bounce_em/bounce_tipo/bounce_motivo em
+    emails_enviados NAO sao preenchidos por ninguem. Ver docs/CONTINUAR.md.
+    """
     evento = (evento or "").lower().strip()
     email = (email or "").strip().lower()
     if not evento or not email:

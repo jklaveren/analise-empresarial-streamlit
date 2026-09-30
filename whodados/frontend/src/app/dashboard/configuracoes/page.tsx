@@ -414,7 +414,7 @@ function UsuariosTab() {
           <div className="grid grid-cols-2 gap-3">
             {/* autoComplete distinto do padrao "username"/"current-password" --
                 sem isso o navegador oferece autopreencher com QUALQUER credencial
-                salva no site (ex.: a senha SMTP do Brevo, cadastrada em outra
+                salva no site (ex.: a senha SMTP da empresa, cadastrada em outra
                 tela), porque o par texto+senha aqui parece um login comum. */}
             <input placeholder="Usuario" name="novo-usuario-login" autoComplete="off" value={novoUser} onChange={e => setNovoUser(e.target.value)} required className="border rounded px-3 py-2" />
             <input type="email" placeholder="E-mail (opcional)" name="novo-usuario-email" autoComplete="off" value={novoEmail} onChange={e => setNovoEmail(e.target.value)} className="border rounded px-3 py-2" />
@@ -708,18 +708,9 @@ function IntegracoesTab() {
   return (
     <div className="space-y-4">
       <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
-        Configure aqui as credenciais dos servicos de comunicacao. O <strong>Brevo</strong> cuida dos
-        e-mails e o <strong>Twilio</strong> do WhatsApp. Tudo fica salvo com seguranca e usado pelo
-        proprio app.
-      </div>
-
-      <div>
-        <h3 className="font-bold text-slate-800 mb-1">Brevo (E-mail)</h3>
-        <p className="text-xs text-slate-500 mb-3">
-          <a href="https://www.brevo.com/" target="_blank" rel="noopener" className="text-indigo-600 hover:underline">Criar conta Brevo (gratis)</a>
-          {" "}&mdash; a chave fica em Settings &gt; SMTP &amp; API &gt; API Keys.
-        </p>
-        {campo("brevo_api_key", "API Key do Brevo", "Chave de API para envio de e-mails transacionais e campanhas.", "xkeysib-...")}
+        Credenciais dos serviços de comunicação. O <strong>Twilio</strong> cuida do WhatsApp.
+        O e-mail não entra aqui: ele é configurado por empresa em{" "}
+        <strong>Configurações &rarr; Empresas</strong>, e sai pela Gmail API.
       </div>
 
       <div>
@@ -773,12 +764,13 @@ function RegrasNegocioTab() {
       </RegraItem>
 
       <RegraItem titulo="📧 Envio em lotes diários">
-        <p>Campanhas (e-mail ou WhatsApp) podem ter um "tamanho de lote" — manda só essa quantidade por vez, avançando pro próximo grupo a cada execução, em vez de mandar tudo de uma vez. Existe pra respeitar limites diários dos provedores (ex.: 300/dia é comum em planos gratuitos de e-mail e é o limite do WhatsApp/Twilio).</p>
+        <p>Campanhas (e-mail ou WhatsApp) podem ter um "tamanho de lote" — manda só essa quantidade por vez, avançando pro próximo grupo a cada execução, em vez de mandar tudo de uma vez. Existe pra respeitar limites diários dos provedores (300/dia é o padrão configurado em EMAIL_LIMITE_DIARIO e é o limite do WhatsApp/Twilio).</p>
         <p>Um workflow automático (GitHub Actions, uma vez por dia) avança sozinho as campanhas que já foram iniciadas — não mexe em campanhas ainda em rascunho.</p>
       </RegraItem>
 
       <RegraItem titulo="✉️ Credibilidade do e-mail — pendências">
-        <p>Recomendado (ainda não configurado): autenticar DKIM com o domínio próprio no Brevo, em vez do padrão compartilhado — reduz chance de cair em spam e passa mais confiança pro destinatário.</p>
+        <p>Recomendado (ainda não configurado): autenticar DKIM e SPF para o domínio próprio na conta Google que envia — reduz chance de cair em spam e passa mais confiança pro destinatário.</p>
+        <p><strong>Sem detecção de bounce.</strong> Hoje ninguém registra e-mail devolvido: a abertura e o clique vêm do rastreamento próprio (pixel e redirect), que não enxerga devolução. Continuar disparando para endereço morto é o caminho mais rápido de queimar o domínio.</p>
       </RegraItem>
     </div>
   );
@@ -1011,7 +1003,7 @@ export default function ConfiguracoesPage() {
     { id: "usuarios", label: "Usuários", icone: "👥", somenteAdmin: true },
     { id: "empresas", label: "Empresas", icone: "🏢", somenteAdmin: true },
     { id: "email", label: "Email (global)", icone: "✉️", somenteAdmin: true },
-    { id: "integracoes", label: "Integrações (Brevo/Twilio)", icone: "🔌" },
+    { id: "integracoes", label: "Integrações (WhatsApp)", icone: "🔌" },
     { id: "sobre", label: "Sobre", icone: "ℹ️" },
   ];
 

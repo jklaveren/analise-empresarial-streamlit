@@ -233,7 +233,8 @@ def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
             cfg = None
         if not (cfg and cfg.get("configurado")):
             # Empresa sem SMTP proprio NAO cai na config global: o e-mail
-            # sairia com o remetente de outra empresa (o Brevo e' um por
+            # sairia com o remetente de outra empresa (a config de envio e'
+            # uma por
             # empresa). Devolve vazio -- o envio vira "simulado" e aparece
             # como nao configurado, em vez de sair assinado por quem nao e'.
             log.warning(f"Empresa {organizacao_id} sem SMTP configurado -- e-mail nao sera' enviado.")
