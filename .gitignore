@@ -91,3 +91,10 @@ whodados-bigquery-*.json
 service_account*.json
 credentials.json
 TODO.md
+
+# Log operacional: ruidoso, por execucao, nunca versionado. O registro que
+# precisa sobreviver vai em docs/DIARIO.md, que e' versionado de proposito.
+# (*.log acima nao cobre logs/sessoes/*.md nem logs/*.jsonl.)
+logs/*
+!logs/README.md
+!logs/.gitkeep
