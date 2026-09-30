@@ -92,6 +92,14 @@ export default function WhatsAppPage() {
         <div className="border-r border-slate-200 overflow-y-auto">
           {conversasQuery.isPending ? (
             <div className="p-4 text-center text-slate-400 text-sm">Carregando...</div>
+          ) : conversasQuery.isError ? (
+            // "Nenhuma conversa" quando o servico caiu equivale a dizer que
+            // ninguem te escreveu -- numa caixa de entrada e' o pior engano
+            // possivel, porque a pessoa para de procurar.
+            <div className="p-4 text-center text-sm text-red-700">
+              Não consegui carregar as conversas.{" "}
+              <button onClick={() => conversasQuery.refetch()} className="font-medium underline">Tentar de novo</button>
+            </div>
           ) : conversas.length === 0 ? (
             <div className="p-4 text-center text-slate-400 text-sm">Nenhuma conversa ainda. Mensagens recebidas via Twilio aparecem aqui.</div>
           ) : conversas.map(c => (

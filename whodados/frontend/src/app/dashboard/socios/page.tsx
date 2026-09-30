@@ -103,6 +103,15 @@ export default function SociosPage() {
               <tbody>
                 {rankingQuery.isLoading ? (
                   <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">Carregando...</td></tr>
+                ) : rankingQuery.isError ? (
+                  // Sem isto a falha virava `data ?? []` e a tela dizia "nenhum
+                  // socio PARA ESTE FILTRO" -- culpando a escolha de quem esta
+                  // usando por um servico fora do ar, que faria a pessoa mexer
+                  // no filtro tentando consertar o que nao e' dela.
+                  <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-red-700">
+                    Não consegui carregar o ranking.{" "}
+                    <button onClick={() => rankingQuery.refetch()} className="font-medium underline">Tentar de novo</button>
+                  </td></tr>
                 ) : ranking.length === 0 ? (
                   <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">Nenhum sócio para este filtro.</td></tr>
                 ) : ranking.map(s => (
@@ -136,6 +145,11 @@ export default function SociosPage() {
               </p>
             ) : detalheQuery.isLoading ? (
               <p className="px-4 py-8 text-center text-sm text-slate-400">Carregando...</p>
+            ) : detalheQuery.isError ? (
+              <p className="px-4 py-8 text-center text-sm text-red-700">
+                Não consegui carregar as empresas deste sócio.{" "}
+                <button onClick={() => detalheQuery.refetch()} className="font-medium underline">Tentar de novo</button>
+              </p>
             ) : (detalheQuery.data ?? []).length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-slate-400">Nenhuma empresa encontrada.</p>
             ) : (
