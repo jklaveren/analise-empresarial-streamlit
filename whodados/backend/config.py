@@ -52,10 +52,9 @@ class Settings:
     # os lotes diarios de campanha -- sem isso definido, o endpoint de cron
     # fica desligado (nunca aceita chamada sem o header certo).
     CRON_SECRET = os.getenv("CRON_SECRET", "")
-    # Teto de e-mails por dia. O numero nasceu do limite do Brevo free, que
-    # saiu; com a Gmail API o teto real e' outro (500/dia conta comum, 2000
-    # no Workspace), entao isto hoje e' politica nossa, nao do provedor
-    # -- revisar antes de assumir que 300 e' um limite tecnico. (contados na
+    # Teto de e-mails por dia: politica nossa, nao limite do provedor. A
+    # Gmail API da' 500/dia (2000 no Workspace), entao da' pra subir --
+    # revisar antes de assumir que 300 e' um teto tecnico. (contados na
     # conta inteira). O cron corta o lote no que ainda cabe hoje; 0 desliga
     # a checagem.
     EMAIL_LIMITE_DIARIO = int(os.getenv("EMAIL_LIMITE_DIARIO", "300"))
