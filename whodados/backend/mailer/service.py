@@ -246,8 +246,12 @@ def _smtp_da_org(organizacao_id: Optional[int]) -> Dict[str, Any]:
                 "username": cfg.get("smtp_username"),
                 "password": cfg.get("smtp_password"),
                 "use_tls": cfg.get("smtp_use_tls", True),
-                "email_from": cfg.get("email_from") or settings.EMAIL_FROM,
-                "email_from_name": cfg.get("email_from_name") or settings.EMAIL_FROM_NAME,
+                # Sem "or settings.*": empresa que configurou servidor mas
+                # deixou o remetente em branco NAO empresta o do global --
+                # sairia assinada por outra empresa. Em branco aqui e'
+                # bloqueio la' na frente, em enviar_email.
+                "email_from": cfg.get("email_from") or "",
+                "email_from_name": cfg.get("email_from_name") or "",
             }
     return {
         "host": settings.SMTP_HOST, "port": settings.SMTP_PORT,
@@ -276,14 +280,29 @@ def _conectar_smtp(cfg: Dict[str, Any]) -> smtplib.SMTP:
 def enviar_email(para: str, assunto: str, corpo_html: str, corpo_texto: Optional[str] = None, smtp: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = smtp or _smtp_da_org(None)
 
+    # REGRA UNICA DE REMETENTE, antes de escolher transporte: sai com o
+    # remetente configurado ou nao sai. Nunca com o padrao global.
+    #
+    # Fica aqui, e nao em cada transporte, porque foi assim que o vazamento
+    # aconteceu: o guard existia so' no caminho SMTP e o Gmail API entrou na
+    # frente dele, refazendo o fallback que o guard recusava. Empresa sem
+    # remetente proprio mandava assinada por outra. Transporte novo daqui
+    # pra frente passa por este ponto de qualquer jeito.
+    #
+    # _smtp_da_org(None) (e-mail do sistema: recuperacao de senha,
+    # boas-vindas) devolve o global e passa aqui de proposito -- esse nao e'
+    # de empresa nenhuma.
+    remetente = (cfg.get("email_from") or "").strip()
+    if not remetente:
+        log.warning(f"Envio bloqueado para {para}: empresa sem remetente proprio configurado")
+        return {"sucesso": False, "nao_configurado": True, "para": para,
+                "erro": "Esta empresa nao tem e-mail de envio configurado. "
+                        "Configure em Configuracoes > E-mail antes de enviar."}
+
     # Gmail API tem prioridade: fala HTTPS, e o Render bloqueia SMTP 587/465.
     # Configurada, ela e a resposta final: cair para SMTP so trocaria o erro
     # real por "Network is unreachable" do socket bloqueado.
     if gmail_api.configurado():
-        remetente = cfg.get("email_from") or settings.EMAIL_FROM
-        if not remetente:
-            return {"sucesso": False, "para": para,
-                    "erro": "Gmail API ativa, mas nenhum remetente definido"}
         return gmail_api.enviar(para, assunto, corpo_html, corpo_texto,
                                 remetente=remetente,
                                 remetente_nome=cfg.get("email_from_name"))

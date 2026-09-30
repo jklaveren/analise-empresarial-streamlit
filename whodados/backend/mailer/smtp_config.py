@@ -68,10 +68,14 @@ def test_smtp_connection(host: str, port: int, username: str, password: str, use
 def test_email_send(para: str, organizacao_id: Optional[int] = None) -> Dict[str, Any]:
     from .service import enviar_email, _smtp_da_org
     cfg = _smtp_da_org(organizacao_id)
-    if not cfg.get("host") and not settings.SMTP_HOST:
+    # O teste vale a config DESTA empresa. Antes bastava existir SMTP_HOST
+    # global pra passar daqui, e o envio saia com o remetente do global --
+    # era o teste "funcionando" justamente onde a empresa nao tem nada.
+    if not cfg.get("email_from"):
         return {
             "sucesso": False,
-            "message": "SMTP nao configurado. Defina SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD"
+            "message": "Esta empresa nao tem e-mail de envio configurado. "
+                       "Cadastre o remetente em Configuracoes > E-mail.",
         }
     html_body = f"""
     <html><body style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -79,8 +83,8 @@ def test_email_send(para: str, organizacao_id: Optional[int] = None) -> Dict[str
     <p>Este e-mail de teste foi enviado com sucesso!</p>
     <p><strong>Detalhes da configuracao:</strong></p>
     <ul>
-        <li>Servidor: {cfg.get('host') or settings.SMTP_HOST}:{cfg.get('port') or settings.SMTP_PORT}</li>
-        <li>Remetente: {cfg.get('email_from') or settings.EMAIL_FROM} ({cfg.get('email_from_name') or settings.EMAIL_FROM_NAME})</li>
+        <li>Servidor: {cfg.get('host') or 'Gmail API'}</li>
+        <li>Remetente: {cfg.get('email_from')} ({cfg.get('email_from_name') or '-'})</li>
         <li>TLS: {'Sim' if cfg.get('use_tls', True) else 'Nao'}</li>
     </ul>
     </body></html>"""
