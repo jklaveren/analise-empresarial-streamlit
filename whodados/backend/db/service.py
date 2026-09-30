@@ -1180,7 +1180,17 @@ def get_org_smtp_config(organizacao_id: int, incluir_password: bool = False) -> 
     if not row:
         return None
     dados = dict(row)
-    dados["configurado"] = bool(dados.get("smtp_host") and dados.get("smtp_username"))
+    # "Configurada" = TEM COMO ENVIAR, e hoje quem envia e' a Gmail API, que
+    # nao usa host nem usuario -- so' precisa do remetente. A definicao
+    # antiga (host AND username) e' da era do SMTP e tornou impossivel
+    # configurar uma empresa do jeito certo: preenchendo so' o remetente,
+    # ela ficava "nao configurada", _smtp_da_org devolvia remetente vazio e
+    # o envio era bloqueado. A versao por usuario (get_usuario_smtp_config)
+    # ja' usava o criterio certo; esta estava fora de passo.
+    dados["configurado"] = bool(dados.get("email_from"))
+    # Servidor proprio e' outra coisa: so' importa se algum dia o envio
+    # cair pro SMTP. A tela mostra os dois separados.
+    dados["smtp_proprio"] = bool(dados.get("smtp_host") and dados.get("smtp_username"))
     dados["tem_logo"] = bool(dados.get("logo_data"))
     dados.pop("logo_data", None)  # bytes crus nunca vao no JSON
     if incluir_password:

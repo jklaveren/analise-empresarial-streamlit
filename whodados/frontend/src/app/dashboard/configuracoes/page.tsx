@@ -569,7 +569,7 @@ function EmpresasTab() {
         <select value={orgId ?? ""} onChange={e => setOrgId(Number(e.target.value))} className="border rounded px-3 py-2 text-sm font-semibold">
           {orgs.map(o => <option key={o.id} value={o.id}>{o.nome}</option>)}
         </select>
-        {cfg && <span className={`text-xs px-2 py-1 rounded ${cfg.configurado ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{cfg.configurado ? "SMTP configurado" : "SMTP não configurado"}</span>}
+        {cfg && <span className={`text-xs px-2 py-1 rounded ${cfg.configurado ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{cfg.configurado ? "Remetente configurado" : "Sem remetente — não envia"}</span>}
       </div>
 
       <div className="rounded-xl bg-white border p-5 space-y-3">
