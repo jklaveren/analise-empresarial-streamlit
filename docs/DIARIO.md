@@ -4,6 +4,10 @@ Registro do que foi **descoberto, decidido e corrigido** em cada sessão de
 trabalho. Existe para ninguém precisar reler o código e a documentação inteira
 para redescobrir o que já se soube uma vez.
 
+> Este é o **histórico**. O mapa e as regras estão em
+> [`../CLAUDE.md`](../CLAUDE.md); por onde continuar, em
+> [`CONTINUAR.md`](CONTINUAR.md).
+
 **Regras:**
 
 - É **versionado de propósito.** Registro que fica só na máquina de quem
