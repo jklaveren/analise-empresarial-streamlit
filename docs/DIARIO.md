@@ -22,6 +22,53 @@ para redescobrir o que já se soube uma vez.
 
 ---
 
+## 2026-09-30 (parte 3) — Brevo fora, auditoria por middleware, telas auditadas
+
+### Decidido
+
+- **Auditoria por middleware, não endpoint a endpoint.** São 128 rotas e nascem
+  rotas novas toda semana: lista manual garante que alguém esquece a próxima, e
+  provavelmente a que importa. Mesmo argumento que o `VisitanteMiddleware` já
+  faz no próprio docstring, e a mesma lição do vazamento de remetente — regra
+  que vale para tudo mora num ponto por onde tudo passa.
+- **Só escrita é auditada.** A tela de Empresas dispara várias leituras por
+  mexida de filtro; afogar a tabela em `GET` tornaria a auditoria inútil
+  justamente quando alguém precisasse procurar nela.
+- **Duas menções ao Brevo ficaram de propósito** — a que explica de onde veio o
+  número 300, e a que diz por que `registrar_evento_email` não tem chamador.
+  Apagá-las perderia o motivo, que é o que o código sozinho não conta.
+
+### Corrigido
+
+| Commit | O quê |
+|---|---|
+| `367261c` | Brevo arrancado de 9 lugares |
+| `b85add7` | Auditoria automática de toda escrita (7 testes novos) |
+| `60ac55f` | `socios` e `whatsapp` deixavam de avisar quando o serviço caía |
+
+Em `socios`, a falha exibia *"Nenhum sócio para este filtro"* — escondia a queda
+**e** culpava a escolha de quem estava usando, que iria mexer no filtro tentando
+consertar um serviço fora do ar. Em `whatsapp`, virava *"Nenhuma conversa
+ainda"*: numa caixa de entrada, dizer que ninguém escreveu é o pior engano
+possível, porque a pessoa para de procurar.
+
+### O teste achou o que a leitura não achou
+
+A primeira versão do middleware não registrava requisição que estourava: a
+exceção subia antes da gravação, então a requisição que mais interessa auditar
+era exatamente a que não ficava no registro. Um dos 7 testes novos pegou. É o
+segundo caso no mesmo dia — o outro foi o gráfico que sumia com dados fora de
+ordem.
+
+### Deixado de fora, conscientemente
+
+**Gmail OAuth por usuário.** Depende de cliente OAuth no Google Cloud e de
+variáveis no Render que só a dona do projeto cria — sem isso o fluxo não roda
+nem uma vez, nem para testar. Entregar às cegas um caminho de autenticação de
+e-mail em produção quebraria sem aviso. Detalhe em [`CONTINUAR.md`](CONTINUAR.md).
+
+---
+
 ## 2026-09-30 (parte 2) — Carteira fechada de ponta a ponta
 
 ### Descoberto

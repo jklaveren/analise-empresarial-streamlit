@@ -10,69 +10,52 @@ Quem encerrar uma sessão reescreve este arquivo antes de sair.
 
 ## Estado atual
 
-`main` = `247b9b7`. Suíte **41/41 verde**, `tsc --noEmit` limpo, `next build`
-compila as 19 rotas. Nada pendente na árvore de trabalho.
+`main` = `60ac55f`. Suíte **48/48 verde**, `tsc --noEmit` limpo, `next build`
+compila as 19 rotas. Árvore limpa.
 
-**A Carteira está fechada de ponta a ponta.** Trocar a fonte em Configurações →
-Empresas agora funciona e sobrevive ao deploy, e a tela `/dashboard/carteira`
-(visível só para empresa de carteira) carrega a planilha.
+Fechados nesta sessão: Carteira de ponta a ponta · Brevo arrancado · auditoria
+automática de toda escrita · as 13 telas auditadas.
 
-**Cuidado antes de tocar em Configurações:** a SYVP ainda **não tem remetente
-cadastrado**. Depois do fix `0dff4f3` chegar em produção, a tela dela vai
-passar a dizer "não configurado" e parar de enviar — isso é o comportamento
-correto, não uma regressão nova.
+**Antes de configurar o e-mail da SYVP**, ver a seção abaixo — a ordem importa.
 
-## Próximo passo
+## Próximo passo: Gmail OAuth por usuário
 
-**Arrancar o Brevo.** É a frente 2 da ordem combinada, e é limpeza que
-desbloqueia a frente 3 (Gmail por usuário) — as duas mexem na mesma tela de
-Configurações.
+**Deixado de fora de propósito.** É a única frente que eu não consigo entregar
+e verificar sozinho, e entregar às cegas um caminho de autenticação de e-mail
+em produção é o tipo de coisa que quebra sem aviso.
 
-Resíduo em ~9 lugares:
-- `endpoints_webhooks.py` inteiro (o webhook já está inerte: 403 sem
-  `BREVO_WEBHOOK_SECRET`)
-- `BREVO_WEBHOOK_SECRET` em `config.py`
-- `brevo_api_key` em `endpoints_integracoes.py` (`chaves_permitidas`)
-- uma seção inteira de UI em `configuracoes/page.tsx` ("Brevo (E-mail)", com
-  link de criar conta e campo de API key) e o rótulo da aba
-  "Integrações (Brevo/Twilio)"
-- comentários em `db/service.py`, `mailer/service.py`, `db/config.py`
+O que trava, e só você resolve:
 
-⚠️ **Decidir antes de arrancar:** some a **detecção de bounce assíncrono**. Os
-eventos `hard_bounce`/`soft_bounce`/`blocked`/`spam` só chegavam pelo webhook, e
-pixel não enxerga bounce. O Gmail API pega a rejeição no momento do envio, mas
-não a devolução que chega minutos depois. Numa operação de prospecção, e-mail
-morto que se continua disparando é o que queima domínio.
+- Um **cliente OAuth no Google Cloud Console** com a URI de redirect apontando
+  para o backend em produção (`/api/v1/auth/gmail/callback`, a criar)
+- `GMAIL_OAUTH_CLIENT_ID` e `GMAIL_OAUTH_CLIENT_SECRET` no Render
+- A tela de consentimento publicada (ou os três usuários como testers)
 
-Também corrigir: `EMAIL_LIMITE_DIARIO = 300` em `config.py` tem o comentário
-"Brevo free = 300/dia". Com Gmail API o teto real é outro (500/dia conta comum,
-2.000 Workspace) — pode estar limitando à toa.
+Sem isso, o fluxo não roda nem uma vez — nem para eu testar.
 
-## Fila, na ordem combinada
+O que muda quando vier: hoje é **uma conta global** (`GMAIL_OAUTH_*` em env,
+gerada rodando `scripts/autorizar_gmail.py` na mão) e só o cabeçalho `From`
+varia. O Gmail recusa ou marca como spam quando se envia como endereço que a
+conta autenticada não possui — então "e-mail individual" hoje é só aparência.
+O certo é botão "Conectar Gmail" por pessoa, refresh token guardado por
+usuário/empresa, e `gmail_api.enviar` usando a credencial de quem dispara.
 
-3. **Gmail OAuth por usuário.** Hoje é uma conta global (`GMAIL_OAUTH_*` em env,
-   gerada rodando `scripts/autorizar_gmail.py` na mão) e só o cabeçalho `From`
-   muda — o Gmail recusa ou marca como spam quando se envia como endereço que a
-   conta autenticada não possui.
-4. **Cobertura de log nos endpoints.** `security/audit.py` funciona e
-   `AuditAction` prevê 22 ações; existem **4 chamadas** no backend inteiro (3 de
-   login, 1 de "viu empresa"). Campanha, lote, CRM e carteira não deixam rastro.
-   ❓ **Decidir primeiro:** auditoria (quem fez o quê, em tabela, para LGPD) ou
-   log operacional (rastro em arquivo, para depurar)? São desenhos diferentes.
+⚠️ **Isto afeta a configuração da SYVP.** Se cadastrar o remetente agora sob o
+esquema global e depois migrar para OAuth por usuário, o cadastro é refeito.
+Decidir se configura agora (funciona, com a ressalva do `From`) ou espera.
 
-## Dívida conhecida na Carteira
+## Fila
 
-A tela subiu, mas dois defeitos do backend seguem, e valem antes do primeiro
-cliente com lista grande:
-
-- **Importação síncrona, linha a linha.** 5.000 linhas = 5.000 chamadas de
-  `salvar_na_carteira` dentro de um request. No Render é candidato a timeout, e
-  sem transação o que estourar no meio deixa a carteira pela metade. Ou processa
-  em lote, ou baixa o limite para um número que fecha com folga.
-- **`POST /carteira` recebe `data: Dict` cru**, sem Pydantic — o único endpoint
-  do módulo sem validação, e é o caminho "adicionar na mão". A tela hoje não usa
-  esse endpoint (só o importador), então não é urgente, mas vira urgente no dia
-  em que alguém adicionar o formulário de cadastro manual.
+- **Dívida da Carteira:** importação síncrona linha a linha (5.000 linhas =
+  5.000 chamadas num request; candidata a timeout no Render, sem transação) e
+  `POST /carteira` sem Pydantic. Nenhuma bloqueia hoje; viram problema com o
+  primeiro cliente de lista grande.
+- **Bounce sem substituto.** Arrancar o Brevo tirou a única fonte de
+  `hard_bounce`/`soft_bounce`/`blocked`/`spam`. As colunas `bounce_*` em
+  `emails_enviados` existem e ninguém preenche. `registrar_evento_email` ficou
+  no lugar, marcado como sem chamador, para quando isso voltar pela Gmail API.
+- **`EMAIL_LIMITE_DIARIO = 300`** é política nossa, não limite técnico — o
+  Gmail dá 500/dia (2.000 no Workspace). Pode estar limitando à toa.
 
 ## Auditoria das telas — incompleta
 
