@@ -22,6 +22,48 @@ para redescobrir o que já se soube uma vez.
 
 ---
 
+## 2026-09-30 (parte 2) — Carteira fechada de ponta a ponta
+
+### Descoberto
+
+O interruptor não bastava. Mesmo depois de `escopo_base` virar configurável, a
+**linha do boot desfazia a escolha**: `db/config.py:497` rodava a cada deploy.
+O estado real morava no código, não no banco — um admin trocaria a fonte pela
+tela e veria a mudança sumir sem aviso nenhum.
+
+### Decidido
+
+- **Seed de uma vez só**, marcado em `app_config`. A partir da primeira
+  execução quem manda é o banco. Padrão reaproveitável para qualquer outro
+  seed que hoje rode a cada boot.
+- **A tela da Carteira aparece só para empresa de carteira**, espelhando o que
+  já se fazia com Sócios (só para base Receita). Mesma ideia, sinal invertido.
+- **Empresa de receita que chegar na URL da Carteira lê uma explicação**, não
+  uma tela vazia. Tela vazia parece defeito; texto que diz por que está vazia e
+  onde se troca a fonte resolve a dúvida sem suporte.
+
+### Corrigido
+
+| Commit | O quê |
+|---|---|
+| `a9b4c35` | Seletor de fonte em Configurações → Empresas; seed da JehJuh vira único |
+| `247b9b7` | Tela `/dashboard/carteira`: total, categorias e importador de CSV |
+
+O texto da tela carrega o que só existia no docstring do backend: só o CNPJ é
+obrigatório, resubir atualiza em vez de duplicar, coluna vazia não apaga o
+preenchido. E o `<details>` lista os cabeçalhos aceitos, porque a pergunta de
+quem importa é sempre "meu cabeçalho serve?".
+
+### Em aberto
+
+A Carteira subiu com **dívida conhecida no backend** — importação síncrona
+linha a linha (candidata a timeout no Render, sem transação) e `POST /carteira`
+sem validação Pydantic. Nenhuma das duas bloqueia o uso hoje; as duas viram
+problema com o primeiro cliente de lista grande. Detalhe em
+[`CONTINUAR.md`](CONTINUAR.md).
+
+---
+
 ## 2026-09-30 — Vazamento de remetente entre empresas, falhas silenciosas e processo
 
 ### Descoberto

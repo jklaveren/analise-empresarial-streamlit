@@ -10,8 +10,12 @@ Quem encerrar uma sessão reescreve este arquivo antes de sair.
 
 ## Estado atual
 
-`main` = `675ff53`. Suíte **41/41 verde**, `tsc --noEmit` limpo, `next build`
-compila as 18 rotas. Nada pendente na árvore de trabalho.
+`main` = `247b9b7`. Suíte **41/41 verde**, `tsc --noEmit` limpo, `next build`
+compila as 19 rotas. Nada pendente na árvore de trabalho.
+
+**A Carteira está fechada de ponta a ponta.** Trocar a fonte em Configurações →
+Empresas agora funciona e sobrevive ao deploy, e a tela `/dashboard/carteira`
+(visível só para empresa de carteira) carrega a planilha.
 
 **Cuidado antes de tocar em Configurações:** a SYVP ainda **não tem remetente
 cadastrado**. Depois do fix `0dff4f3` chegar em produção, a tela dela vai
@@ -20,39 +24,32 @@ correto, não uma regressão nova.
 
 ## Próximo passo
 
-**1. Fechar a Carteira** — é a única frente que muda o que dá para vender.
+**Arrancar o Brevo.** É a frente 2 da ordem combinada, e é limpeza que
+desbloqueia a frente 3 (Gmail por usuário) — as duas mexem na mesma tela de
+Configurações.
 
-Backend pronto e nunca ligado: `endpoints_carteira.py` tem 5 rotas, incluindo
-importador de CSV (até 5.000 linhas, aceita variações de cabeçalho e Latin-1 do
-Excel BR). O frontend já se adapta a `escopo_base == "carteira"`
-(`layout.tsx:37` esconde Sócios). Falta só a tela.
+Resíduo em ~9 lugares:
+- `endpoints_webhooks.py` inteiro (o webhook já está inerte: 403 sem
+  `BREVO_WEBHOOK_SECRET`)
+- `BREVO_WEBHOOK_SECRET` em `config.py`
+- `brevo_api_key` em `endpoints_integracoes.py` (`chaves_permitidas`)
+- uma seção inteira de UI em `configuracoes/page.tsx` ("Brevo (E-mail)", com
+  link de criar conta e campo de API key) e o rótulo da aba
+  "Integrações (Brevo/Twilio)"
+- comentários em `db/service.py`, `mailer/service.py`, `db/config.py`
 
-Em ordem, dentro desta frente:
+⚠️ **Decidir antes de arrancar:** some a **detecção de bounce assíncrono**. Os
+eventos `hard_bounce`/`soft_bounce`/`blocked`/`spam` só chegavam pelo webhook, e
+pixel não enxerga bounce. O Gmail API pega a rejeição no momento do envio, mas
+não a devolução que chega minutos depois. Numa operação de prospecção, e-mail
+morto que se continua disparando é o que queima domínio.
 
-- [ ] **Desarmar `db/config.py:497`** — a linha `UPDATE organizacoes SET
-      escopo_base = 'carteira' WHERE slug = 'jehjuh'` roda a cada boot e vai
-      **desfazer a escolha do admin**. Tem que virar seed de uma vez só (há
-      tabela `app_config` para guardar a marca) ou sair.
-- [ ] **UI do seletor** de fonte de prospecção, em Configurações → admin. O
-      endpoint já existe: `PUT /organizacoes/{id}` aceita `escopo_base`, sob
-      `require_admin` (admin global — é decisão de contrato).
-- [ ] **Tela da Carteira**: importador CSV, lista, categorias.
-
-Dois defeitos conhecidos no backend da carteira, a decidir antes de botar tela
-em cima:
-- A importação é síncrona e linha a linha. 5.000 linhas = 5.000 chamadas dentro
-  de um request; no Render é candidato a timeout, e sem transação o que estourar
-  no meio deixa a carteira pela metade.
-- `POST /carteira` recebe `data: Dict` cru, sem Pydantic — é o único endpoint do
-  módulo sem validação, e é justamente o caminho "adicionar na mão" que a tela
-  vai usar mais.
+Também corrigir: `EMAIL_LIMITE_DIARIO = 300` em `config.py` tem o comentário
+"Brevo free = 300/dia". Com Gmail API o teto real é outro (500/dia conta comum,
+2.000 Workspace) — pode estar limitando à toa.
 
 ## Fila, na ordem combinada
 
-2. **Arrancar o Brevo** (~9 lugares: `endpoints_webhooks.py` inteiro,
-   `BREVO_WEBHOOK_SECRET`, `brevo_api_key` nas integrações, uma seção inteira de
-   UI em Configurações). ⚠️ Some com a **detecção de bounce assíncrono** — só o
-   webhook dava isso, e pixel não enxerga bounce. Decidir o substituto.
 3. **Gmail OAuth por usuário.** Hoje é uma conta global (`GMAIL_OAUTH_*` em env,
    gerada rodando `scripts/autorizar_gmail.py` na mão) e só o cabeçalho `From`
    muda — o Gmail recusa ou marca como spam quando se envia como endereço que a
@@ -62,6 +59,20 @@ em cima:
    login, 1 de "viu empresa"). Campanha, lote, CRM e carteira não deixam rastro.
    ❓ **Decidir primeiro:** auditoria (quem fez o quê, em tabela, para LGPD) ou
    log operacional (rastro em arquivo, para depurar)? São desenhos diferentes.
+
+## Dívida conhecida na Carteira
+
+A tela subiu, mas dois defeitos do backend seguem, e valem antes do primeiro
+cliente com lista grande:
+
+- **Importação síncrona, linha a linha.** 5.000 linhas = 5.000 chamadas de
+  `salvar_na_carteira` dentro de um request. No Render é candidato a timeout, e
+  sem transação o que estourar no meio deixa a carteira pela metade. Ou processa
+  em lote, ou baixa o limite para um número que fecha com folga.
+- **`POST /carteira` recebe `data: Dict` cru**, sem Pydantic — o único endpoint
+  do módulo sem validação, e é o caminho "adicionar na mão". A tela hoje não usa
+  esse endpoint (só o importador), então não é urgente, mas vira urgente no dia
+  em que alguém adicionar o formulário de cadastro manual.
 
 ## Auditoria das telas — incompleta
 
