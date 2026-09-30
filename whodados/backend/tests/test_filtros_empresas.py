@@ -1,7 +1,7 @@
 """Testes do construtor de filtros do funil de empresas (sem banco)."""
 import pytest
 
-from backend.db.service import _where_empresas, _norm_lista
+from backend.db.service import _where_empresas, _norm_lista, CNAE_DIVISOES_EXCLUIDAS
 
 
 @pytest.fixture(autouse=True)
@@ -20,10 +20,22 @@ def test_norm_lista():
     assert _norm_lista(["A", "B", ""]) == ["A", "B"]
 
 
-def test_where_vazio():
+def test_where_sem_filtro_aplica_so_a_exclusao_comercial():
+    """Sem filtro nenhum o WHERE NAO e' vazio.
+
+    A exclusao de divisoes de CNAE vale sempre: e' regra comercial da base
+    (setores que a operacao nao prospecta), nao selecao de quem usa a tela.
+    A versao antiga deste teste esperava "" e ficou vermelha no dia em que a
+    exclusao entrou -- suite vermelha por teste velho ensina a ignorar
+    vermelho, entao ele passa a afirmar o comportamento real."""
     where, params = _where_empresas()
-    assert where == ""
-    assert params == []
+    if CNAE_DIVISOES_EXCLUIDAS:
+        assert "CNAE_PRINCIPAL" in where
+        assert "<> ALL(%s)" in where
+        assert params == [list(CNAE_DIVISOES_EXCLUIDAS)]
+    else:
+        assert where == ""
+        assert params == []
 
 
 def test_where_cidade_e_cnae():
