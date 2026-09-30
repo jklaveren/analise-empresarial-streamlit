@@ -72,10 +72,15 @@ app.add_middleware(
 
 # Security middlewares (innermost)
 try:
-    from .security import SecurityHeadersMiddleware, RateLimiterMiddleware, VisitanteMiddleware
+    from .security import (SecurityHeadersMiddleware, RateLimiterMiddleware,
+                           VisitanteMiddleware, AuditoriaRequestsMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RateLimiterMiddleware)
     app.add_middleware(VisitanteMiddleware)
+    # Por ultimo = mais externo: ve o status final da resposta, inclusive
+    # o 403 que o VisitanteMiddleware devolve. Auditar so' o que passou
+    # pelos outros esconderia justamente a tentativa barrada.
+    app.add_middleware(AuditoriaRequestsMiddleware)
     logger.info("Security middlewares loaded")
 except ImportError as e:
     logger.warning(f"Security middlewares not available: {e}")

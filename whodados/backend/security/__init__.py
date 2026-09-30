@@ -2,6 +2,7 @@
 from .rate_limiter import RateLimiterMiddleware
 from .headers import SecurityHeadersMiddleware
 from .visitante import VisitanteMiddleware
+from .auditoria_requests import AuditoriaRequestsMiddleware
 from .audit import (
     AuditAction,
     audit,
@@ -16,6 +17,7 @@ __all__ = [
     "RateLimiterMiddleware",
     "SecurityHeadersMiddleware",
     "VisitanteMiddleware",
+    "AuditoriaRequestsMiddleware",
     "AuditAction",
     "audit",
     "log_login",
