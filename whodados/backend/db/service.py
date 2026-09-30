@@ -1192,10 +1192,33 @@ def renomear_organizacao(organizacao_id: int, nome: str) -> bool:
 
 
 def listar_todas_organizacoes() -> List[Dict[str, Any]]:
-    """Todas as empresas (uso administrativo)."""
+    """Todas as empresas (uso administrativo), com a fonte de prospeccao."""
     with get_db_cursor() as cur:
-        cur.execute("SELECT id, nome, slug, ativo FROM organizacoes ORDER BY id")
+        cur.execute("SELECT id, nome, slug, ativo, COALESCE(escopo_base, 'receita') AS escopo_base "
+                    "FROM organizacoes ORDER BY id")
         return cur.fetchall()
+
+
+ESCOPOS_BASE = ("receita", "carteira")
+
+
+def definir_escopo_base(organizacao_id: int, escopo: str) -> bool:
+    """Troca a FONTE de prospeccao da empresa.
+
+    'receita' le a base publica da Receita Federal; 'carteira' le so' a lista
+    propria (empresas_carteira). As telas sao as mesmas -- o que muda e' de
+    onde vem o dado, resolvido em listar_empresas_db/contar_empresas_db.
+
+    Vira decisao de contrato, entao quem chama e' rota de admin GLOBAL: virar
+    a chave troca o que a empresa inteira enxerga. Empresa que passa pra
+    carteira com a lista ainda vazia ve a base zerada ate' importar a
+    planilha -- por isso a tela avisa antes de confirmar."""
+    escopo = (escopo or "").strip().lower()
+    if escopo not in ESCOPOS_BASE:
+        raise ValueError("Fonte invalida: use 'receita' ou 'carteira'")
+    with get_db_cursor() as cur:
+        cur.execute("UPDATE organizacoes SET escopo_base = %s WHERE id = %s", (escopo, organizacao_id))
+        return cur.rowcount > 0
 
 
 def definir_acesso_usuario_orgs(user_id: int, organizacao_ids: List[int]) -> None:

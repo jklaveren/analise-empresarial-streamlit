@@ -11,7 +11,7 @@ from .db import (
     get_pipeline_metadata, get_sla_config, set_sla_config,
     list_all_users, update_user_flags, delete_user, update_user_email,
     listar_todas_organizacoes, get_orgs_do_user_id, definir_acesso_usuario_orgs,
-    criar_organizacao, renomear_organizacao,
+    criar_organizacao, renomear_organizacao, definir_escopo_base,
     get_org_smtp_config, set_org_smtp_config, set_org_logo,
 )
 from .auth import criar_usuario, hash_senha
@@ -125,9 +125,29 @@ async def admin_criar_organizacao(data: Dict, current_user: Dict = Depends(requi
 
 
 @router.put("/organizacoes/{organizacao_id}")
-async def admin_renomear_organizacao(organizacao_id: int, data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
-    if not renomear_organizacao(organizacao_id, data.get("nome", "")):
-        raise HTTPException(status_code=400, detail="Nome invalido ou empresa nao encontrada")
+async def admin_atualizar_organizacao(organizacao_id: int, data: Dict, current_user: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Nome e/ou fonte de prospeccao. Os dois sao opcionais, mas um tem que
+    vir -- assim a tela manda so' o campo que mexeu, e quem ja' chamava com
+    {"nome": ...} continua funcionando.
+
+    require_admin e' o admin GLOBAL de proposito: a fonte e' decisao de
+    contrato, nao preferencia de uso da empresa."""
+    mexeu = False
+    if "nome" in data:
+        if not renomear_organizacao(organizacao_id, data.get("nome", "")):
+            raise HTTPException(status_code=400, detail="Nome invalido ou empresa nao encontrada")
+        mexeu = True
+    if "escopo_base" in data:
+        try:
+            if not definir_escopo_base(organizacao_id, data.get("escopo_base", "")):
+                raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        logger.info(f"Fonte da empresa {organizacao_id} trocada para "
+                    f"{data.get('escopo_base')} por {current_user.get('sub')}")
+        mexeu = True
+    if not mexeu:
+        raise HTTPException(status_code=400, detail="Nada para atualizar (envie 'nome' e/ou 'escopo_base')")
     return {"ok": True}
 
 

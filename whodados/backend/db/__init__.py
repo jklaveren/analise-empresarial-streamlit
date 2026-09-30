@@ -20,7 +20,8 @@ from .service import (
     registrar_evento_email,
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     listar_empresas_db, contar_empresas_db, get_empresa_by_cnpj_db, get_metricas_db,
-    org_escopo_base, listar_carteira_db, contar_carteira_db, get_carteira_by_cnpj,
+    org_escopo_base, definir_escopo_base, ESCOPOS_BASE,
+    listar_carteira_db, contar_carteira_db, get_carteira_by_cnpj,
     categorias_da_carteira, salvar_na_carteira, remover_da_carteira,
     seed_default_templates, get_pipeline_metadata,
     get_app_config, set_app_config, get_sla_config, set_sla_config,
@@ -78,7 +79,8 @@ __all__ = [
     "get_emails_for_monitor", "get_monitor_stats", "get_emails_vermelhos_para_followup", "marcar_email_aberto",
     # Empresas (dados da Receita Federal, via pipeline de ETL)
     "listar_empresas_db", "contar_empresas_db", "get_empresa_by_cnpj_db", "get_metricas_db",
-    "org_escopo_base", "listar_carteira_db", "contar_carteira_db", "get_carteira_by_cnpj",
+    "org_escopo_base", "definir_escopo_base", "ESCOPOS_BASE",
+    "listar_carteira_db", "contar_carteira_db", "get_carteira_by_cnpj",
     "categorias_da_carteira", "salvar_na_carteira", "remover_da_carteira",
     "seed_default_templates", "get_pipeline_metadata",
     "get_app_config", "set_app_config", "get_sla_config", "set_sla_config",
