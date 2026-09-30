@@ -494,7 +494,15 @@ def _run_ensure_multiempresa(os):
         #   'carteira' -> empresas_carteira, a lista propria daquela empresa
         # Nao e' bloqueio de tela: as telas sao as mesmas, muda a FONTE.
         cur.execute("ALTER TABLE organizacoes ADD COLUMN IF NOT EXISTS escopo_base VARCHAR(20) DEFAULT 'receita'")
-        cur.execute("UPDATE organizacoes SET escopo_base = 'carteira' WHERE slug = 'jehjuh' AND escopo_base IS DISTINCT FROM 'carteira'")
+        # Seed de UMA vez so'. Antes este UPDATE rodava a CADA boot: o admin
+        # trocava a fonte da JehJuh pela tela e via a escolha desfeita no
+        # proximo deploy, sem aviso -- o estado real ficava no codigo, nao no
+        # banco. A marca em app_config registra que o seed ja' aconteceu; dai
+        # em diante quem manda e' o banco (PUT /organizacoes/{id}).
+        cur.execute("INSERT INTO app_config (chave, valor) VALUES ('seed_escopo_jehjuh', NOW()::text) "
+                    "ON CONFLICT (chave) DO NOTHING")
+        if cur.rowcount:
+            cur.execute("UPDATE organizacoes SET escopo_base = 'carteira' WHERE slug = 'jehjuh'")
 
         # Carteira propria da empresa. Guarda os campos por conta propria (nao
         # e' so' uma lista de CNPJs apontando pra dados_empresas) porque o

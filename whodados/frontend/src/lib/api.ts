@@ -1120,6 +1120,18 @@ export async function listarOrganizacoesAdmin(): Promise<Organizacao[]> {
   return request("/api/v1/admin/organizacoes");
 }
 
+/** Muda a FONTE de prospeccao da empresa: "receita" (base publica da Receita
+ *  Federal) ou "carteira" (lista propria). So' admin global -- e' decisao de
+ *  contrato, nao preferencia de uso. */
+export async function definirEscopoBaseOrg(
+  orgId: number, escopo: "receita" | "carteira",
+): Promise<{ ok: boolean }> {
+  return request(`/api/v1/admin/organizacoes/${orgId}`, {
+    method: "PUT",
+    body: JSON.stringify({ escopo_base: escopo }),
+  });
+}
+
 export async function getOrgEmailConfig(orgId: number): Promise<OrgEmailConfig> {
   return request(`/api/v1/admin/organizacoes/${orgId}/smtp`);
 }

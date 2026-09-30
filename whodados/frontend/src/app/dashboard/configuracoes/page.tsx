@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig, listarIntegracoes, salvarIntegracao, IntegracaoConfig, getMeuEmail, salvarMeuEmail, MeuEmail } from "@/lib/api";
+import { getSistemaStatus, SistemaStatus, getSlaConfig, updateSlaConfig, SlaConfig, trocarMinhaSenha, listarUsuarios, criarUsuarioAdmin, atualizarUsuarioAdmin, excluirUsuarioAdmin, redefinirSenhaUsuarioAdmin, UsuarioAdmin, ApiError, listarOrganizacoesAdmin, getOrgEmailConfig, setOrgEmailConfig, uploadOrgLogo, definirEmpresasUsuario, Organizacao, OrgEmailConfig, listarIntegracoes, salvarIntegracao, IntegracaoConfig, definirEscopoBaseOrg, getMeuEmail, salvarMeuEmail, MeuEmail } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -455,6 +455,7 @@ function EmpresasTab() {
   const [salvando, setSalvando] = useState(false);
   const [fb, setFb] = useState<{ t: "s" | "e"; m: string } | null>(null);
   const [logoV, setLogoV] = useState(0); // cache-buster do preview do logo
+  const [trocandoFonte, setTrocandoFonte] = useState(false);
 
   // Form
   const [emailFrom, setEmailFrom] = useState("");
@@ -479,6 +480,29 @@ function EmpresasTab() {
       }
     })();
   }, []);
+
+  const orgAtual = orgs.find(o => o.id === orgId) ?? null;
+  const fonteAtual = orgAtual?.escopo_base ?? "receita";
+
+  async function trocarFonte(novo: "receita" | "carteira") {
+    if (orgId == null || novo === fonteAtual) return;
+    const alvo = orgAtual?.nome ?? "esta empresa";
+    const aviso = novo === "carteira"
+      ? `${alvo} passa a prospectar SO' sobre a carteira propria. Enquanto a lista estiver vazia, a tela de Empresas aparece zerada ate' alguem importar a planilha. Confirma?`
+      : `${alvo} volta a prospectar sobre a base da Receita Federal. A carteira nao e' apagada, so' deixa de ser a fonte. Confirma?`;
+    if (!window.confirm(aviso)) return;
+    setFb(null);
+    setTrocandoFonte(true);
+    try {
+      await definirEscopoBaseOrg(orgId, novo);
+      setOrgs(prev => prev.map(o => (o.id === orgId ? { ...o, escopo_base: novo } : o)));
+      setFb({ t: "s", m: `Fonte de ${alvo} agora e' ${novo === "carteira" ? "a carteira propria" : "a base da Receita Federal"}.` });
+    } catch (err) {
+      setFb({ t: "e", m: err instanceof ApiError ? err.message : "Nao consegui trocar a fonte." });
+    } finally {
+      setTrocandoFonte(false);
+    }
+  }
 
   useEffect(() => {
     if (orgId == null) return;
@@ -546,6 +570,32 @@ function EmpresasTab() {
           {orgs.map(o => <option key={o.id} value={o.id}>{o.nome}</option>)}
         </select>
         {cfg && <span className={`text-xs px-2 py-1 rounded ${cfg.configurado ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{cfg.configurado ? "SMTP configurado" : "SMTP não configurado"}</span>}
+      </div>
+
+      <div className="rounded-xl bg-white border p-5 space-y-3">
+        <h3 className="font-semibold">Fonte de prospecção</h3>
+        <p className="text-sm text-slate-500">
+          De onde esta empresa tira as empresas que aparecem na tela de Empresas.
+          As telas são as mesmas — o que muda é a origem dos dados.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {(["receita", "carteira"] as const).map(op => (
+            <button
+              key={op}
+              onClick={() => trocarFonte(op)}
+              disabled={trocandoFonte || orgId == null}
+              className={`rounded-lg border-2 px-4 py-2 text-sm font-medium disabled:opacity-40 ${
+                fonteAtual === op ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600 hover:border-slate-300"
+              }`}
+            >
+              {op === "receita" ? "Base da Receita Federal" : "Carteira própria"}
+              {fonteAtual === op && " ✓"}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-slate-400">
+          Trocar a fonte muda o que a empresa inteira enxerga, então só o administrador geral pode fazer isso.
+        </p>
       </div>
 
       <div className="rounded-xl bg-white border p-5 space-y-3">
